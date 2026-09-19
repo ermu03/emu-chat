@@ -10,15 +10,17 @@ import { LIMITS } from '../shared/limits.js';
 import { AppError, InternalError, InvalidRequestError } from './domain/errors.js';
 import { ZodError } from 'zod';
 import { createDatabase } from './db/connection.js';
-import { ConversationRepository, DraftRepository } from './db/repositories/conversation.repository.js';
+import { DraftRepository, PreferencesRepository } from './db/repositories/conversation.repository.js';
 import { QueueRepository } from './db/repositories/queue.repository.js';
 import { RunRepository } from './db/repositories/run.repository.js';
 import { HermesClient } from './hermes/client.js';
 import { HermesAdapter } from './hermes/adapter.js';
 import { StatusService } from './services/status-service.js';
 import { ConversationService } from './services/conversation-service.js';
+import { DraftPreferencesService } from './services/draft-preferences-service.js';
 import { statusRoutes } from './http/routes/status.js';
 import { conversationRoutes } from './http/routes/conversations.js';
+import { draftPreferencesRoutes } from './http/routes/drafts-and-preferences.js';
 
 export interface ServerDependencies {
   db?: Database.Database;
@@ -26,6 +28,7 @@ export interface ServerDependencies {
   hermesAdapter?: HermesAdapter;
   statusService?: StatusService;
   conversationService?: ConversationService;
+  draftPreferencesService?: DraftPreferencesService;
 }
 
 export function buildServer(
@@ -145,6 +148,10 @@ export function buildServer(
       runRepo
     );
 
+  const draftPreferencesService =
+    dependencies.draftPreferencesService ??
+    new DraftPreferencesService(draftRepo, new PreferencesRepository(db));
+
   // Register API Routes
   server.register(statusRoutes, {
     prefix: '/api/v1',
@@ -154,6 +161,11 @@ export function buildServer(
   server.register(conversationRoutes, {
     prefix: '/api/v1',
     conversationService
+  });
+
+  server.register(draftPreferencesRoutes, {
+    prefix: '/api/v1',
+    draftPreferencesService
   });
 
   // Serve static client in production
