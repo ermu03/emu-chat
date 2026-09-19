@@ -18,9 +18,12 @@ import { HermesAdapter } from './hermes/adapter.js';
 import { StatusService } from './services/status-service.js';
 import { ConversationService } from './services/conversation-service.js';
 import { DraftPreferencesService } from './services/draft-preferences-service.js';
+import { AdmissionCoordinator } from './coordinator/admission-coordinator.js';
+import { SSEHub } from './sse/sse-hub.js';
 import { statusRoutes } from './http/routes/status.js';
 import { conversationRoutes } from './http/routes/conversations.js';
 import { draftPreferencesRoutes } from './http/routes/drafts-and-preferences.js';
+import { queueAndRunsRoutes } from './http/routes/queue-and-runs.js';
 
 export interface ServerDependencies {
   db?: Database.Database;
@@ -152,6 +155,18 @@ export function buildServer(
     dependencies.draftPreferencesService ??
     new DraftPreferencesService(draftRepo, new PreferencesRepository(db));
 
+  const sseHub = new SSEHub();
+  const leaseRepo = new LeaseRepository(db);
+  const coordinator = new AdmissionCoordinator(
+    queueRepo,
+    runRepo,
+    leaseRepo,
+    convRepo,
+    hermesAdapter,
+    sseHub
+  );
+  coordinator.start();
+
   // Register API Routes
   server.register(statusRoutes, {
     prefix: '/api/v1',
@@ -166,6 +181,12 @@ export function buildServer(
   server.register(draftPreferencesRoutes, {
     prefix: '/api/v1',
     draftPreferencesService
+  });
+
+  server.register(queueAndRunsRoutes, {
+    prefix: '/api/v1',
+    coordinator,
+    sseHub
   });
 
   // Serve static client in production

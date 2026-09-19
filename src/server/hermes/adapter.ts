@@ -163,4 +163,45 @@ export class HermesAdapter {
       path: `/api/sessions/${sessionId}`
     });
   }
+
+  async startRun(
+    sessionId: string,
+    data: { prompt: string; idempotency_key?: string }
+  ): Promise<{ run_id: string; status: string }> {
+    const raw = await this.client.request({
+      method: 'POST',
+      path: `/api/sessions/${sessionId}/runs`,
+      body: data
+    });
+    return raw as { run_id: string; status: string };
+  }
+
+  async cancelRun(runId: string): Promise<void> {
+    await this.client.request({
+      method: 'POST',
+      path: `/api/runs/${runId}/cancel`
+    });
+  }
+
+  async submitApproval(
+    runId: string,
+    decision: 'approve' | 'reject' | 'cancel'
+  ): Promise<void> {
+    await this.client.request({
+      method: 'POST',
+      path: `/api/runs/${runId}/approval`,
+      body: { decision }
+    });
+  }
+
+  async *streamEvents(
+    sessionId: string,
+    runId: string
+  ): AsyncGenerator<{ type: string; data: Record<string, unknown> }, void, unknown> {
+    // 基础流式占位生成器，在集成/上游真实返回时产生事件
+    yield {
+      type: 'message.delta',
+      data: { run_id: runId, session_id: sessionId, text: '' }
+    };
+  }
 }
