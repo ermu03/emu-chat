@@ -11,13 +11,14 @@ export function runMigrations(db: Database.Database, migrationsDir?: string): st
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
-      version TEXT PRIMARY KEY,
+      version INTEGER PRIMARY KEY,
+      name TEXT NOT NULL,
       applied_at TEXT NOT NULL
     );
   `);
 
   const appliedRows = db.prepare('SELECT version FROM schema_migrations ORDER BY version ASC').all() as {
-    version: string;
+    version: number;
   }[];
   const appliedVersions = new Set(appliedRows.map((r) => r.version));
 
@@ -34,7 +35,11 @@ export function runMigrations(db: Database.Database, migrationsDir?: string): st
   const newlyApplied: string[] = [];
 
   for (const file of files) {
-    const version = path.basename(file, '.sql');
+    const match = file.match(/^(\d+)_(.*)\.sql$/);
+    if (!match) continue;
+    const version = parseInt(match[1], 10);
+    const name = match[2];
+
     if (!appliedVersions.has(version)) {
       const filePath = path.join(dir, file);
       const sql = fs.readFileSync(filePath, 'utf-8');
@@ -42,12 +47,13 @@ export function runMigrations(db: Database.Database, migrationsDir?: string): st
       logger.info(`Applying migration: ${file}`);
       const executeTx = db.transaction(() => {
         db.exec(sql);
-        db.prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (?, datetime(\'now\'))').run(
-          version
+        db.prepare("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (?, ?, datetime('now'))").run(
+          version,
+          name
         );
       });
       executeTx();
-      newlyApplied.push(version);
+      newlyApplied.push(file);
     }
   }
 
