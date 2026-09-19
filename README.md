@@ -30,3 +30,63 @@ emu-chat 是轻量、单用户、在线使用的 Hermes Agent Web 工作台。He
 - 不得修改 `/home/emu/.hermes/hermes-agent` 或 `/home/emu/projects/hermes-agent`。
 - Gemini 编码阶段不得安装依赖、启动服务、运行 build/lint/typecheck/test、请求真实 Hermes 或做联调；所有运行验证留给后续人工或独立验证阶段。
 - 不得以 Open WebUI、NextChat 或浏览器存储复制 Hermes transcript。
+
+## 人工安装、运行与验证指南（由获准人员执行）
+
+> 注意：根据交接基线，静态编写阶段不得安装依赖或运行命令。以下指令供后续人工/独立验证阶段执行。
+
+### 1. 依赖安装
+
+```bash
+# 在项目根目录下安装依赖
+pnpm install
+```
+
+### 2. 静态检查与构建验证
+
+```bash
+# 类型检查
+pnpm typecheck
+
+# 代码规范检查与格式
+pnpm lint
+pnpm format:check
+
+# 前端与服务端编译
+pnpm build
+```
+
+### 3. 运行自动化测试套件
+
+```bash
+# 运行单元测试
+pnpm test tests/unit
+
+# 运行组件静态测试
+pnpm test tests/components
+
+# 运行 Fake Hermes 全矩阵集成测试
+pnpm test tests/integration
+
+# 运行端到端/全量矩阵验证
+pnpm test tests/integration/phase6-fake-hermes-full-matrix.test.ts
+```
+
+### 4. 环境变量配置与本地运行
+
+```bash
+# 复制环境变量文件
+cp .env.example .env
+
+# 编辑 .env 配置 Hermes 服务地址与端口
+# HERMES_BASE_URL=http://localhost:8000
+# HERMES_TOKEN=your_token_here
+# PORT=3000
+
+# 启动开发服务器（含 Vite 前端与 Fastify 后端代理）
+pnpm dev
+
+# 或以生产模式启动
+pnpm start
+```
+
