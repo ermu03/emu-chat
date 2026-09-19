@@ -1,0 +1,28 @@
+export const ID_PREFIXES = {
+  conversation: 'cv_',
+  queueItem: 'qi_',
+  operation: 'op_',
+  localRun: 'lr_',
+  request: 'rq_',
+  idempotency: 'ec_'
+} as const;
+
+export type IdPrefix = (typeof ID_PREFIXES)[keyof typeof ID_PREFIXES];
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function generateId(prefix: IdPrefix): string {
+  return `${prefix}${crypto.randomUUID()}`;
+}
+
+export function isValidPrefixedId(id: string, prefix: IdPrefix): boolean {
+  if (!id.startsWith(prefix)) {
+    return false;
+  }
+  const rawUuid = id.slice(prefix.length);
+  return UUID_REGEX.test(rawUuid);
+}
+
+export function isValidUuid(id: string): boolean {
+  return UUID_REGEX.test(id);
+}

@@ -1,0 +1,1353 @@
+openapi: 3.1.0
+info:
+  title: emu-chat API
+  version: 1.0.0
+  description: Internal API contract for emu-chat workbench
+servers:
+  - url: /api/v1
+paths:
+  /status:
+    get:
+      summary: Get Hermes connection and capability status
+      operationId: getStatus
+      responses:
+        '200':
+          description: Hermes status response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectionStatusResponse'
+        default:
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorEnvelope'
+  /status/recheck:
+    post:
+      summary: Force active liveness probe to Hermes
+      operationId: recheckStatus
+      responses:
+        '200':
+          description: Hermes recheck response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectionStatusResponse'
+        default:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorEnvelope'
+  /conversations:
+    get:
+      summary: List conversations
+      operationId: listConversations
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: session_id
+          in: query
+          schema:
+            type: string
+        - name: title
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationListResponse'
+        default:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorEnvelope'
+    post:
+      summary: Create conversation
+      operationId: createConversation
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateConversationRequest'
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationDetailResponse'
+        default:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorEnvelope'
+  /conversations/{conversation_id}:
+    get:
+      summary: Get conversation detail
+      operationId: getConversation
+      parameters:
+        - name: conversation_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationDetailResponse'
+        default:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorEnvelope'
+  /conversations/{conversation_id}/messages:
+    get:
+      summary: List messages from Hermes
+      operationId: listMessages
+      parameters:
+        - name: conversation_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: order
+          in: query
+          schema:
+            type: string
+            enum: [oldest, latest]
+            default: oldest
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageListResponse'
+        default:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorEnvelope'
+    post:
+      summary: Enqueue and dispatch user message
+      operationId: sendMessage
+      parameters:
+        - name: conversation_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendMessageRequest'
+      responses:
+        '202':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SendMessageResponse'
+        default:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorEnvelope'
+  /conversations/{conversation_id}/reset:
+    post:
+      summary: Reset conversation upstream
+      operationId: resetConversation
+      parameters:
+        - name: conversation_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResetConversationRequest'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationDetailResponse'
+        default:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorEnvelope'
+  /conversations/{conversation_id}/fork:
+    post:
+      summary: Fork conversation upstream
+      operationId: forkConversation
+      parameters:
+        - name: conversation_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ForkConversationRequest'
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationDetailResponse'
+        default:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorEnvelope'
+  /conversations/{conversation_id}/hermes-metadata:
+    patch:
+      summary: Update Hermes metadata (title/pinned)
+      operationId: patchHermesMetadata
+      parameters:
+        - name: conversation_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchHermesMetadataRequest'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationDetailResponse'
+        default:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorEnvelope'
+  /conversations/{conversation_id}/local-metadata:
+    patch:
+      summary: Update local tags and custom_order
+      operationId: patchLocalMetadata
+      parameters:
+        - name: conversation_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchLocalMetadataRequest'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationDetailResponse'
+        default:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorEnvelope'
+  /conversations/{conversation_id}/delete:
+    post:
+      summary: Delete conversation
+      operationId: deleteConversation
+      parameters:
+        - name: conversation_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeleteConversationRequest'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeleteConversationResponse'
+        default:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorEnvelope'
+  /conversations/{conversation_id}/draft:
+    get:
+      summary: Get conversation draft
+      operationId: getDraft
+      parameters:
+        - name: conversation_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DraftResponse'
+        default:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorEnvelope'
+    put:
+      summary: Update draft with optimistic locking
+      operationId: putDraft
+      parameters:
+        - name: conversation_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PutDraftRequest'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DraftResponse'
+        default:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorEnvelope'
+  /conversations/{conversation_id}/queue:
+    get:
+      summary: List queue items
+      operationId: getQueue
+      parameters:
+        - name: conversation_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: include_terminal
+          in: query
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueueListResponse'
+        default:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorEnvelope'
+  /conversations/{conversation_id}/queue/resume:
+    post:
+      summary: Resume paused queue
+      operationId: resumeQueue
+      parameters:
+        - name: conversation_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResumeQueueResponse'
+        default:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorEnvelope'
+  /queue-items/{queue_item_id}:
+    patch:
+      summary: Edit queued item payload
+      operationId: patchQueueItem
+      parameters:
+        - name: queue_item_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchQueueItemRequest'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueueItemResponse'
+        default:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorEnvelope'
+  /queue-items/{queue_item_id}/cancel:
+    post:
+      summary: Cancel queued item
+      operationId: cancelQueueItem
+      parameters:
+        - name: queue_item_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CancelQueueItemRequest'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueueItemResponse'
+        default:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorEnvelope'
+  /queue-items/{queue_item_id}/copy-to-draft:
+    post:
+      summary: Copy recovery payload to draft
+      operationId: copyToDraft
+      parameters:
+        - name: queue_item_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CopyToDraftRequest'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CopyToDraftResponse'
+        default:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorEnvelope'
+  /queue-items/{queue_item_id}/discard-recovery:
+    post:
+      summary: Discard recovery payload
+      operationId: discardRecovery
+      parameters:
+        - name: queue_item_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  discarded:
+                    type: boolean
+                required: [discarded]
+        default:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorEnvelope'
+  /runs/{local_run_id}:
+    get:
+      summary: Get run status
+      operationId: getRun
+      parameters:
+        - name: local_run_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunResponse'
+        default:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorEnvelope'
+  /runs/{local_run_id}/events:
+    get:
+      summary: SSE event stream for run
+      operationId: getRunEvents
+      parameters:
+        - name: local_run_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: after
+          in: query
+          schema:
+            type: integer
+        - name: Last-Event-ID
+          in: header
+          schema:
+            type: string
+      responses:
+        '200':
+          description: SSE stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        default:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorEnvelope'
+  /runs/{local_run_id}/stop:
+    post:
+      summary: Stop active run
+      operationId: stopRun
+      parameters:
+        - name: local_run_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  stopping:
+                    type: boolean
+                required: [stopping]
+        default:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorEnvelope'
+  /runs/{local_run_id}/approval:
+    post:
+      summary: Submit approval decision
+      operationId: submitApproval
+      parameters:
+        - name: local_run_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApprovalRequest'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accepted:
+                    type: boolean
+                required: [accepted]
+        default:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorEnvelope'
+  /runs/{local_run_id}/reconcile:
+    post:
+      summary: Force run reconciliation
+      operationId: reconcileRun
+      parameters:
+        - name: local_run_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReconcileResponse'
+        default:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorEnvelope'
+  /preferences:
+    get:
+      summary: Get UI preferences
+      operationId: getPreferences
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PreferencesResponse'
+        default:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorEnvelope'
+    put:
+      summary: Update UI preferences
+      operationId: putPreferences
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PutPreferencesRequest'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PreferencesResponse'
+        default:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorEnvelope'
+components:
+  schemas:
+    ErrorCode:
+      type: string
+      enum:
+        - INVALID_REQUEST
+        - PAYLOAD_TOO_LARGE
+        - LOCAL_NOT_FOUND
+        - HERMES_NOT_FOUND
+        - DRAFT_CONFLICT
+        - LOCAL_CONFLICT
+        - STATE_CONFLICT
+        - RUN_ACTIVE
+        - APPROVAL_NOT_PENDING
+        - REVIEW_REQUIRED
+        - HERMES_NOT_READY
+        - HERMES_AUTH_FAILED
+        - HERMES_UNAVAILABLE
+        - HERMES_CONFLICT
+        - HERMES_TEMPORARY_FAILURE
+        - HERMES_PROTOCOL_ERROR
+        - HERMES_BUSY_GLOBAL
+        - DELETE_UNCONFIRMED
+        - INTERNAL_ERROR
+    ErrorAction:
+      type: string
+      enum:
+        - none
+        - retry
+        - recheck
+        - refresh_status
+        - resolve_conflict
+        - review_required
+        - reconnect
+    ApiErrorEnvelope:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              $ref: '#/components/schemas/ErrorCode'
+            message:
+              type: string
+            retryable:
+              type: boolean
+            action:
+              $ref: '#/components/schemas/ErrorAction'
+            request_id:
+              type: string
+            upstream_status:
+              type: integer
+            details:
+              type: object
+          required:
+            - code
+            - message
+            - retryable
+            - action
+            - request_id
+      required:
+        - error
+    ConnectionStatusHermes:
+      type: string
+      enum:
+        - checking
+        - healthy
+        - degraded
+        - unavailable
+        - auth_failed
+        - incompatible
+        - config_error
+    PauseReason:
+      type: string
+      enum:
+        - run_failed
+        - run_partial
+        - run_cancelled
+        - run_interrupted
+        - user_stopped
+        - submission_rejected
+        - reconciliation_failed
+        - review_required
+        - manual_resume_required
+    QueueItemState:
+      type: string
+      enum:
+        - queued
+        - dispatching
+        - accepted
+        - reconciling
+        - done
+        - paused
+        - review_required
+        - rejected
+        - cancelled
+    RunLocalState:
+      type: string
+      enum:
+        - submitting
+        - accepted
+        - reconciling
+        - reconciled
+        - rejected
+        - review_required
+    UpstreamRunStatus:
+      type: string
+      enum:
+        - queued
+        - running
+        - waiting_for_approval
+        - stopping
+        - completed
+        - failed
+        - cancelled
+        - interrupted
+    DeleteState:
+      type: string
+      enum:
+        - none
+        - pending
+        - failed
+    ThemePreference:
+      type: string
+      enum:
+        - system
+        - light
+        - dark
+    SendShortcutPreference:
+      type: string
+      enum:
+        - enter
+        - mod_enter
+    ConnectionStatusResponse:
+      type: object
+      properties:
+        status:
+          $ref: '#/components/schemas/ConnectionStatusHermes'
+        hermes_version:
+          type: string
+          nullable: true
+        missing_capabilities:
+          type: array
+          items:
+            type: string
+        last_checked_at:
+          type: string
+        suggested_action:
+          type: string
+        lan_http_warning:
+          type: boolean
+        pwa_secure_context_required:
+          type: boolean
+      required:
+        - status
+        - hermes_version
+        - missing_capabilities
+        - last_checked_at
+        - suggested_action
+        - lan_http_warning
+        - pwa_secure_context_required
+    ConversationSummary:
+      type: object
+      properties:
+        conversation_id:
+          type: string
+        hermes_session_id:
+          type: string
+        effective_hermes_session_id:
+          type: string
+        title:
+          type: string
+        pinned:
+          type: boolean
+        tags:
+          type: array
+          items:
+            type: string
+        custom_order:
+          type: number
+          nullable: true
+        last_active:
+          type: integer
+        message_count:
+          type: integer
+        preview:
+          type: string
+        has_active_run:
+          type: boolean
+        queue_size:
+          type: integer
+        queue_paused:
+          type: boolean
+        has_recovery:
+          type: boolean
+        delete_state:
+          $ref: '#/components/schemas/DeleteState'
+        local_revision:
+          type: integer
+      required:
+        - conversation_id
+        - hermes_session_id
+        - effective_hermes_session_id
+        - title
+        - pinned
+        - tags
+        - custom_order
+        - last_active
+        - message_count
+        - preview
+        - has_active_run
+        - queue_size
+        - queue_paused
+        - has_recovery
+        - delete_state
+        - local_revision
+    ConversationListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConversationSummary'
+        limit:
+          type: integer
+        offset:
+          type: integer
+        has_more:
+          type: boolean
+      required:
+        - items
+        - limit
+        - offset
+        - has_more
+    ConversationDetailResponse:
+      allOf:
+        - $ref: '#/components/schemas/ConversationSummary'
+        - type: object
+          properties:
+            parent_session_id:
+              type: string
+              nullable: true
+            pause_reason:
+              $ref: '#/components/schemas/PauseReason'
+              nullable: true
+            current_local_run_id:
+              type: string
+              nullable: true
+            delete_failed_reason:
+              type: string
+              nullable: true
+          required:
+            - parent_session_id
+            - pause_reason
+            - current_local_run_id
+            - delete_failed_reason
+    CreateConversationRequest:
+      type: object
+      properties:
+        title:
+          type: string
+    ResetConversationRequest:
+      type: object
+      properties:
+        title:
+          type: string
+    ForkConversationRequest:
+      type: object
+      properties:
+        title:
+          type: string
+    PatchHermesMetadataRequest:
+      oneOf:
+        - type: object
+          properties:
+            field:
+              type: string
+              enum: [title]
+            value:
+              type: string
+          required: [field, value]
+        - type: object
+          properties:
+            field:
+              type: string
+              enum: [pinned]
+            value:
+              type: boolean
+          required: [field, value]
+    PatchLocalMetadataRequest:
+      type: object
+      properties:
+        expected_revision:
+          type: integer
+        tags:
+          type: array
+          items:
+            type: string
+        custom_order:
+          type: number
+          nullable: true
+      required:
+        - expected_revision
+    DeleteConversationRequest:
+      type: object
+      properties:
+        expected_hermes_session_id:
+          type: string
+        confirmed:
+          type: boolean
+      required:
+        - expected_hermes_session_id
+        - confirmed
+    DeleteConversationResponse:
+      type: object
+      properties:
+        conversation_id:
+          type: string
+        hermes_deleted:
+          type: boolean
+        local_cleaned:
+          type: boolean
+      required:
+        - conversation_id
+        - hermes_deleted
+        - local_cleaned
+    MessageItem:
+      type: object
+      properties:
+        id:
+          type: integer
+        session_id:
+          type: string
+        role:
+          type: string
+          enum: [user, assistant, tool, system]
+        content:
+          type: string
+        tool_call_id:
+          type: string
+          nullable: true
+        tool_name:
+          type: string
+          nullable: true
+        timestamp:
+          type: integer
+        token_count:
+          type: integer
+          nullable: true
+        finish_reason:
+          type: string
+          nullable: true
+        reasoning:
+          type: string
+          nullable: true
+        display_kind:
+          type: string
+          nullable: true
+      required:
+        - id
+        - session_id
+        - role
+        - content
+        - tool_call_id
+        - tool_name
+        - timestamp
+        - token_count
+        - finish_reason
+        - reasoning
+        - display_kind
+    MessageListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/MessageItem'
+        effective_hermes_session_id:
+          type: string
+        limit:
+          type: integer
+        offset:
+          type: integer
+        order:
+          type: string
+          enum: [oldest, latest]
+        returned:
+          type: integer
+      required:
+        - items
+        - effective_hermes_session_id
+        - limit
+        - offset
+        - order
+        - returned
+    DraftResponse:
+      type: object
+      properties:
+        conversation_id:
+          type: string
+        content:
+          type: string
+        revision:
+          type: integer
+        updated_at:
+          type: string
+      required:
+        - conversation_id
+        - content
+        - revision
+        - updated_at
+    PutDraftRequest:
+      type: object
+      properties:
+        content:
+          type: string
+        expected_revision:
+          type: integer
+      required:
+        - content
+        - expected_revision
+    SendMessageRequest:
+      type: object
+      properties:
+        client_request_id:
+          type: string
+        expected_draft_revision:
+          type: integer
+      required:
+        - client_request_id
+        - expected_draft_revision
+    SendMessageResponse:
+      type: object
+      properties:
+        queue_item_id:
+          type: string
+        state:
+          $ref: '#/components/schemas/QueueItemState'
+        position:
+          type: integer
+      required:
+        - queue_item_id
+        - state
+        - position
+    QueueItemResponse:
+      type: object
+      properties:
+        queue_item_id:
+          type: string
+        conversation_id:
+          type: string
+        state:
+          $ref: '#/components/schemas/QueueItemState'
+        position:
+          type: integer
+        has_payload:
+          type: boolean
+        payload_preview:
+          type: string
+        revision:
+          type: integer
+        created_at:
+          type: string
+        updated_at:
+          type: string
+        current_local_run_id:
+          type: string
+          nullable: true
+        pause_reason:
+          $ref: '#/components/schemas/PauseReason'
+          nullable: true
+        review_reason:
+          type: string
+          nullable: true
+        recovery_available:
+          type: boolean
+        recovery_expires_at:
+          type: string
+          nullable: true
+      required:
+        - queue_item_id
+        - conversation_id
+        - state
+        - position
+        - has_payload
+        - payload_preview
+        - revision
+        - created_at
+        - updated_at
+        - current_local_run_id
+        - pause_reason
+        - review_reason
+        - recovery_available
+        - recovery_expires_at
+    QueueListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/QueueItemResponse'
+        queue_paused:
+          type: boolean
+        pause_reason:
+          $ref: '#/components/schemas/PauseReason'
+          nullable: true
+      required:
+        - items
+        - queue_paused
+        - pause_reason
+    PatchQueueItemRequest:
+      type: object
+      properties:
+        content:
+          type: string
+        expected_revision:
+          type: integer
+      required:
+        - content
+        - expected_revision
+    CancelQueueItemRequest:
+      type: object
+      properties:
+        expected_revision:
+          type: integer
+      required:
+        - expected_revision
+    ResumeQueueResponse:
+      type: object
+      properties:
+        queue_paused:
+          type: boolean
+        resumed_count:
+          type: integer
+      required:
+        - queue_paused
+        - resumed_count
+    CopyToDraftRequest:
+      type: object
+      properties:
+        expected_draft_revision:
+          type: integer
+        overwrite_nonempty:
+          type: boolean
+      required:
+        - expected_draft_revision
+    CopyToDraftResponse:
+      type: object
+      properties:
+        draft_revision:
+          type: integer
+      required:
+        - draft_revision
+    RunResponse:
+      type: object
+      properties:
+        local_run_id:
+          type: string
+        conversation_id:
+          type: string
+        queue_item_id:
+          type: string
+        hermes_run_id:
+          type: string
+          nullable: true
+        state:
+          $ref: '#/components/schemas/RunLocalState'
+        upstream_status:
+          $ref: '#/components/schemas/UpstreamRunStatus'
+          nullable: true
+        turn_exit_reason:
+          type: string
+          nullable: true
+        pending_steer:
+          type: boolean
+        admission_attempts:
+          type: integer
+        first_attempt_at:
+          type: string
+        last_attempt_at:
+          type: string
+          nullable: true
+        waiting_approval:
+          type: object
+          nullable: true
+          properties:
+            request_id:
+              type: string
+            command:
+              type: string
+            description:
+              type: string
+            choices:
+              type: array
+              items:
+                type: string
+            deadline_at:
+              type: string
+          required:
+            - request_id
+            - choices
+        created_at:
+          type: string
+        updated_at:
+          type: string
+      required:
+        - local_run_id
+        - conversation_id
+        - queue_item_id
+        - hermes_run_id
+        - state
+        - upstream_status
+        - turn_exit_reason
+        - pending_steer
+        - admission_attempts
+        - first_attempt_at
+        - last_attempt_at
+        - waiting_approval
+        - created_at
+        - updated_at
+    ApprovalRequest:
+      type: object
+      properties:
+        choice:
+          type: string
+          enum: [once, deny]
+        request_id:
+          type: string
+      required:
+        - choice
+    ReconcileResponse:
+      type: object
+      properties:
+        state:
+          $ref: '#/components/schemas/RunLocalState'
+        reconciled:
+          type: boolean
+      required:
+        - state
+        - reconciled
+    PreferencesResponse:
+      type: object
+      properties:
+        theme:
+          $ref: '#/components/schemas/ThemePreference'
+        sidebar_width:
+          type: integer
+        send_shortcut:
+          $ref: '#/components/schemas/SendShortcutPreference'
+        revision:
+          type: integer
+        updated_at:
+          type: string
+      required:
+        - theme
+        - sidebar_width
+        - send_shortcut
+        - revision
+        - updated_at
+    PutPreferencesRequest:
+      type: object
+      properties:
+        theme:
+          $ref: '#/components/schemas/ThemePreference'
+        sidebar_width:
+          type: integer
+        send_shortcut:
+          $ref: '#/components/schemas/SendShortcutPreference'
+        expected_revision:
+          type: integer
+      required:
+        - theme
+        - sidebar_width
+        - send_shortcut
+        - expected_revision
+
+
+
+
