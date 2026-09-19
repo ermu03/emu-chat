@@ -38,6 +38,15 @@ export class RunRepository {
     return row ?? null;
   }
 
+  findActiveAll(): RunEntity[] {
+    return this.db
+      .prepare(
+        `SELECT * FROM runs
+         WHERE local_state IN ('submitting', 'accepted', 'reconciling')`
+      )
+      .all() as RunEntity[];
+  }
+
   insert(
     entity: Omit<
       RunEntity,

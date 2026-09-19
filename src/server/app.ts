@@ -2,14 +2,36 @@ import Fastify, { FastifyInstance } from 'fastify';
 import fastifyStatic from '@fastify/static';
 import path from 'node:path';
 import fs from 'node:fs';
+import type Database from 'better-sqlite3';
 import { AppConfig } from './config.js';
 import { logger } from './logging.js';
 import { generateId, ID_PREFIXES } from '../shared/ids.js';
 import { LIMITS } from '../shared/limits.js';
 import { AppError, InternalError, InvalidRequestError } from './domain/errors.js';
 import { ZodError } from 'zod';
+import { createDatabase } from './db/connection.js';
+import { ConversationRepository, DraftRepository } from './db/repositories/conversation.repository.js';
+import { QueueRepository } from './db/repositories/queue.repository.js';
+import { RunRepository } from './db/repositories/run.repository.js';
+import { HermesClient } from './hermes/client.js';
+import { HermesAdapter } from './hermes/adapter.js';
+import { StatusService } from './services/status-service.js';
+import { ConversationService } from './services/conversation-service.js';
+import { statusRoutes } from './http/routes/status.js';
+import { conversationRoutes } from './http/routes/conversations.js';
 
-export function buildServer(config: AppConfig): FastifyInstance {
+export interface ServerDependencies {
+  db?: Database.Database;
+  hermesClient?: HermesClient;
+  hermesAdapter?: HermesAdapter;
+  statusService?: StatusService;
+  conversationService?: ConversationService;
+}
+
+export function buildServer(
+  config: AppConfig,
+  dependencies: ServerDependencies = {}
+): FastifyInstance {
   const server = Fastify({
     logger: false,
     bodyLimit: LIMITS.JSON_BODY_MAX_BYTES,
@@ -55,7 +77,12 @@ export function buildServer(config: AppConfig): FastifyInstance {
     }
 
     // Fastify schema/validation error
-    if ('statusCode' in error && typeof error.statusCode === 'number' && error.statusCode >= 400 && error.statusCode < 500) {
+    if (
+      'statusCode' in error &&
+      typeof error.statusCode === 'number' &&
+      error.statusCode >= 400 &&
+      error.statusCode < 500
+    ) {
       const clientErr = new InvalidRequestError(error.message);
       reply.status(error.statusCode).send(clientErr.toEnvelope(requestId));
       return;
@@ -84,6 +111,49 @@ export function buildServer(config: AppConfig): FastifyInstance {
 
     const internalErr = new InternalError('Internal server error');
     reply.status(500).send(internalErr.toEnvelope(requestId));
+  });
+
+  // Wire dependencies
+  const db = dependencies.db ?? createDatabase(config.sqlitePath);
+  const convRepo = new ConversationRepository(db);
+  const draftRepo = new DraftRepository(db);
+  const queueRepo = new QueueRepository(db);
+  const runRepo = new RunRepository(db);
+
+  const hermesClient =
+    dependencies.hermesClient ??
+    new HermesClient({
+      baseUrl: config.hermesBaseUrl,
+      token: config.hermesToken,
+      timeoutMs: config.hermesTimeoutMs
+    });
+
+  const hermesAdapter =
+    dependencies.hermesAdapter ?? new HermesAdapter(hermesClient);
+
+  const statusService =
+    dependencies.statusService ??
+    new StatusService(hermesAdapter, runRepo);
+
+  const conversationService =
+    dependencies.conversationService ??
+    new ConversationService(
+      hermesAdapter,
+      convRepo,
+      draftRepo,
+      queueRepo,
+      runRepo
+    );
+
+  // Register API Routes
+  server.register(statusRoutes, {
+    prefix: '/api/v1',
+    statusService
+  });
+
+  server.register(conversationRoutes, {
+    prefix: '/api/v1',
+    conversationService
   });
 
   // Serve static client in production

@@ -129,6 +129,33 @@ export class ConversationRepository {
     return this.findById(id)!;
   }
 
+  updateHermesSessionId(id: string, newSessionId: string): ConversationEntity {
+    const now = new Date().toISOString();
+    const res = this.db
+      .prepare(
+        `UPDATE conversations
+         SET hermes_session_id = ?, updated_at = ?
+         WHERE id = ?`
+      )
+      .run(newSessionId, now, id);
+
+    if (res.changes === 0) {
+      throw new NotFoundError('Conversation not found');
+    }
+    return this.findById(id)!;
+  }
+
+  updateLastSeen(id: string, lastSeen: string): void {
+    const now = new Date().toISOString();
+    this.db
+      .prepare(
+        `UPDATE conversations
+         SET last_seen_upstream_at = ?, updated_at = ?
+         WHERE id = ?`
+      )
+      .run(lastSeen, now, id);
+  }
+
   delete(id: string): boolean {
     const res = this.db.prepare('DELETE FROM conversations WHERE id = ?').run(id);
     return res.changes > 0;
