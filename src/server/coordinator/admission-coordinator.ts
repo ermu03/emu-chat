@@ -1,24 +1,18 @@
+import { generateOperationId, generateQueueItemId, generateRunId } from '../../shared/ids.js';
 import { QueueRepository } from '../db/repositories/queue.repository.js';
 import { RunRepository } from '../db/repositories/run.repository.js';
 import { LeaseRepository } from '../db/repositories/lease.repository.js';
 import { ConversationRepository } from '../db/repositories/conversation.repository.js';
 import { HermesAdapter } from '../hermes/adapter.js';
 import { SSEHub } from '../sse/sse-hub.js';
-import { generateQueueItemId, generateRunId } from '../../shared/ids.js';
 import {
-  QueueItemNotFoundError,
-  RunNotFoundError,
-  InvalidStateTransitionError,
+  LocalNotFoundError,
+  StateConflictError,
   HermesUnavailableError,
+  QueueFullError,
+  ApprovalNotPendingError
 } from '../domain/errors.js';
-import type { QueueItemEntity, RunEntity } from '../db/schema-types.js';
-
-export interface EnqueueInput {
-  conversation_id: string;
-  client_request_id?: string;
-  content: string;
-  sender_type?: 'user' | 'system';
-}
+import { QueueItemEntity, RunEntity } from '../db/schema-types.js';
 
 export class AdmissionCoordinator {
   private isProcessing = false;
@@ -26,27 +20,23 @@ export class AdmissionCoordinator {
   private readonly leaseHolder = `coordinator_${process.pid}`;
 
   constructor(
-    private readonly queueRepo: QueueRepository,
-    private readonly runRepo: RunRepository,
-    private readonly leaseRepo: LeaseRepository,
-    private readonly convRepo: ConversationRepository,
-    private readonly hermesAdapter: HermesAdapter,
-    private readonly sseHub: SSEHub
+    private queueRepo: QueueRepository,
+    private runRepo: RunRepository,
+    private leaseRepo: LeaseRepository,
+    private convRepo: ConversationRepository,
+    private hermesAdapter: HermesAdapter,
+    private sseHub: SSEHub
   ) {}
 
-  /**
-   * 启动后台轮询调度
-   */
-  public start(): void {
+  public start(intervalMs = 1000): void {
     if (this.timer) return;
     this.timer = setInterval(() => {
-      this.tick().catch(() => {});
-    }, 1000);
+      this.tick().catch((err) => {
+        console.error('[AdmissionCoordinator] tick error:', err);
+      });
+    }, intervalMs);
   }
 
-  /**
-   * 停止调度循环
-   */
   public stop(): void {
     if (this.timer) {
       clearInterval(this.timer);
@@ -55,53 +45,61 @@ export class AdmissionCoordinator {
   }
 
   /**
-   * 消息排队入队
+   * 提交消息入队
    */
-  public async enqueueMessage(input: EnqueueInput): Promise<QueueItemEntity> {
-    const conv = await this.convRepo.findById(input.conversation_id);
+  public async enqueueMessage(input: {
+    conversation_id: string;
+    client_request_id: string;
+    text: string;
+  }): Promise<{ queue_item_id: string; operation_id: string; position: number }> {
+    const conv = this.convRepo.findById(input.conversation_id);
     if (!conv) {
-      throw new QueueItemNotFoundError(`Conversation ${input.conversation_id} not found`);
+      throw new LocalNotFoundError(`Conversation ${input.conversation_id} not found`);
     }
 
-    const queueItemId = generateQueueItemId();
-    const item = await this.queueRepo.enqueue({
-      id: queueItemId,
+    const item = this.queueRepo.enqueue({
+      id: generateQueueItemId(),
       conversation_id: input.conversation_id,
+      operation_id: generateOperationId(),
       client_request_id: input.client_request_id,
-      content: input.content,
-      sender_type: input.sender_type || 'user',
+      payload_text: input.text,
+      idempotency_key: input.client_request_id,
     });
 
-    // 广播入队事件
+    const queuedItems = this.queueRepo.listByConversation(input.conversation_id);
+    const position = queuedItems.findIndex((q) => q.id === item.id) + 1;
+
     this.sseHub.broadcast(input.conversation_id, 'queue.enqueued', {
       queue_item_id: item.id,
-      position: item.sequence_number,
-      client_request_id: item.client_request_id,
-      created_at: item.created_at,
+      position,
     });
 
-    // 立即触发一次调度
-    setImmediate(() => this.tick().catch(() => {}));
-
-    return item;
+    return {
+      queue_item_id: item.id,
+      operation_id: item.operation_id,
+      position,
+    };
   }
 
   /**
    * 取消指定的排队项
    */
   public async cancelQueueItem(conversationId: string, queueItemId: string): Promise<void> {
-    const item = await this.queueRepo.findById(queueItemId);
+    const item = this.queueRepo.findById(queueItemId);
     if (!item || item.conversation_id !== conversationId) {
-      throw new QueueItemNotFoundError(`Queue item ${queueItemId} not found`);
+      throw new LocalNotFoundError(`Queue item ${queueItemId} not found`);
     }
 
-    if (item.status !== 'queued') {
-      throw new InvalidStateTransitionError(
-        `Cannot cancel queue item in state ${item.status}`
+    if (item.state !== 'queued') {
+      throw new StateConflictError(
+        `Cannot cancel queue item in state ${item.state}`
       );
     }
 
-    await this.queueRepo.updateStatus(queueItemId, 'cancelled');
+    this.queueRepo.updateState(queueItemId, item.revision, {
+      state: 'cancelled',
+      terminal: true,
+    });
 
     this.sseHub.broadcast(conversationId, 'queue.cancelled', {
       queue_item_id: queueItemId,
@@ -112,16 +110,16 @@ export class AdmissionCoordinator {
    * 获取会话排队列表
    */
   public async getQueue(conversationId: string): Promise<QueueItemEntity[]> {
-    return this.queueRepo.findQueuedByConversation(conversationId);
+    return this.queueRepo.listByConversation(conversationId);
   }
 
   /**
    * 获取特定 Run 信息
    */
   public async getRun(conversationId: string, runId: string): Promise<RunEntity> {
-    const run = await this.runRepo.findById(runId);
+    const run = this.runRepo.findById(runId);
     if (!run || run.conversation_id !== conversationId) {
-      throw new RunNotFoundError(`Run ${runId} not found`);
+      throw new LocalNotFoundError(`Run ${runId} not found`);
     }
     return run;
   }
@@ -131,7 +129,7 @@ export class AdmissionCoordinator {
    */
   public async cancelRun(conversationId: string, runId: string): Promise<void> {
     const run = await this.getRun(conversationId, runId);
-    if (['succeeded', 'failed', 'cancelled'].includes(run.status)) {
+    if (['rejected', 'reconciled'].includes(run.local_state)) {
       return; // 已终态无需再次取消
     }
 
@@ -143,9 +141,21 @@ export class AdmissionCoordinator {
       }
     }
 
-    await this.runRepo.updateStatus(runId, 'cancelled');
-    await this.queueRepo.updateStatus(run.queue_item_id, 'cancelled');
-    await this.leaseRepo.releaseLease('conversation', conversationId, this.leaseHolder);
+    this.runRepo.update(runId, {
+      local_state: 'rejected',
+      terminal: true,
+      last_error_code: 'CANCELLED',
+    });
+
+    const queueItem = this.queueRepo.findById(run.queue_item_id);
+    if (queueItem && queueItem.state !== 'cancelled' && queueItem.state !== 'done') {
+      this.queueRepo.updateState(queueItem.id, queueItem.revision, {
+        state: 'cancelled',
+        terminal: true,
+      });
+    }
+
+    this.leaseRepo.release('conversation', conversationId, this.leaseHolder);
 
     this.sseHub.broadcast(conversationId, 'run.cancelled', {
       run_id: runId,
@@ -159,16 +169,11 @@ export class AdmissionCoordinator {
   public async submitApproval(
     conversationId: string,
     runId: string,
-    decision: 'approve' | 'reject' | 'cancel'
+    decision: 'once' | 'always' | 'reject'
   ): Promise<void> {
     const run = await this.getRun(conversationId, runId);
-    if (run.status !== 'paused') {
-      throw new InvalidStateTransitionError(`Run ${runId} is not paused (status: ${run.status})`);
-    }
-
-    if (decision === 'cancel') {
-      await this.cancelRun(conversationId, runId);
-      return;
+    if (run.upstream_status !== 'waiting_for_approval') {
+      throw new ApprovalNotPendingError(`Run ${runId} is not paused waiting for approval`);
     }
 
     if (run.hermes_run_id) {
@@ -179,7 +184,10 @@ export class AdmissionCoordinator {
       }
     }
 
-    await this.runRepo.updateStatus(runId, 'running');
+    this.runRepo.update(runId, {
+      upstream_status: 'running',
+    });
+
     this.sseHub.broadcast(conversationId, 'run.resumed', {
       run_id: runId,
       decision,
@@ -194,12 +202,10 @@ export class AdmissionCoordinator {
     this.isProcessing = true;
 
     try {
-      // 遍历所有有排队项的会话
-      const queuedItems = await this.queueRepo.findAllQueued();
-      const distinctConvs = Array.from(new Set(queuedItems.map((q) => q.conversation_id)));
-
-      for (const convId of distinctConvs) {
-        await this.processConversationQueue(convId);
+      // 遍历所有待处理队列
+      const activeGlobal = this.queueRepo.findActiveGlobal();
+      if (activeGlobal) {
+        await this.processConversationQueue(activeGlobal.conversation_id);
       }
     } finally {
       this.isProcessing = false;
@@ -211,52 +217,79 @@ export class AdmissionCoordinator {
    */
   private async processConversationQueue(conversationId: string): Promise<void> {
     // 检查会话当前是否有未完成的 Run
-    const activeRuns = await this.runRepo.findActiveByConversation(conversationId);
-    if (activeRuns.length > 0) {
+    const activeRun = this.runRepo.findActiveByConversation(conversationId);
+    if (activeRun) {
       return; // 保证单会话同一时刻严格只运行一个 Run
     }
 
     // 尝试抢占会话租约（默认 30 秒有效）
-    const acquired = await this.leaseRepo.acquireLease('conversation', conversationId, this.leaseHolder, 30);
+    const expiresAt = new Date(Date.now() + 30 * 1000).toISOString();
+    const acquired = this.leaseRepo.acquire(
+      'conversation',
+      conversationId,
+      this.leaseHolder,
+      `lease_${Date.now()}`,
+      expiresAt
+    );
     if (!acquired) {
       return; // 其它实例正在协调
     }
 
-    const nextItem = await this.queueRepo.findNextQueued(conversationId);
+    const nextItem = this.queueRepo.findNextQueued(conversationId);
     if (!nextItem) {
-      await this.leaseRepo.releaseLease('conversation', conversationId, this.leaseHolder);
+      this.leaseRepo.release('conversation', conversationId, this.leaseHolder);
       return;
     }
 
-    const conv = await this.convRepo.findById(conversationId);
+    const conv = this.convRepo.findById(conversationId);
     if (!conv || !conv.hermes_session_id) {
-      await this.queueRepo.updateStatus(nextItem.id, 'failed', 'Missing hermes_session_id');
-      await this.leaseRepo.releaseLease('conversation', conversationId, this.leaseHolder);
+      this.queueRepo.updateState(nextItem.id, nextItem.revision, {
+        state: 'rejected',
+        terminal: true,
+        last_error_code: 'MISSING_HERMES_SESSION',
+      });
+      this.leaseRepo.release('conversation', conversationId, this.leaseHolder);
       return;
     }
 
     // 创建本地 Run 记录
     const runId = generateRunId();
-    await this.runRepo.create({
+    const run = this.runRepo.insert({
       id: runId,
-      conversation_id: conversationId,
       queue_item_id: nextItem.id,
-      status: 'pending',
+      conversation_id: conversationId,
+      local_state: 'submitting',
+      upstream_status: 'queued',
+      hermes_run_id: null,
     });
 
-    await this.queueRepo.updateStatus(nextItem.id, 'running');
+    this.queueRepo.updateState(nextItem.id, nextItem.revision, {
+      state: 'dispatching',
+      dispatch_session_id: conv.hermes_session_id,
+    });
 
     this.sseHub.broadcast(conversationId, 'run.started', {
       run_id: runId,
       queue_item_id: nextItem.id,
-      created_at: new Date().toISOString(),
+      created_at: run.created_at,
     });
 
     // 异步执行上游 Run 调度
     this.executeHermesRun(conversationId, conv.hermes_session_id, runId, nextItem).catch(async (err) => {
-      await this.runRepo.updateStatus(runId, 'failed', String(err));
-      await this.queueRepo.updateStatus(nextItem.id, 'failed', String(err));
-      await this.leaseRepo.releaseLease('conversation', conversationId, this.leaseHolder);
+      this.runRepo.update(runId, {
+        local_state: 'rejected',
+        terminal: true,
+        last_error_code: String(err),
+      });
+      const currentItem = this.queueRepo.findById(nextItem.id);
+      if (currentItem) {
+        this.queueRepo.updateState(currentItem.id, currentItem.revision, {
+          state: 'rejected',
+          terminal: true,
+          last_error_code: String(err),
+        });
+      }
+      this.leaseRepo.release('conversation', conversationId, this.leaseHolder);
       this.sseHub.broadcast(conversationId, 'run.failed', {
         run_id: runId,
         error: String(err),
@@ -275,17 +308,29 @@ export class AdmissionCoordinator {
   ): Promise<void> {
     try {
       const hermesRun = await this.hermesAdapter.startRun(hermesSessionId, {
-        prompt: queueItem.content,
+        prompt: queueItem.payload_text || '',
       });
 
-      await this.runRepo.updateHermesRunId(runId, hermesRun.run_id);
-      await this.runRepo.updateStatus(runId, 'running');
+      this.runRepo.update(runId, {
+        hermes_run_id: hermesRun.run_id,
+        local_state: 'accepted',
+        upstream_status: 'running',
+      });
+
+      const currentItem = this.queueRepo.findById(queueItem.id);
+      if (currentItem) {
+        this.queueRepo.updateState(currentItem.id, currentItem.revision, {
+          state: 'accepted',
+        });
+      }
 
       // 订阅 upstream 事件流并转发至本地 SSEHub
       const stream = await this.hermesAdapter.streamEvents(hermesSessionId, hermesRun.run_id);
       for await (const event of stream) {
         if (event.type === 'tool_approval_required') {
-          await this.runRepo.updateStatus(runId, 'paused', undefined, 'approval_required');
+          this.runRepo.update(runId, {
+            upstream_status: 'waiting_for_approval',
+          });
           this.sseHub.broadcast(conversationId, 'run.paused', {
             run_id: runId,
             reason: 'approval_required',
@@ -299,15 +344,49 @@ export class AdmissionCoordinator {
         }
       }
 
-      // 执行完成终态收尾
-      await this.runRepo.updateStatus(runId, 'succeeded');
-      await this.queueRepo.updateStatus(queueItem.id, 'completed');
+      this.runRepo.update(runId, {
+        local_state: 'reconciled',
+        upstream_status: 'completed',
+        terminal: true,
+      });
+
+      const finishedItem = this.queueRepo.findById(queueItem.id);
+      if (finishedItem) {
+        this.queueRepo.updateState(finishedItem.id, finishedItem.revision, {
+          state: 'done',
+          terminal: true,
+        });
+      }
+
+      this.leaseRepo.release('conversation', conversationId, this.leaseHolder);
+
       this.sseHub.broadcast(conversationId, 'run.completed', {
         run_id: runId,
         queue_item_id: queueItem.id,
       });
-    } finally {
-      await this.leaseRepo.releaseLease('conversation', conversationId, this.leaseHolder);
+    } catch (err) {
+      this.runRepo.update(runId, {
+        local_state: 'rejected',
+        upstream_status: 'failed',
+        terminal: true,
+        last_error_code: String(err),
+      });
+
+      const failedItem = this.queueRepo.findById(queueItem.id);
+      if (failedItem) {
+        this.queueRepo.updateState(failedItem.id, failedItem.revision, {
+          state: 'rejected',
+          terminal: true,
+          last_error_code: String(err),
+        });
+      }
+
+      this.leaseRepo.release('conversation', conversationId, this.leaseHolder);
+
+      this.sseHub.broadcast(conversationId, 'run.failed', {
+        run_id: runId,
+        error: String(err),
+      });
     }
   }
 }

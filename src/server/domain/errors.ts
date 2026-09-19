@@ -296,3 +296,33 @@ export class InternalError extends AppError {
     });
   }
 }
+
+// Aliases for domain operations and repository compatibility
+export class NotFoundError extends LocalNotFoundError {}
+export class ConflictError extends LocalConflictError {}
+export class QueueFullError extends StateConflictError {
+  constructor(message: string = 'Queue depth limit exceeded (maximum 10 items per conversation)') {
+    super(message);
+  }
+}
+export class QueueItemNotFoundError extends LocalNotFoundError {
+  constructor(message: string = 'Queue item not found') {
+    super(message);
+  }
+}
+export class RunNotFoundError extends LocalNotFoundError {
+  constructor(message: string = 'Run not found') {
+    super(message);
+  }
+}
+export class InvalidStateTransitionError extends StateConflictError {
+  constructor(message: string = 'Invalid state transition') {
+    super(message);
+  }
+}
+export class ApprovalPayloadInvalidError extends InvalidRequestError {
+  constructor(message: string = 'Invalid approval payload') {
+    super(message);
+  }
+}
+

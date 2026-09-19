@@ -2,16 +2,16 @@ import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import type { AdmissionCoordinator } from '../../coordinator/admission-coordinator.js';
 import type { SSEHub } from '../../sse/sse-hub.js';
-import { ValidationError } from '../../domain/errors.js';
+import { InvalidRequestError } from '../../domain/errors.js';
+import { generateClientRequestId } from '../../shared/ids.js';
 
 const EnqueueMessageBodySchema = z.object({
   client_request_id: z.string().optional(),
-  content: z.string().min(1).max(65536),
-  sender_type: z.enum(['user', 'system']).default('user'),
+  text: z.string().min(1).max(65536),
 });
 
 const ApprovalBodySchema = z.object({
-  decision: z.enum(['approve', 'reject', 'cancel']),
+  decision: z.enum(['once', 'always', 'reject']),
 });
 
 export const queueAndRunsRoutes: FastifyPluginAsync<{
@@ -20,20 +20,20 @@ export const queueAndRunsRoutes: FastifyPluginAsync<{
 }> = async (fastify, opts) => {
   const { coordinator, sseHub } = opts;
 
-  // 1. 发送/入队消息
+  // 1. 发送/入队消息 POST /conversations/:id/messages
   fastify.post<{
     Params: { id: string };
   }>('/conversations/:id/messages', async (req, reply) => {
     const parsed = EnqueueMessageBodySchema.safeParse(req.body);
     if (!parsed.success) {
-      throw new ValidationError(parsed.error.message);
+      throw new InvalidRequestError(parsed.error.message);
     }
 
+    const clientRequestId = parsed.data.client_request_id || generateClientRequestId();
     const item = await coordinator.enqueueMessage({
       conversation_id: req.params.id,
-      client_request_id: parsed.data.client_request_id,
-      content: parsed.data.content,
-      sender_type: parsed.data.sender_type,
+      client_request_id: clientRequestId,
+      text: parsed.data.text,
     });
 
     return reply.status(202).send({
@@ -41,7 +41,7 @@ export const queueAndRunsRoutes: FastifyPluginAsync<{
     });
   });
 
-  // 2. 查看会话当前排队状态
+  // 2. 查看会话当前排队状态 GET /conversations/:id/queue
   fastify.get<{
     Params: { id: string };
   }>('/conversations/:id/queue', async (req, reply) => {
@@ -51,7 +51,7 @@ export const queueAndRunsRoutes: FastifyPluginAsync<{
     });
   });
 
-  // 3. 取消排队中的消息
+  // 3. 取消排队中的消息 DELETE /conversations/:id/queue/:itemId
   fastify.delete<{
     Params: { id: string; itemId: string };
   }>('/conversations/:id/queue/:itemId', async (req, reply) => {
@@ -59,7 +59,7 @@ export const queueAndRunsRoutes: FastifyPluginAsync<{
     return reply.status(204).send();
   });
 
-  // 4. 查看 Run 状态
+  // 4. 查看 Run 状态 GET /conversations/:id/runs/:runId
   fastify.get<{
     Params: { id: string; runId: string };
   }>('/conversations/:id/runs/:runId', async (req, reply) => {
@@ -69,7 +69,7 @@ export const queueAndRunsRoutes: FastifyPluginAsync<{
     });
   });
 
-  // 5. 取消 Run
+  // 5. 取消 Run POST /conversations/:id/runs/:runId/cancel
   fastify.post<{
     Params: { id: string; runId: string };
   }>('/conversations/:id/runs/:runId/cancel', async (req, reply) => {
@@ -79,13 +79,13 @@ export const queueAndRunsRoutes: FastifyPluginAsync<{
     });
   });
 
-  // 6. 提交工具调用/交互审批
+  // 6. 提交工具调用/交互审批 POST /conversations/:id/runs/:runId/approval
   fastify.post<{
     Params: { id: string; runId: string };
   }>('/conversations/:id/runs/:runId/approval', async (req, reply) => {
     const parsed = ApprovalBodySchema.safeParse(req.body);
     if (!parsed.success) {
-      throw new ValidationError(parsed.error.message);
+      throw new InvalidRequestError(parsed.error.message);
     }
 
     await coordinator.submitApproval(
@@ -99,7 +99,7 @@ export const queueAndRunsRoutes: FastifyPluginAsync<{
     });
   });
 
-  // 7. 会话 SSE 事件流订阅
+  // 7. 会话 SSE 事件流订阅 GET /conversations/:id/events
   fastify.get<{
     Params: { id: string };
     Headers: { 'last-event-id'?: string };
