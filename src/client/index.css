@@ -227,6 +227,8 @@ select:focus-visible {
   justify-content: center;
   width: 28px;
   height: 28px;
+  min-width: 28px;
+  flex: 0 0 28px;
   border: 1px solid var(--line-strong);
   border-radius: 9px;
   color: var(--accent-strong);
@@ -247,14 +249,14 @@ select:focus-visible {
 }
 .conversation-sidebar.is-collapsed .sidebar-header {
   gap: 14px;
-  padding-right: 10px;
-  padding-left: 10px;
+  padding: 14px 10px;
 }
 .conversation-sidebar.is-collapsed .brand-row {
+  flex-direction: column;
   justify-content: center;
+  gap: 12px;
 }
 .conversation-sidebar.is-collapsed .brand-name,
-.conversation-sidebar.is-collapsed .search-field,
 .conversation-sidebar.is-collapsed .conversation-list-scroll,
 .conversation-sidebar.is-collapsed .sidebar-footer span:not(.status-dot) {
   display: none;
@@ -297,30 +299,6 @@ select:focus-visible {
 }
 .new-conversation-button:hover {
   background: var(--accent-strong);
-}
-.search-field {
-  position: relative;
-  display: flex;
-  align-items: center;
-}
-.search-field svg {
-  position: absolute;
-  left: 11px;
-  color: var(--ink-faint);
-  pointer-events: none;
-}
-.search-field input {
-  width: 100%;
-  height: 34px;
-  padding: 0 11px 0 34px;
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  color: var(--ink);
-  background: var(--surface);
-  font-size: 12px;
-}
-.search-field input::placeholder {
-  color: var(--ink-faint);
 }
 .conversation-list-scroll {
   min-height: 0;
@@ -381,14 +359,9 @@ select:focus-visible {
   white-space: nowrap;
 }
 .conversation-row-actions {
+  position: relative;
   display: flex;
   gap: 1px;
-  opacity: 0;
-  transition: opacity 140ms ease;
-}
-.conversation-row:hover .conversation-row-actions,
-.conversation-row.active .conversation-row-actions {
-  opacity: 1;
 }
 .conversation-row-actions button {
   display: inline-flex;
@@ -406,6 +379,23 @@ select:focus-visible {
 }
 .conversation-row-actions button.danger:hover {
   color: var(--danger);
+}
+.conversation-actions-menu {
+  position: absolute;
+  z-index: 10;
+  top: 27px;
+  right: 0;
+  display: flex;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-float);
+}
+.conversation-actions-menu button {
+  width: 26px;
+  height: 26px;
 }
 .conversation-row-meta {
   gap: 8px;

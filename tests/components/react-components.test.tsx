@@ -54,8 +54,6 @@ describe("React Components Static Tests", () => {
           onFork={vi.fn()}
           onDelete={onDelete}
           onUpdateMetadata={vi.fn()}
-          searchQuery=""
-          onSearchChange={vi.fn()}
           loading={false}
           collapsed={false}
           onToggleCollapse={onToggleCollapse}
@@ -65,6 +63,7 @@ describe("React Components Static Tests", () => {
       fireEvent.click(screen.getByRole("button", { name: "折叠侧栏" }));
       expect(onToggleCollapse).toHaveBeenCalledTimes(1);
 
+      fireEvent.click(screen.getByTitle("更多操作"));
       fireEvent.click(screen.getByTitle("删除会话"));
 
       expect(
@@ -72,9 +71,9 @@ describe("React Components Static Tests", () => {
       ).toBeDefined();
       expect(screen.getByText("ses_test_1")).toBeDefined();
 
-      const deleteButton = screen.getAllByRole("button", {
+      const deleteButton = screen.getByRole("button", {
         name: "删除会话",
-      })[1] as HTMLButtonElement;
+      }) as HTMLButtonElement;
       expect(deleteButton.disabled).toBe(true);
       fireEvent.click(deleteButton);
       expect(onDelete).not.toHaveBeenCalled();

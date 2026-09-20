@@ -71,7 +71,6 @@ export function AppShell() {
   const [preferences, setPreferences] = useState<PreferencesResponse | null>(
     null,
   );
-  const [searchQuery, setSearchQuery] = useState("");
   const [queueOpen, setQueueOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
@@ -600,8 +599,6 @@ export function AppShell() {
         onUpdateMetadata={(conversationId, title, pinned) =>
           void handleUpdateMetadata(conversationId, title, pinned)
         }
-        searchQuery={searchQuery}
-        onSearchChange={setSearchQuery}
         loading={conversationsLoading}
         style={{
           width: sidebarWidth,

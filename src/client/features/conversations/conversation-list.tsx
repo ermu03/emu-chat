@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useState } from "react";
 import {
   Copy,
   MessageSquarePlus,
@@ -7,7 +7,6 @@ import {
   PanelLeftOpen,
   Pin,
   PinOff,
-  Search,
   Trash2,
 } from "lucide-react";
 import type { ConversationSummary } from "../../../shared/api-schemas.js";
@@ -20,8 +19,6 @@ export interface ConversationListProps {
   onFork: (id: string) => void;
   onDelete: (id: string, hermesSessionId: string, confirmed: boolean) => void;
   onUpdateMetadata: (id: string, title: string, pinned: boolean) => void;
-  searchQuery: string;
-  onSearchChange: (query: string) => void;
   loading: boolean;
   style?: React.CSSProperties;
   collapsed: boolean;
@@ -39,8 +36,6 @@ export const ConversationList: React.FC<ConversationListProps> = ({
   onFork,
   onDelete,
   onUpdateMetadata,
-  searchQuery,
-  onSearchChange,
   loading,
   style,
   collapsed,
@@ -54,19 +49,8 @@ export const ConversationList: React.FC<ConversationListProps> = ({
   );
   const [deleteConfirmed, setDeleteConfirmed] = useState(false);
 
-  const filtered = useMemo(() => {
-    const query = searchQuery.trim().toLowerCase();
-    if (!query) return conversations;
-    return conversations.filter(
-      (conversation) =>
-        conversation.title.toLowerCase().includes(query) ||
-        conversation.hermes_session_id.toLowerCase().includes(query) ||
-        conversation.preview.toLowerCase().includes(query),
-    );
-  }, [conversations, searchQuery]);
-
-  const pinned = filtered.filter((conversation) => conversation.pinned);
-  const recent = filtered.filter((conversation) => !conversation.pinned);
+  const pinned = conversations.filter((conversation) => conversation.pinned);
+  const recent = conversations.filter((conversation) => !conversation.pinned);
 
   const select = (id: string) => {
     onSelect(id);
@@ -116,26 +100,13 @@ export const ConversationList: React.FC<ConversationListProps> = ({
             <span>新建会话</span>
           </button>
         </div>
-
-        <label className="search-field">
-          <Search size={15} strokeWidth={1.8} aria-hidden="true" />
-          <input
-            type="search"
-            value={searchQuery}
-            onChange={(event) => onSearchChange(event.target.value)}
-            placeholder="搜索会话"
-            aria-label="搜索会话"
-          />
-        </label>
       </div>
 
       <div className="conversation-list-scroll">
         {loading && conversations.length === 0 ? (
           <div className="sidebar-loading">正在加载会话</div>
-        ) : filtered.length === 0 ? (
-          <div className="sidebar-empty">
-            {searchQuery.trim() ? "没有匹配的会话" : "还没有会话"}
-          </div>
+        ) : conversations.length === 0 ? (
+          <div className="sidebar-empty">还没有会话</div>
         ) : (
           <>
             {pinned.length > 0 && (
@@ -300,6 +271,8 @@ function ConversationRow({
   onDelete: (conversation: ConversationSummary) => void;
   onTogglePin: (conversation: ConversationSummary) => void;
 }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+
   return (
     <div
       className={`conversation-row ${active ? "active" : ""}`}
@@ -320,46 +293,62 @@ function ConversationRow({
         <div className="conversation-row-actions">
           <button
             type="button"
-            aria-label={conversation.pinned ? "取消置顶" : "置顶会话"}
-            title={conversation.pinned ? "取消置顶" : "置顶"}
-            onClick={(event) => {
-              event.stopPropagation();
-              onTogglePin(conversation);
-            }}
-          >
-            {conversation.pinned ? <PinOff size={13} /> : <Pin size={13} />}
-          </button>
-          <button
-            type="button"
-            aria-label="分叉会话"
-            title="分叉会话"
-            onClick={(event) => {
-              event.stopPropagation();
-              onFork(conversation.conversation_id);
-            }}
-          >
-            <Copy size={13} />
-          </button>
-          <button
-            type="button"
-            className="danger"
-            aria-label="删除会话"
-            title="删除会话"
-            onClick={(event) => {
-              event.stopPropagation();
-              onDelete(conversation);
-            }}
-          >
-            <Trash2 size={13} />
-          </button>
-          <button
-            type="button"
             aria-label="更多会话操作"
             title="更多操作"
-            onClick={(event) => event.stopPropagation()}
+            aria-expanded={menuOpen}
+            onClick={(event) => {
+              event.stopPropagation();
+              setMenuOpen((open) => !open);
+            }}
           >
             <MoreHorizontal size={13} />
           </button>
+          {menuOpen && (
+            <div
+              className="conversation-actions-menu"
+              role="menu"
+              aria-label="会话操作"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <button
+                type="button"
+                role="menuitem"
+                aria-label={conversation.pinned ? "取消置顶" : "置顶会话"}
+                title={conversation.pinned ? "取消置顶" : "置顶"}
+                onClick={() => {
+                  onTogglePin(conversation);
+                  setMenuOpen(false);
+                }}
+              >
+                {conversation.pinned ? <PinOff size={13} /> : <Pin size={13} />}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                aria-label="分叉会话"
+                title="分叉会话"
+                onClick={() => {
+                  onFork(conversation.conversation_id);
+                  setMenuOpen(false);
+                }}
+              >
+                <Copy size={13} />
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="danger"
+                aria-label="删除会话"
+                title="删除会话"
+                onClick={() => {
+                  onDelete(conversation);
+                  setMenuOpen(false);
+                }}
+              >
+                <Trash2 size={13} />
+              </button>
+            </div>
+          )}
         </div>
       </div>
       <div className="conversation-row-meta">
