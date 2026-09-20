@@ -153,7 +153,7 @@ describe("React Components Static Tests", () => {
       resolveSave?.({ revision: 1 });
 
       await waitFor(() => {
-        expect(onSend).toHaveBeenCalledWith(1);
+        expect(onSend).toHaveBeenCalledWith("Send me", 1);
       });
       await waitFor(() => {
         expect((textarea as HTMLTextAreaElement).value).toBe("");
@@ -182,7 +182,7 @@ describe("React Components Static Tests", () => {
       fireEvent.keyDown(textarea, { key: "Enter", ctrlKey: true });
 
       await waitFor(() => {
-        expect(onSend).toHaveBeenCalledWith(0);
+        expect(onSend).toHaveBeenCalledWith("Retry this message", 0);
       });
       await waitFor(() => {
         expect(screen.getByText("Hermes unavailable")).toBeDefined();
@@ -300,6 +300,22 @@ describe("React Components Static Tests", () => {
       expect(screen.queryByRole("region", { name: "消息队列" })).toBeNull();
     });
 
+    it("renders a submission while it is awaiting queue confirmation", () => {
+      render(
+        <QueuePanel
+          isOpen={true}
+          onClose={vi.fn()}
+          items={[]}
+          pendingItems={[{ id: "submission_1", content: "Queue this next" }]}
+          onCancelItem={vi.fn().mockResolvedValue(undefined)}
+          onEditItem={vi.fn().mockResolvedValue(undefined)}
+        />,
+      );
+
+      expect(screen.getByText("正在加入队列")).toBeDefined();
+      expect(screen.getByText("Queue this next")).toBeDefined();
+    });
+
     it("renders queued items with inline edit and delete actions", async () => {
       const onCancelItem = vi.fn();
       const onEditItem = vi.fn().mockResolvedValue(undefined);
@@ -359,6 +375,22 @@ describe("React Components Static Tests", () => {
   });
 
   describe("MessageView activity", () => {
+    it("keeps the current queued message before the live assistant row", () => {
+      render(
+        <MessageView
+          messages={[]}
+          loading={false}
+          pendingUserMessage={{ id: "queue_1", content: "Start this task" }}
+          isGenerating={true}
+        />,
+      );
+
+      const rows = screen.getByRole("log").querySelectorAll("article");
+      expect(rows).toHaveLength(2);
+      expect(rows[0]?.textContent).toContain("Start this task");
+      expect(rows[1]?.textContent).toContain("Hermes");
+    });
+
     it("shows Hermes in the message flow while a response is being streamed", () => {
       const onStopGenerating = vi.fn();
       render(

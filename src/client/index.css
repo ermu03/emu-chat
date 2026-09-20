@@ -515,7 +515,7 @@ select:focus-visible {
   min-height: 0;
   flex: 1;
   overflow-y: auto;
-  scroll-behavior: smooth;
+  scroll-behavior: auto;
 }
 .message-list {
   width: min(920px, 100%);

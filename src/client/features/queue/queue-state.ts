@@ -33,7 +33,7 @@ export function isLiveRun(run: RunResponse | null): boolean {
   );
 }
 
-function getPrimaryQueueItem(
+export function getPrimaryQueueItem(
   queue: QueueListResponse | null,
   activeRun: RunResponse | null,
 ): QueueItemResponse | null {

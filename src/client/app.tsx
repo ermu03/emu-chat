@@ -15,13 +15,20 @@ import type {
 import { StatusBar } from "./features/status/status-bar.js";
 import { ConversationList } from "./features/conversations/conversation-list.js";
 import { ConversationViewCache } from "./features/conversations/conversation-view-cache.js";
-import { MessageView } from "./features/messages/message-view.js";
+import {
+  MessageView,
+  type PendingUserMessage,
+} from "./features/messages/message-view.js";
 import { StreamedAssistantCache } from "./features/messages/streamed-assistant-cache.js";
 import { DraftComposer } from "./features/composer/draft-composer.js";
-import { QueuePanel } from "./features/queue/queue-panel.js";
+import {
+  QueuePanel,
+  type PendingQueueItem,
+} from "./features/queue/queue-panel.js";
 import {
   getCurrentRunId,
   getQueuedFollowUps,
+  getPrimaryQueueItem,
   isAgentGenerating,
   isLiveQueueState,
   isLiveRun,
@@ -48,6 +55,13 @@ type PendingSend = {
   conversationId: string;
   requestId: string;
   expectedRevision: number;
+};
+
+type PendingSubmission = {
+  requestId: string;
+  conversationId: string;
+  content: string;
+  isFollowUp: boolean;
 };
 
 type ConversationViewSnapshot = {
@@ -89,12 +103,17 @@ export function AppShell() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [streamNotice, setStreamNotice] = useState<string | null>(null);
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
+  const [pendingSubmissions, setPendingSubmissions] = useState<
+    PendingSubmission[]
+  >([]);
 
   const activeLoadRef = useRef(0);
+  const routeConversationIdRef = useRef(routeConversationId);
   const activeConversationIdRef = useRef<string | null>(null);
   const activeRunRef = useRef<RunResponse | null>(null);
   const queueRef = useRef<QueueListResponse | null>(null);
   const pendingSendRef = useRef<PendingSend | null>(null);
+  const lastConversationListRefreshRunIdRef = useRef<string | null>(null);
   const previousQueuedMessageCountRef = useRef(0);
   const streamedAssistantRunIdRef = useRef<string | null>(null);
   const streamedAssistantCacheRef = useRef(new StreamedAssistantCache());
@@ -102,6 +121,8 @@ export function AppShell() {
     new ConversationViewCache<ConversationViewSnapshot>(),
   );
   const [streamedAssistantContent, setStreamedAssistantContent] = useState("");
+
+  routeConversationIdRef.current = routeConversationId;
 
   useEffect(() => {
     activeConversationIdRef.current = activeConversationId;
@@ -197,7 +218,9 @@ export function AppShell() {
       setActiveConversationId((current) => {
         if (current) return current;
         return (
-          routeConversationId ?? response.items[0]?.conversation_id ?? null
+          routeConversationIdRef.current ??
+          response.items[0]?.conversation_id ??
+          null
         );
       });
     } catch (error) {
@@ -205,7 +228,7 @@ export function AppShell() {
     } finally {
       setConversationsLoading(false);
     }
-  }, [routeConversationId]);
+  }, []);
 
   const loadActiveConversation = useCallback(async (conversationId: string) => {
     const loadId = ++activeLoadRef.current;
@@ -409,12 +432,16 @@ export function AppShell() {
         setQueue(nextQueue);
         queueRef.current = nextQueue;
 
-        const runId =
-          knownRunId ??
-          getCurrentRunId(nextQueue) ??
-          activeRunRef.current?.id ??
-          null;
-        if (!runId) return;
+        const activeRunId =
+          activeRunRef.current?.conversation_id === conversationId &&
+          isLiveRun(activeRunRef.current)
+            ? activeRunRef.current.id
+            : null;
+        const runId = getCurrentRunId(nextQueue) ?? knownRunId ?? activeRunId;
+        if (!runId) {
+          setActiveRun(null);
+          return;
+        }
 
         const run = await apiClient.getRun(runId);
         if (activeConversationIdRef.current !== conversationId) return;
@@ -432,6 +459,10 @@ export function AppShell() {
               streamedAssistantRunIdRef.current = null;
             }
             streamedAssistantCacheRef.current.clear(run.id);
+            if (lastConversationListRefreshRunIdRef.current !== run.id) {
+              lastConversationListRefreshRunIdRef.current = run.id;
+              void loadConversations();
+            }
           }
         }
       } catch (error) {
@@ -440,7 +471,7 @@ export function AppShell() {
         }
       }
     },
-    [],
+    [loadConversations],
   );
 
   const handleRunStreamEvent = useCallback(
@@ -504,18 +535,84 @@ export function AppShell() {
     [refreshRuntime],
   );
 
-  const liveRunId = activeRun && isLiveRun(activeRun) ? activeRun.id : null;
+  const liveRunId =
+    activeConversation?.conversation_id === activeConversationId &&
+    activeRun &&
+    isLiveRun(activeRun)
+      ? activeRun.id
+      : null;
   const stream = useStreamEvents({
     localRunId: liveRunId,
     enabled: liveRunId !== null,
     onEvent: handleRunStreamEvent,
   });
 
-  const queuedMessages = useMemo(
-    () => getQueuedFollowUps(queue, activeRun),
-    [activeRun, queue],
+  const hasActiveConversationView =
+    activeConversation?.conversation_id === activeConversationId;
+  const activeConversationSummary = useMemo(
+    () =>
+      conversations.find(
+        (conversation) => conversation.conversation_id === activeConversationId,
+      ) ?? null,
+    [activeConversationId, conversations],
   );
-  const agentGenerating = isAgentGenerating(activeRun, queue);
+  const activeConversationTitle = hasActiveConversationView
+    ? activeConversation.title || "未命名会话"
+    : activeConversationSummary?.title || "未命名会话";
+  const visibleQueue = hasActiveConversationView ? queue : null;
+  const visibleRun = hasActiveConversationView ? activeRun : null;
+  const activeQueueItem = useMemo(
+    () => getPrimaryQueueItem(visibleQueue, visibleRun),
+    [visibleQueue, visibleRun],
+  );
+  const queuedMessages = useMemo(
+    () => getQueuedFollowUps(visibleQueue, visibleRun),
+    [visibleQueue, visibleRun],
+  );
+  const agentGenerating = isAgentGenerating(visibleRun, visibleQueue);
+  const activePendingSubmissions = useMemo(
+    () =>
+      activeConversationId
+        ? pendingSubmissions.filter(
+            (entry) => entry.conversationId === activeConversationId,
+          )
+        : [],
+    [activeConversationId, pendingSubmissions],
+  );
+  const pendingUserMessage = useMemo<PendingUserMessage | null>(() => {
+    if (
+      activeQueueItem?.content &&
+      !hasPersistedQueueMessage(messages, activeQueueItem)
+    ) {
+      return {
+        id: `queue:${activeQueueItem.id}`,
+        content: activeQueueItem.content,
+      };
+    }
+
+    const submission = activePendingSubmissions.find(
+      (entry) => !entry.isFollowUp,
+    );
+    return submission
+      ? {
+          id: `submission:${submission.requestId}`,
+          content: submission.content,
+        }
+      : null;
+  }, [activePendingSubmissions, activeQueueItem, messages]);
+  const pendingQueueItems = useMemo<PendingQueueItem[]>(
+    () =>
+      activePendingSubmissions
+        .filter((entry) => entry.isFollowUp)
+        .map((entry) => ({
+          id: `submission:${entry.requestId}`,
+          content: entry.content,
+        })),
+    [activePendingSubmissions],
+  );
+  const hasPendingPrimarySubmission = activePendingSubmissions.some(
+    (entry) => !entry.isFollowUp,
+  );
 
   useEffect(() => {
     if (queuedMessages.length > previousQueuedMessageCountRef.current) {
@@ -554,17 +651,32 @@ export function AppShell() {
   }, [activeConversationId, loadActiveConversation]);
 
   const shouldPollRuntime = useMemo(() => {
-    if (isLiveRun(activeRun)) return true;
-    return queue?.data.some((item) => isLiveQueueState(item.state)) ?? false;
-  }, [activeRun, queue]);
+    if (isLiveRun(visibleRun)) return true;
+    return (
+      visibleQueue?.data.some((item) => isLiveQueueState(item.state)) ?? false
+    );
+  }, [visibleQueue, visibleRun]);
+  const runtimePollInterval =
+    !isLiveRun(visibleRun) && activeQueueItem?.local_run_id === null
+      ? 300
+      : 2_500;
 
   useEffect(() => {
     if (!activeConversationId || !shouldPollRuntime) return;
     const timer = window.setInterval(() => {
-      void refreshRuntime(activeConversationId, activeRun?.id);
-    }, 2_500);
+      void refreshRuntime(
+        activeConversationId,
+        isLiveRun(visibleRun) ? visibleRun?.id : undefined,
+      );
+    }, runtimePollInterval);
     return () => window.clearInterval(timer);
-  }, [activeConversationId, activeRun?.id, refreshRuntime, shouldPollRuntime]);
+  }, [
+    activeConversationId,
+    refreshRuntime,
+    runtimePollInterval,
+    shouldPollRuntime,
+    visibleRun,
+  ]);
 
   useEffect(() => {
     if (!preferences) return;
@@ -678,7 +790,7 @@ export function AppShell() {
     return { revision: saved.revision };
   };
 
-  const handleSend = async (expectedDraftRevision: number) => {
+  const handleSend = async (content: string, expectedDraftRevision: number) => {
     if (!activeConversationId) throw new Error("请先选择会话");
     const conversationId = activeConversationId;
     const isFollowUp = isAgentGenerating(
@@ -704,12 +816,26 @@ export function AppShell() {
       pendingSendRef.current = pending;
     }
 
+    setPendingSubmissions((current) => [
+      ...current.filter((entry) => entry.requestId !== pending.requestId),
+      {
+        requestId: pending.requestId,
+        conversationId,
+        content,
+        isFollowUp,
+      },
+    ]);
+    if (isFollowUp) setQueueOpen(true);
+
     try {
       const result = await apiClient.sendMessage(conversationId, {
         client_request_id: pending.requestId,
         expected_draft_revision: expectedDraftRevision,
       });
       pendingSendRef.current = null;
+      setPendingSubmissions((current) =>
+        current.filter((entry) => entry.requestId !== pending.requestId),
+      );
       if (activeConversationIdRef.current === conversationId) {
         setDraft(result.draft);
         const nextQueue = upsertQueueItem(
@@ -722,7 +848,18 @@ export function AppShell() {
         if (isFollowUp) setQueueOpen(true);
         void refreshRuntime(conversationId, result.queue_item.local_run_id);
       }
-      void loadConversations();
+      setConversations((current) =>
+        current.map((conversation) =>
+          conversation.conversation_id === conversationId
+            ? {
+                ...conversation,
+                last_active: Date.now(),
+                preview: content.trim(),
+                queue_size: conversation.queue_size + 1,
+              }
+            : conversation,
+        ),
+      );
       return {
         draft: {
           content: result.draft.content,
@@ -732,7 +869,12 @@ export function AppShell() {
     } catch (error) {
       // A response-bearing API error is definite; only a transport failure may
       // safely reuse the UUID when the user retries the same send.
-      if (error instanceof ApiClientError) pendingSendRef.current = null;
+      if (error instanceof ApiClientError) {
+        pendingSendRef.current = null;
+        setPendingSubmissions((current) =>
+          current.filter((entry) => entry.requestId !== pending.requestId),
+        );
+      }
       throw error;
     }
   };
@@ -805,23 +947,24 @@ export function AppShell() {
     setPreferences(next);
   };
 
-  const composerDisabled = activeConversation?.delete_state !== "none";
+  const composerDisabled =
+    !hasActiveConversationView || activeConversation?.delete_state !== "none";
   const sendDisabled = status?.status !== "healthy" || composerDisabled;
   const effectivePreferences = preferences ?? DEFAULT_PREFERENCES;
   const sidebarWidth = sidebarCollapsed
     ? 64
     : effectivePreferences.sidebar_width;
   const showStop =
-    isLiveRun(activeRun) &&
-    activeRun?.upstream_status !== "waiting_for_approval";
+    isLiveRun(visibleRun) &&
+    visibleRun?.upstream_status !== "waiting_for_approval";
   const showReconcile =
-    activeRun?.local_state === "reconciling" ||
-    (activeRun?.local_state === "review_required" &&
-      activeRun.hermes_run_id !== null);
+    visibleRun?.local_state === "reconciling" ||
+    (visibleRun?.local_state === "review_required" &&
+      visibleRun.hermes_run_id !== null);
   const isAssistantReplying =
-    agentGenerating &&
-    activeRun?.upstream_status !== "waiting_for_approval" &&
-    activeRun?.upstream_status !== "stopping";
+    (agentGenerating || hasPendingPrimarySubmission) &&
+    visibleRun?.upstream_status !== "waiting_for_approval" &&
+    visibleRun?.upstream_status !== "stopping";
 
   return (
     <div className="app-shell">
@@ -867,7 +1010,7 @@ export function AppShell() {
           </div>
         )}
 
-        {activeConversation ? (
+        {activeConversationId ? (
           <>
             <header className="main-toolbar">
               <div className="main-toolbar-start">
@@ -888,7 +1031,7 @@ export function AppShell() {
                 </span>
                 <div className="toolbar-title-block">
                   <div className="main-toolbar-title">
-                    {activeConversation.title || "未命名会话"}
+                    {activeConversationTitle}
                   </div>
                 </div>
               </div>
@@ -920,10 +1063,13 @@ export function AppShell() {
             )}
 
             <MessageView
-              messages={messages}
-              loading={messagesLoading}
+              messages={hasActiveConversationView ? messages : []}
+              loading={!hasActiveConversationView || messagesLoading}
+              pendingUserMessage={pendingUserMessage}
               isGenerating={isAssistantReplying}
-              streamingContent={streamedAssistantContent}
+              streamingContent={
+                hasActiveConversationView ? streamedAssistantContent : ""
+              }
               onStopGenerating={
                 showStop ? () => void handleStopRun() : undefined
               }
@@ -934,24 +1080,27 @@ export function AppShell() {
 
             <div className="composer-shell">
               <div className="composer-inner">
-                {queueOpen && queuedMessages.length > 0 && (
-                  <QueuePanel
-                    isOpen={queueOpen}
-                    onClose={() => setQueueOpen(false)}
-                    items={queuedMessages}
-                    onCancelItem={handleCancelQueueItem}
-                    onEditItem={handleEditQueueItem}
-                  />
-                )}
-                {draft ? (
+                {queueOpen &&
+                  (queuedMessages.length > 0 ||
+                    pendingQueueItems.length > 0) && (
+                    <QueuePanel
+                      isOpen={queueOpen}
+                      onClose={() => setQueueOpen(false)}
+                      items={queuedMessages}
+                      pendingItems={pendingQueueItems}
+                      onCancelItem={handleCancelQueueItem}
+                      onEditItem={handleEditQueueItem}
+                    />
+                  )}
+                {hasActiveConversationView && draft ? (
                   <DraftComposer
-                    conversationId={activeConversation.conversation_id}
+                    conversationId={activeConversationId}
                     initialDraft={draft.content}
                     initialRevision={draft.revision}
                     sendShortcut={effectivePreferences.send_shortcut}
                     onSaveDraft={handleSaveDraft}
-                    onSend={async (revision) => {
-                      const result = await handleSend(revision);
+                    onSend={async (content, revision) => {
+                      const result = await handleSend(content, revision);
                       return result;
                     }}
                     disabled={composerDisabled}
@@ -1029,12 +1178,12 @@ export function AppShell() {
 
       <ApprovalDialog
         isOpen={
-          activeRun?.upstream_status === "waiting_for_approval" &&
-          activeRun.approval !== null
+          visibleRun?.upstream_status === "waiting_for_approval" &&
+          visibleRun.approval !== null
         }
-        runId={activeRun?.id ?? ""}
+        runId={visibleRun?.id ?? ""}
         reason="等待 Hermes 工具审批"
-        details={activeRun?.approval ?? undefined}
+        details={visibleRun?.approval ?? undefined}
         onApprove={() => handleApproval("once")}
         onReject={() => handleApproval("deny")}
         onCancel={handleStopRun}
@@ -1103,6 +1252,16 @@ function replaceQueueItem(
     ...current,
     data: data.sort((left, right) => left.fifo_seq - right.fifo_seq),
   };
+}
+
+function hasPersistedQueueMessage(
+  messages: MessageItem[],
+  queueItem: QueueItemResponse,
+): boolean {
+  const latestUserMessage = [...messages]
+    .reverse()
+    .find((message) => message.role === "user");
+  return latestUserMessage?.content === queueItem.content;
 }
 
 function generateBrowserUuid(): string {

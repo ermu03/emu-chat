@@ -23,15 +23,22 @@ import {
 export interface MessageViewProps {
   messages: MessageItem[];
   loading: boolean;
+  pendingUserMessage?: PendingUserMessage | null;
   isGenerating?: boolean;
   streamingContent?: string;
   onStopGenerating?: (() => void) | undefined;
   onReconcile?: (() => void) | undefined;
 }
 
+export interface PendingUserMessage {
+  id: string;
+  content: string;
+}
+
 export const MessageView: React.FC<MessageViewProps> = ({
   messages,
   loading,
+  pendingUserMessage = null,
   isGenerating = false,
   streamingContent = "",
   onStopGenerating,
@@ -45,9 +52,19 @@ export const MessageView: React.FC<MessageViewProps> = ({
     const scroller = scrollRef.current;
     if (!scroller || !stickToBottomRef.current) return;
     scroller.scrollTop = scroller.scrollHeight;
-  }, [isGenerating, renderableMessages.length, streamingContent]);
+  }, [
+    isGenerating,
+    pendingUserMessage?.id,
+    renderableMessages.length,
+    streamingContent,
+  ]);
 
-  if (loading && renderableMessages.length === 0 && !isGenerating) {
+  if (
+    loading &&
+    renderableMessages.length === 0 &&
+    !pendingUserMessage &&
+    !isGenerating
+  ) {
     return (
       <div className="message-scroll">
         <div className="message-empty">正在加载会话历史</div>
@@ -55,7 +72,7 @@ export const MessageView: React.FC<MessageViewProps> = ({
     );
   }
 
-  if (renderableMessages.length === 0 && !isGenerating) {
+  if (renderableMessages.length === 0 && !pendingUserMessage && !isGenerating) {
     return (
       <div className="message-scroll">
         <div className="message-empty">
@@ -85,6 +102,7 @@ export const MessageView: React.FC<MessageViewProps> = ({
         {renderableMessages.map((message) => (
           <MessageRow key={message.id} message={message} />
         ))}
+        {pendingUserMessage && <PendingUserRow message={pendingUserMessage} />}
         {isGenerating && (
           <LiveAssistantRow
             content={streamingContent}
@@ -152,6 +170,25 @@ function MessageRow({ message }: { message: MessageItem }) {
             <MarkdownContent text={message.content} />
           </div>
         )}
+      </div>
+    </article>
+  );
+}
+
+function PendingUserRow({ message }: { message: PendingUserMessage }) {
+  return (
+    <article
+      className="message-row user message-pending"
+      data-message-id={message.id}
+    >
+      <div className="message-avatar" aria-hidden="true">
+        <UserRound size={14} strokeWidth={1.8} />
+      </div>
+      <div className="message-content-wrap">
+        <div className="message-meta">
+          <span className="message-role">你</span>
+        </div>
+        <div className="message-body">{message.content}</div>
       </div>
     </article>
   );

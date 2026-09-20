@@ -72,9 +72,9 @@ export function useStreamEvents({
 
     const generation = connectionGenerationRef.current;
     const params = new URLSearchParams();
-    if (lastEventIdRef.current !== null) {
-      params.set("after", lastEventIdRef.current);
-    }
+    // A run can emit events before its local id reaches the view. Start at
+    // zero so the server replays that initial window on the first connection.
+    params.set("after", lastEventIdRef.current ?? "0");
     const query = params.toString();
     const source = new EventSource(
       `/api/v1/runs/${encodeURIComponent(localRunId)}/events${query ? `?${query}` : ""}`,

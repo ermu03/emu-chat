@@ -20,7 +20,10 @@ export interface DraftComposerProps {
     content: string,
     expectedRevision: number,
   ) => Promise<{ revision: number }>;
-  onSend: (expectedDraftRevision: number) => Promise<DraftSendResult>;
+  onSend: (
+    content: string,
+    expectedDraftRevision: number,
+  ) => Promise<DraftSendResult>;
   disabled?: boolean;
   sendDisabled?: boolean;
 }
@@ -183,7 +186,7 @@ export const DraftComposer: React.FC<DraftComposerProps> = ({
     try {
       await flushDraft();
       if (generation !== generationRef.current) return;
-      const result = await onSend(revisionRef.current);
+      const result = await onSend(current, revisionRef.current);
       if (generation !== generationRef.current) return;
       contentRef.current = result.draft.content;
       savedContentRef.current = result.draft.content;

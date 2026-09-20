@@ -4,6 +4,7 @@ import type {
   QueueListResponse,
 } from "../../src/shared/api-schemas.js";
 import {
+  getPrimaryQueueItem,
   getQueuedFollowUps,
   isAgentGenerating,
 } from "../../src/client/features/queue/queue-state.js";
@@ -48,6 +49,7 @@ describe("queue presentation state", () => {
 
     expect(isAgentGenerating(null, state)).toBe(true);
     expect(getQueuedFollowUps(state, null)).toEqual([]);
+    expect(getPrimaryQueueItem(state, null)?.id).toBe("qi_first");
   });
 
   it("shows only messages sent after the active submission", () => {

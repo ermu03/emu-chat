@@ -14,6 +14,7 @@ interface QueuePanelProps {
   isOpen: boolean;
   onClose: () => void;
   items: QueueItemResponse[];
+  pendingItems?: PendingQueueItem[];
   onCancelItem: (itemId: string, expectedRevision: number) => Promise<void>;
   onEditItem: (
     itemId: string,
@@ -22,10 +23,16 @@ interface QueuePanelProps {
   ) => Promise<void>;
 }
 
+export interface PendingQueueItem {
+  id: string;
+  content: string;
+}
+
 export const QueuePanel: React.FC<QueuePanelProps> = ({
   isOpen,
   onClose,
   items,
+  pendingItems = [],
   onCancelItem,
   onEditItem,
 }) => {
@@ -34,7 +41,7 @@ export const QueuePanel: React.FC<QueuePanelProps> = ({
   const [actionError, setActionError] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState(false);
 
-  if (!isOpen || items.length === 0) return null;
+  if (!isOpen || (items.length === 0 && pendingItems.length === 0)) return null;
 
   const queuedItems = [...items].sort(
     (left, right) => left.fifo_seq - right.fifo_seq,
@@ -55,7 +62,9 @@ export const QueuePanel: React.FC<QueuePanelProps> = ({
         <div className="queue-header-title">
           <Clock3 size={14} strokeWidth={1.8} />
           <span>消息队列</span>
-          <span className="queue-count">{queuedItems.length}</span>
+          <span className="queue-count">
+            {queuedItems.length + pendingItems.length}
+          </span>
         </div>
         <div className="queue-header-actions">
           <button
@@ -181,6 +190,17 @@ export const QueuePanel: React.FC<QueuePanelProps> = ({
                 </div>
               );
             })}
+            {pendingItems.map((item) => (
+              <div className="queue-item queue-item-pending" key={item.id}>
+                <div className="queue-item-main">
+                  <div className="queue-item-status">
+                    <Clock3 size={13} strokeWidth={1.8} />
+                    <span>正在加入队列</span>
+                  </div>
+                  <div className="queue-item-content">{item.content}</div>
+                </div>
+              </div>
+            ))}
           </div>
         </>
       )}
