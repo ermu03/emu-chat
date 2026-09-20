@@ -6,6 +6,10 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import { Bot, ChevronDown, Terminal, UserRound, Wrench } from "lucide-react";
 import type { MessageItem } from "../../../shared/api-schemas.js";
+import {
+  getRenderableMessages,
+  getToolResultContent,
+} from "./message-display.js";
 
 export interface MessageViewProps {
   messages: MessageItem[];
@@ -16,7 +20,9 @@ export const MessageView: React.FC<MessageViewProps> = ({
   messages,
   loading,
 }) => {
-  if (loading && messages.length === 0) {
+  const renderableMessages = getRenderableMessages(messages);
+
+  if (loading && renderableMessages.length === 0) {
     return (
       <div className="message-scroll">
         <div className="message-empty">正在加载会话历史</div>
@@ -24,7 +30,7 @@ export const MessageView: React.FC<MessageViewProps> = ({
     );
   }
 
-  if (messages.length === 0) {
+  if (renderableMessages.length === 0) {
     return (
       <div className="message-scroll">
         <div className="message-empty">
@@ -43,7 +49,7 @@ export const MessageView: React.FC<MessageViewProps> = ({
   return (
     <div className="message-scroll" aria-label="聊天消息">
       <div className="message-list" role="log" aria-live="polite">
-        {messages.map((message) => (
+        {renderableMessages.map((message) => (
           <MessageRow key={message.id} message={message} />
         ))}
       </div>
@@ -74,15 +80,16 @@ function MessageRow({ message }: { message: MessageItem }) {
       <div className="message-content-wrap">
         <div className="message-meta">
           <span className="message-role">{label}</span>
-          <span>{formatTimestamp(message.timestamp)}</span>
-          {message.finish_reason && <span>· {message.finish_reason}</span>}
+          <span className="message-timestamp">
+            {formatTimestamp(message.timestamp)}
+          </span>
         </div>
 
         {message.tool_name && (
           <ToolCallSummary
             name={message.tool_name}
-            callId={message.tool_call_id}
             content={message.content}
+            isResult={isTool}
           />
         )}
 
@@ -90,11 +97,9 @@ function MessageRow({ message }: { message: MessageItem }) {
           <details className="tool-call-card">
             <summary className="tool-call-summary">
               <ChevronDown size={14} strokeWidth={1.8} />
-              <strong>运行思路</strong>
-              <span className="tool-call-status">点击展开</span>
+              <strong>思考过程</strong>
             </summary>
             <div className="tool-call-details">
-              <div className="tool-call-details-label">Reasoning</div>
               <div className="message-body">
                 <MarkdownContent text={message.reasoning} />
               </div>
@@ -114,12 +119,12 @@ function MessageRow({ message }: { message: MessageItem }) {
 
 function ToolCallSummary({
   name,
-  callId,
   content,
+  isResult,
 }: {
   name: string;
-  callId: string | null;
   content: string;
+  isResult: boolean;
 }) {
   return (
     <details className="tool-call-card">
@@ -127,15 +132,12 @@ function ToolCallSummary({
         <Terminal size={14} strokeWidth={1.8} />
         <strong>{name}</strong>
         <span className="tool-call-status">
-          {callId ? "工具调用" : "工具结果"}
+          {isResult ? "已完成" : "已调用"}
         </span>
         <ChevronDown size={14} strokeWidth={1.8} />
       </summary>
       <div className="tool-call-details">
-        {callId && (
-          <div className="tool-call-details-label">Call ID: {callId}</div>
-        )}
-        <pre>{content || "没有返回内容"}</pre>
+        <pre>{getToolResultContent(content)}</pre>
       </div>
     </details>
   );
