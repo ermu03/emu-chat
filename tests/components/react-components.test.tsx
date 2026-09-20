@@ -25,6 +25,7 @@ describe("React Components Static Tests", () => {
   describe("ConversationList deletion", () => {
     it("requires an irreversible confirmation and describes the Hermes deletion scope", () => {
       const onDelete = vi.fn();
+      const onToggleCollapse = vi.fn();
       render(
         <ConversationList
           conversations={[
@@ -56,8 +57,13 @@ describe("React Components Static Tests", () => {
           searchQuery=""
           onSearchChange={vi.fn()}
           loading={false}
+          collapsed={false}
+          onToggleCollapse={onToggleCollapse}
         />,
       );
+
+      fireEvent.click(screen.getByRole("button", { name: "折叠侧栏" }));
+      expect(onToggleCollapse).toHaveBeenCalledTimes(1);
 
       fireEvent.click(screen.getByTitle("删除会话"));
 

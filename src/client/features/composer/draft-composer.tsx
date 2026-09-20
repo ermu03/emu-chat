@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { LoaderCircle, Send, Sparkles } from "lucide-react";
+import { LoaderCircle, Send } from "lucide-react";
 import { LIMITS } from "../../../shared/limits.js";
 
 export interface DraftSnapshot {
@@ -37,7 +37,6 @@ export const DraftComposer: React.FC<DraftComposerProps> = ({
 }) => {
   const [content, setContent] = useState(initialDraft);
   const [, setRevision] = useState(initialRevision);
-  const [isSaving, setIsSaving] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
@@ -113,7 +112,6 @@ export const DraftComposer: React.FC<DraftComposerProps> = ({
   const saveSnapshot = useCallback(
     async (nextContent: string) => {
       const generation = generationRef.current;
-      setIsSaving(true);
       setSaveError(null);
       try {
         const result = await onSaveDraft(nextContent, revisionRef.current);
@@ -126,8 +124,6 @@ export const DraftComposer: React.FC<DraftComposerProps> = ({
           setSaveError(error instanceof Error ? error.message : "保存失败");
         }
         throw error;
-      } finally {
-        if (generation === generationRef.current) setIsSaving(false);
       }
     },
     [onSaveDraft],
@@ -241,8 +237,6 @@ export const DraftComposer: React.FC<DraftComposerProps> = ({
       />
       <div className="composer-footer">
         <div className="composer-meta">
-          <Sparkles size={13} aria-hidden="true" />
-          <span>{isSaving ? "保存中" : "草稿已保存"}</span>
           <span className={isOverLimit ? "error" : ""}>
             {byteCount.toLocaleString()} /{" "}
             {LIMITS.INPUT_MAX_BYTES.toLocaleString()} bytes

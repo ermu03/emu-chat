@@ -3,10 +3,11 @@ import {
   Copy,
   MessageSquarePlus,
   MoreHorizontal,
+  PanelLeftClose,
+  PanelLeftOpen,
   Pin,
   PinOff,
   Search,
-  Settings2,
   Trash2,
 } from "lucide-react";
 import type { ConversationSummary } from "../../../shared/api-schemas.js";
@@ -23,10 +24,11 @@ export interface ConversationListProps {
   onSearchChange: (query: string) => void;
   loading: boolean;
   style?: React.CSSProperties;
+  collapsed: boolean;
+  onToggleCollapse: () => void;
   mobileOpen?: boolean;
   onMobileClose?: () => void;
   status?: string | undefined;
-  onOpenPreferences?: () => void;
 }
 
 export const ConversationList: React.FC<ConversationListProps> = ({
@@ -41,10 +43,11 @@ export const ConversationList: React.FC<ConversationListProps> = ({
   onSearchChange,
   loading,
   style,
+  collapsed,
+  onToggleCollapse,
   mobileOpen = false,
   onMobileClose,
   status,
-  onOpenPreferences,
 }) => {
   const [deleteTarget, setDeleteTarget] = useState<ConversationSummary | null>(
     null,
@@ -77,7 +80,7 @@ export const ConversationList: React.FC<ConversationListProps> = ({
 
   return (
     <aside
-      className={`conversation-sidebar ${mobileOpen ? "is-mobile-open" : ""}`}
+      className={`conversation-sidebar ${collapsed ? "is-collapsed" : ""} ${mobileOpen ? "is-mobile-open" : ""}`}
       style={style}
       aria-label="会话列表"
     >
@@ -89,12 +92,16 @@ export const ConversationList: React.FC<ConversationListProps> = ({
           <span className="brand-name">emu-chat</span>
           <button
             type="button"
-            className="icon-button"
-            onClick={onOpenPreferences}
-            aria-label="打开设置"
-            title="设置"
+            className="icon-button sidebar-collapse-button"
+            onClick={onToggleCollapse}
+            aria-label={collapsed ? "展开侧栏" : "折叠侧栏"}
+            title={collapsed ? "展开侧栏" : "折叠侧栏"}
           >
-            <Settings2 size={16} strokeWidth={1.8} />
+            {collapsed ? (
+              <PanelLeftOpen size={16} strokeWidth={1.8} />
+            ) : (
+              <PanelLeftClose size={16} strokeWidth={1.8} />
+            )}
           </button>
         </div>
 
@@ -106,7 +113,7 @@ export const ConversationList: React.FC<ConversationListProps> = ({
             disabled={loading}
           >
             <MessageSquarePlus size={16} strokeWidth={1.9} />
-            新建会话
+            <span>新建会话</span>
           </button>
         </div>
 

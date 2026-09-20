@@ -25,7 +25,6 @@ export const StatusBar: React.FC<StatusBarProps> = ({
     >
       <ShieldAlert size={14} strokeWidth={1.8} />
       <span>{getStatusLabel(status?.status, status?.suggested_action)}</span>
-      {status?.hermes_version && <span>v{status.hermes_version}</span>}
       {status?.missing_capabilities.length ? (
         <span>缺少 {status.missing_capabilities.length} 项能力</span>
       ) : null}

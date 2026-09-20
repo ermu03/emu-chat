@@ -242,6 +242,40 @@ select:focus-visible {
   font-weight: 650;
   letter-spacing: -0.01em;
 }
+.conversation-sidebar.is-collapsed {
+  min-width: 64px;
+}
+.conversation-sidebar.is-collapsed .sidebar-header {
+  gap: 14px;
+  padding-right: 10px;
+  padding-left: 10px;
+}
+.conversation-sidebar.is-collapsed .brand-row {
+  justify-content: center;
+}
+.conversation-sidebar.is-collapsed .brand-name,
+.conversation-sidebar.is-collapsed .search-field,
+.conversation-sidebar.is-collapsed .conversation-list-scroll,
+.conversation-sidebar.is-collapsed .sidebar-footer span:not(.status-dot) {
+  display: none;
+}
+.conversation-sidebar.is-collapsed .sidebar-actions {
+  display: block;
+}
+.conversation-sidebar.is-collapsed .new-conversation-button {
+  width: 36px;
+  height: 36px;
+  margin: 0 auto;
+  padding: 0;
+}
+.conversation-sidebar.is-collapsed .new-conversation-button span {
+  display: none;
+}
+.conversation-sidebar.is-collapsed .sidebar-footer {
+  justify-content: center;
+  padding-right: 0;
+  padding-left: 0;
+}
 .sidebar-actions {
   gap: 8px;
 }
@@ -829,8 +863,8 @@ select:focus-visible {
     box-shadow 140ms ease;
 }
 .composer-container:focus-within {
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--line-strong));
-  box-shadow: 0 12px 36px rgb(48 111 104 / 11%);
+  border-color: var(--line-strong);
+  box-shadow: var(--shadow-soft);
 }
 .composer-container.over-limit {
   border-color: var(--danger);
@@ -856,6 +890,9 @@ select:focus-visible {
 }
 .composer-textarea::placeholder {
   color: var(--ink-faint);
+}
+.composer-textarea:focus-visible {
+  outline: none;
 }
 .composer-footer {
   justify-content: space-between;
@@ -1383,9 +1420,6 @@ select:focus-visible {
   }
   .composer-footer {
     padding-left: 11px;
-  }
-  .composer-meta span:first-child {
-    display: none;
   }
   .run-strip,
   .status-strip {

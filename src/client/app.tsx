@@ -73,6 +73,7 @@ export function AppShell() {
   );
   const [searchQuery, setSearchQuery] = useState("");
   const [queueOpen, setQueueOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [streamNotice, setStreamNotice] = useState<string | null>(null);
@@ -566,6 +567,9 @@ export function AppShell() {
   const composerDisabled = activeConversation?.delete_state !== "none";
   const sendDisabled = status?.status !== "healthy" || composerDisabled;
   const effectivePreferences = preferences ?? DEFAULT_PREFERENCES;
+  const sidebarWidth = sidebarCollapsed
+    ? 64
+    : effectivePreferences.sidebar_width;
   const showStop =
     isLiveRun(activeRun) &&
     activeRun?.upstream_status !== "waiting_for_approval";
@@ -600,13 +604,14 @@ export function AppShell() {
         onSearchChange={setSearchQuery}
         loading={conversationsLoading}
         style={{
-          width: effectivePreferences.sidebar_width,
-          flex: `0 0 ${effectivePreferences.sidebar_width}px`,
+          width: sidebarWidth,
+          flex: `0 0 ${sidebarWidth}px`,
         }}
+        collapsed={sidebarCollapsed}
+        onToggleCollapse={() => setSidebarCollapsed((collapsed) => !collapsed)}
         mobileOpen={sidebarOpen}
         onMobileClose={() => setSidebarOpen(false)}
         status={status?.status}
-        onOpenPreferences={() => setPreferencesOpen(true)}
       />
 
       <main className="app-main">
@@ -628,7 +633,10 @@ export function AppShell() {
                   className="icon-button mobile-only"
                   aria-label="打开会话列表"
                   title="会话列表"
-                  onClick={() => setSidebarOpen(true)}
+                  onClick={() => {
+                    setSidebarCollapsed(false);
+                    setSidebarOpen(true);
+                  }}
                 >
                   <Menu size={17} />
                 </button>
@@ -638,16 +646,6 @@ export function AppShell() {
                 <div className="toolbar-title-block">
                   <div className="main-toolbar-title">
                     {activeConversation.title || "未命名会话"}
-                  </div>
-                  <div className="main-toolbar-subtitle">
-                    <span
-                      className={`status-dot ${status?.status === "healthy" ? "healthy" : status?.status === "degraded" ? "degraded" : status ? "error" : ""}`}
-                    />
-                    <span>
-                      {status?.hermes_version
-                        ? `Hermes ${status.hermes_version}`
-                        : "Hermes"}
-                    </span>
                   </div>
                 </div>
               </div>
@@ -778,7 +776,10 @@ export function AppShell() {
                   className="icon-button mobile-only"
                   aria-label="打开会话列表"
                   title="会话列表"
-                  onClick={() => setSidebarOpen(true)}
+                  onClick={() => {
+                    setSidebarCollapsed(false);
+                    setSidebarOpen(true);
+                  }}
                 >
                   <Menu size={17} />
                 </button>
