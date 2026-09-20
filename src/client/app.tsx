@@ -14,6 +14,7 @@ import type {
 } from "../shared/api-schemas.js";
 import { StatusBar } from "./features/status/status-bar.js";
 import { ConversationList } from "./features/conversations/conversation-list.js";
+import { ConversationViewCache } from "./features/conversations/conversation-view-cache.js";
 import { MessageView } from "./features/messages/message-view.js";
 import { StreamedAssistantCache } from "./features/messages/streamed-assistant-cache.js";
 import { DraftComposer } from "./features/composer/draft-composer.js";
@@ -49,7 +50,10 @@ type PendingSend = {
   expectedRevision: number;
 };
 
-type ConversationRuntimeSnapshot = {
+type ConversationViewSnapshot = {
+  conversation: ConversationDetailResponse;
+  messages: MessageItem[];
+  draft: DraftResponse;
   queue: QueueListResponse;
   activeRun: RunResponse | null;
   queueOpen: boolean;
@@ -94,8 +98,8 @@ export function AppShell() {
   const previousQueuedMessageCountRef = useRef(0);
   const streamedAssistantRunIdRef = useRef<string | null>(null);
   const streamedAssistantCacheRef = useRef(new StreamedAssistantCache());
-  const runtimeSnapshotsRef = useRef(
-    new Map<string, ConversationRuntimeSnapshot>(),
+  const conversationViewCacheRef = useRef(
+    new ConversationViewCache<ConversationViewSnapshot>(),
   );
   const [streamedAssistantContent, setStreamedAssistantContent] = useState("");
 
@@ -131,12 +135,19 @@ export function AppShell() {
   useEffect(() => {
     if (
       !activeConversationId ||
+      !activeConversation ||
+      activeConversation.conversation_id !== activeConversationId ||
+      !draft ||
+      draft.conversation_id !== activeConversationId ||
       !queue ||
       queue.conversation_id !== activeConversationId
     ) {
       return;
     }
-    runtimeSnapshotsRef.current.set(activeConversationId, {
+    conversationViewCacheRef.current.set(activeConversationId, {
+      conversation: activeConversation,
+      messages,
+      draft,
       queue,
       activeRun:
         activeRun?.conversation_id === activeConversationId ? activeRun : null,
@@ -146,7 +157,10 @@ export function AppShell() {
     });
   }, [
     activeConversationId,
+    activeConversation,
     activeRun,
+    draft,
+    messages,
     queue,
     queueOpen,
     streamedAssistantContent,
@@ -195,24 +209,108 @@ export function AppShell() {
 
   const loadActiveConversation = useCallback(async (conversationId: string) => {
     const loadId = ++activeLoadRef.current;
-    const snapshot = runtimeSnapshotsRef.current.get(conversationId);
-    setMessagesLoading(true);
+    const snapshot = conversationViewCacheRef.current.get(conversationId);
+    const useCachedView = snapshot !== undefined;
+    setMessagesLoading(!useCachedView);
     setWorkspaceError(null);
 
     if (snapshot) {
+      setActiveConversation(snapshot.conversation);
+      setMessages(snapshot.messages);
+      setDraft(snapshot.draft);
       setQueue(snapshot.queue);
       queueRef.current = snapshot.queue;
       setActiveRun(snapshot.activeRun);
       setQueueOpen(snapshot.queueOpen);
+      previousQueuedMessageCountRef.current = getQueuedFollowUps(
+        snapshot.queue,
+        snapshot.activeRun,
+      ).length;
       streamedAssistantRunIdRef.current = snapshot.streamedRunId;
       setStreamedAssistantContent(snapshot.streamedContent);
     } else {
+      setActiveConversation(null);
+      setMessages([]);
+      setDraft(null);
       setQueue(null);
       queueRef.current = null;
       setActiveRun(null);
       setQueueOpen(false);
       streamedAssistantRunIdRef.current = null;
       setStreamedAssistantContent("");
+    }
+
+    const reportLoadError = (error: unknown, fallback: string) => {
+      if (!useCachedView) {
+        setWorkspaceError(getErrorMessage(error, fallback));
+      }
+    };
+
+    const loadConversationContent = async () => {
+      const [conversationResult, messagesResult, draftResult] =
+        await Promise.allSettled([
+          apiClient.getConversation(conversationId),
+          apiClient.listMessages(conversationId, {
+            limit: 100,
+            order: "oldest",
+          }),
+          apiClient.getDraft(conversationId),
+        ]);
+
+      if (loadId !== activeLoadRef.current) return;
+
+      if (conversationResult.status === "fulfilled") {
+        setActiveConversation(conversationResult.value);
+      } else {
+        reportLoadError(conversationResult.reason, "无法加载会话详情");
+      }
+
+      if (messagesResult.status === "fulfilled") {
+        setMessages(messagesResult.value.items);
+      } else if (!useCachedView) {
+        setMessages([]);
+        reportLoadError(messagesResult.reason, "无法从 Hermes 加载消息");
+      }
+
+      if (draftResult.status === "fulfilled") {
+        setDraft(draftResult.value);
+      } else if (!useCachedView) {
+        setDraft(null);
+        reportLoadError(draftResult.reason, "无法加载草稿");
+      }
+    };
+
+    if (snapshot && isAgentGenerating(snapshot.activeRun, snapshot.queue)) {
+      try {
+        const nextQueue = await apiClient.getQueue(conversationId);
+        if (loadId !== activeLoadRef.current) return;
+
+        setQueue(nextQueue);
+        queueRef.current = nextQueue;
+        const runId = getCurrentRunId(nextQueue);
+        if (runId) {
+          const run = await apiClient.getRun(runId);
+          if (loadId !== activeLoadRef.current) return;
+          setActiveRun(run);
+          streamedAssistantRunIdRef.current = run.id;
+          setStreamedAssistantContent(
+            streamedAssistantCacheRef.current.get(run.id),
+          );
+        } else {
+          setActiveRun(null);
+          if (snapshot.streamedRunId) {
+            streamedAssistantCacheRef.current.clear(snapshot.streamedRunId);
+          }
+          streamedAssistantRunIdRef.current = null;
+          setStreamedAssistantContent("");
+          await loadConversationContent();
+        }
+      } catch (error) {
+        reportLoadError(error, "无法刷新运行状态");
+      } finally {
+        if (loadId === activeLoadRef.current) setMessagesLoading(false);
+      }
+      return;
     }
 
     const [conversationResult, messagesResult, draftResult, queueResult] =
@@ -227,29 +325,23 @@ export function AppShell() {
 
     if (conversationResult.status === "fulfilled") {
       setActiveConversation(conversationResult.value);
-    } else {
-      setActiveConversation((current) =>
-        current?.conversation_id === conversationId ? current : null,
-      );
-      setWorkspaceError(
-        getErrorMessage(conversationResult.reason, "无法加载会话详情"),
-      );
+    } else if (!useCachedView) {
+      setActiveConversation(null);
+      reportLoadError(conversationResult.reason, "无法加载会话详情");
     }
 
     if (messagesResult.status === "fulfilled") {
       setMessages(messagesResult.value.items);
-    } else {
+    } else if (!useCachedView) {
       setMessages([]);
-      setWorkspaceError(
-        getErrorMessage(messagesResult.reason, "无法从 Hermes 加载消息"),
-      );
+      reportLoadError(messagesResult.reason, "无法从 Hermes 加载消息");
     }
 
     if (draftResult.status === "fulfilled") {
       setDraft(draftResult.value);
-    } else {
+    } else if (!useCachedView) {
       setDraft(null);
-      setWorkspaceError(getErrorMessage(draftResult.reason, "无法加载草稿"));
+      reportLoadError(draftResult.reason, "无法加载草稿");
     }
 
     if (queueResult.status === "fulfilled") {
@@ -268,7 +360,7 @@ export function AppShell() {
           }
         } catch (error) {
           if (loadId === activeLoadRef.current) {
-            setWorkspaceError(getErrorMessage(error, "无法加载运行状态"));
+            reportLoadError(error, "无法加载运行状态");
           }
         }
       } else {
@@ -279,18 +371,35 @@ export function AppShell() {
         streamedAssistantRunIdRef.current = null;
         setStreamedAssistantContent("");
       }
-    } else {
+    } else if (!useCachedView) {
       setQueue(null);
       queueRef.current = null;
       setActiveRun(null);
       setQueueOpen(false);
-      setWorkspaceError(
-        getErrorMessage(queueResult.reason, "无法加载消息队列"),
-      );
+      reportLoadError(queueResult.reason, "无法加载消息队列");
     }
 
     if (loadId === activeLoadRef.current) setMessagesLoading(false);
   }, []);
+
+  const restoreConversationView = useCallback(
+    (snapshot: ConversationViewSnapshot) => {
+      setActiveConversation(snapshot.conversation);
+      setMessages(snapshot.messages);
+      setDraft(snapshot.draft);
+      setQueue(snapshot.queue);
+      queueRef.current = snapshot.queue;
+      setActiveRun(snapshot.activeRun);
+      setQueueOpen(snapshot.queueOpen);
+      previousQueuedMessageCountRef.current = getQueuedFollowUps(
+        snapshot.queue,
+        snapshot.activeRun,
+      ).length;
+      streamedAssistantRunIdRef.current = snapshot.streamedRunId;
+      setStreamedAssistantContent(snapshot.streamedContent);
+    },
+    [],
+  );
 
   const refreshRuntime = useCallback(
     async (conversationId: string, knownRunId?: string | null) => {
@@ -475,6 +584,10 @@ export function AppShell() {
   }, [preferences]);
 
   const selectConversation = (conversationId: string) => {
+    const snapshot = conversationViewCacheRef.current.get(conversationId);
+    if (snapshot) {
+      restoreConversationView(snapshot);
+    }
     setActiveConversationId(conversationId);
     navigate(`/conversations/${encodeURIComponent(conversationId)}`);
   };
@@ -513,6 +626,7 @@ export function AppShell() {
         expected_hermes_session_id: hermesSessionId,
         confirmed,
       });
+      conversationViewCacheRef.current.delete(conversationId);
       if (activeConversationId === conversationId) {
         setActiveConversationId(null);
         navigate("/");
