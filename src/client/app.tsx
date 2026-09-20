@@ -15,6 +15,7 @@ import type {
 import { StatusBar } from "./features/status/status-bar.js";
 import { ConversationList } from "./features/conversations/conversation-list.js";
 import { MessageView } from "./features/messages/message-view.js";
+import { StreamedAssistantCache } from "./features/messages/streamed-assistant-cache.js";
 import { DraftComposer } from "./features/composer/draft-composer.js";
 import { QueuePanel } from "./features/queue/queue-panel.js";
 import {
@@ -46,6 +47,14 @@ type PendingSend = {
   conversationId: string;
   requestId: string;
   expectedRevision: number;
+};
+
+type ConversationRuntimeSnapshot = {
+  queue: QueueListResponse;
+  activeRun: RunResponse | null;
+  queueOpen: boolean;
+  streamedContent: string;
+  streamedRunId: string | null;
 };
 
 export function AppShell() {
@@ -84,6 +93,10 @@ export function AppShell() {
   const pendingSendRef = useRef<PendingSend | null>(null);
   const previousQueuedMessageCountRef = useRef(0);
   const streamedAssistantRunIdRef = useRef<string | null>(null);
+  const streamedAssistantCacheRef = useRef(new StreamedAssistantCache());
+  const runtimeSnapshotsRef = useRef(
+    new Map<string, ConversationRuntimeSnapshot>(),
+  );
   const [streamedAssistantContent, setStreamedAssistantContent] = useState("");
 
   useEffect(() => {
@@ -108,10 +121,36 @@ export function AppShell() {
   }, [activeConversationId]);
 
   useEffect(() => {
-    if (activeRun?.id && streamedAssistantRunIdRef.current !== activeRun.id) {
-      setStreamedAssistantContent("");
-    }
+    if (!activeRun?.id) return;
+    streamedAssistantRunIdRef.current = activeRun.id;
+    setStreamedAssistantContent(
+      streamedAssistantCacheRef.current.get(activeRun.id),
+    );
   }, [activeRun?.id]);
+
+  useEffect(() => {
+    if (
+      !activeConversationId ||
+      !queue ||
+      queue.conversation_id !== activeConversationId
+    ) {
+      return;
+    }
+    runtimeSnapshotsRef.current.set(activeConversationId, {
+      queue,
+      activeRun:
+        activeRun?.conversation_id === activeConversationId ? activeRun : null,
+      queueOpen,
+      streamedContent: streamedAssistantContent,
+      streamedRunId: streamedAssistantRunIdRef.current,
+    });
+  }, [
+    activeConversationId,
+    activeRun,
+    queue,
+    queueOpen,
+    streamedAssistantContent,
+  ]);
 
   const loadStatus = useCallback(async (recheck = false) => {
     setStatusLoading(true);
@@ -156,8 +195,25 @@ export function AppShell() {
 
   const loadActiveConversation = useCallback(async (conversationId: string) => {
     const loadId = ++activeLoadRef.current;
+    const snapshot = runtimeSnapshotsRef.current.get(conversationId);
     setMessagesLoading(true);
     setWorkspaceError(null);
+
+    if (snapshot) {
+      setQueue(snapshot.queue);
+      queueRef.current = snapshot.queue;
+      setActiveRun(snapshot.activeRun);
+      setQueueOpen(snapshot.queueOpen);
+      streamedAssistantRunIdRef.current = snapshot.streamedRunId;
+      setStreamedAssistantContent(snapshot.streamedContent);
+    } else {
+      setQueue(null);
+      queueRef.current = null;
+      setActiveRun(null);
+      setQueueOpen(false);
+      streamedAssistantRunIdRef.current = null;
+      setStreamedAssistantContent("");
+    }
 
     const [conversationResult, messagesResult, draftResult, queueResult] =
       await Promise.allSettled([
@@ -203,7 +259,13 @@ export function AppShell() {
       if (runId) {
         try {
           const run = await apiClient.getRun(runId);
-          if (loadId === activeLoadRef.current) setActiveRun(run);
+          if (loadId === activeLoadRef.current) {
+            setActiveRun(run);
+            streamedAssistantRunIdRef.current = run.id;
+            setStreamedAssistantContent(
+              streamedAssistantCacheRef.current.get(run.id),
+            );
+          }
         } catch (error) {
           if (loadId === activeLoadRef.current) {
             setWorkspaceError(getErrorMessage(error, "无法加载运行状态"));
@@ -211,6 +273,11 @@ export function AppShell() {
         }
       } else {
         setActiveRun(null);
+        if (snapshot?.streamedRunId) {
+          streamedAssistantCacheRef.current.clear(snapshot.streamedRunId);
+        }
+        streamedAssistantRunIdRef.current = null;
+        setStreamedAssistantContent("");
       }
     } else {
       setQueue(null);
@@ -255,6 +322,7 @@ export function AppShell() {
               setStreamedAssistantContent("");
               streamedAssistantRunIdRef.current = null;
             }
+            streamedAssistantCacheRef.current.clear(run.id);
           }
         }
       } catch (error) {
@@ -273,7 +341,15 @@ export function AppShell() {
           ? event.data.local_run_id
           : null;
       const conversationId = activeConversationIdRef.current;
-      if (!conversationId || !eventRunId) return;
+      const run = activeRunRef.current;
+      if (
+        !conversationId ||
+        !eventRunId ||
+        run?.id !== eventRunId ||
+        run.conversation_id !== conversationId
+      ) {
+        return;
+      }
 
       if (event.event === "stream.gap") {
         setStreamNotice("最终状态可恢复，部分实时过程事件不可恢复。");
@@ -286,15 +362,22 @@ export function AppShell() {
       const type = event.data.type;
       if (type === "message.delta") {
         const payload = event.data.payload;
+        const sequence =
+          typeof event.data.local_seq === "number"
+            ? event.data.local_seq
+            : null;
         const delta =
-          payload &&
-          typeof payload === "object" &&
-          typeof (payload as Record<string, unknown>).delta === "string"
-            ? (payload as Record<string, unknown>).delta
+          isRecord(payload) && typeof payload.delta === "string"
+            ? payload.delta
             : "";
         if (delta) {
           streamedAssistantRunIdRef.current = eventRunId;
-          setStreamedAssistantContent((content) => content + delta);
+          const content = streamedAssistantCacheRef.current.append(
+            eventRunId,
+            sequence,
+            delta,
+          );
+          if (content !== null) setStreamedAssistantContent(content);
         }
         return;
       }
@@ -861,6 +944,10 @@ function getConversationIdFromPath(pathname: string): string | null {
   } catch {
     return null;
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function upsertQueueItem(
