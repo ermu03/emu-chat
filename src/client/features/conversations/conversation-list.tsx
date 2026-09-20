@@ -378,9 +378,6 @@ function ConversationRow({
           <span>{conversation.message_count} 条消息</span>
         )}
       </div>
-      {conversation.preview && (
-        <div className="conversation-preview">{conversation.preview}</div>
-      )}
     </div>
   );
 }

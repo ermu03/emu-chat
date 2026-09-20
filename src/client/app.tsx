@@ -854,7 +854,6 @@ export function AppShell() {
             ? {
                 ...conversation,
                 last_active: Date.now(),
-                preview: content.trim(),
                 queue_size: conversation.queue_size + 1,
               }
             : conversation,
