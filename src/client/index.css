@@ -207,7 +207,6 @@ select:focus-visible {
 .queue-header,
 .queue-header-actions,
 .queue-item,
-.queue-item-main,
 .queue-item-meta,
 .queue-item-actions,
 .assistant-live-actions,
@@ -327,7 +326,7 @@ select:focus-visible {
   position: relative;
   display: block;
   width: 100%;
-  padding: 10px 10px 9px;
+  padding: 11px 10px 10px;
   border-radius: 10px;
   color: var(--ink);
   text-align: left;
@@ -351,8 +350,8 @@ select:focus-visible {
   overflow: hidden;
   flex: 1;
   color: var(--ink);
-  font-size: 12px;
-  font-weight: 620;
+  font-size: 14px;
+  font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -381,25 +380,25 @@ select:focus-visible {
 .conversation-actions-menu {
   position: absolute;
   z-index: 10;
-  top: 27px;
+  top: 29px;
   right: 0;
   display: flex;
-  gap: 2px;
-  padding: 4px;
+  gap: 3px;
+  padding: 5px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface-raised);
   box-shadow: var(--shadow-float);
 }
 .conversation-actions-menu button {
-  width: 26px;
-  height: 26px;
+  width: 32px;
+  height: 32px;
 }
 .conversation-row-meta {
   gap: 8px;
-  margin-top: 5px;
+  margin-top: 6px;
   color: var(--ink-faint);
-  font-size: 10px;
+  font-size: 12px;
 }
 .conversation-row-meta span:first-child {
   overflow: hidden;
@@ -409,10 +408,10 @@ select:focus-visible {
 }
 .conversation-preview {
   overflow: hidden;
-  margin-top: 5px;
+  margin-top: 6px;
   color: var(--ink-soft);
-  font-size: 11px;
-  line-height: 1.35;
+  font-size: 12px;
+  line-height: 1.45;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -991,15 +990,24 @@ select:focus-visible {
   border-bottom: 0;
 }
 .queue-item-main {
+  display: block;
   min-width: 0;
   flex: 1;
   align-self: stretch;
 }
 .queue-item-status {
+  display: inline-flex;
+  width: max-content;
+  min-height: 22px;
   gap: 6px;
-  margin-bottom: 6px;
-  color: var(--ink-faint);
+  margin-bottom: 8px;
+  padding: 0 7px;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--line));
+  border-radius: 6px;
+  color: var(--accent-strong);
+  background: color-mix(in srgb, var(--accent-wash) 72%, transparent);
   font-size: 10px;
+  font-weight: 650;
   line-height: 1.2;
 }
 .queue-item-status svg {
@@ -1010,8 +1018,9 @@ select:focus-visible {
   min-width: 0;
   flex: 1;
   color: var(--ink);
-  font-size: 12px;
-  line-height: 1.5;
+  padding: 0 2px;
+  font-size: 13px;
+  line-height: 1.55;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   display: -webkit-box;

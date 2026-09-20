@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   Copy,
   MessageSquarePlus,
@@ -272,6 +272,27 @@ function ConversationRow({
   onTogglePin: (conversation: ConversationSummary) => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const actionsRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+
+    const closeOnOutsideInteraction = (event: PointerEvent) => {
+      if (!actionsRef.current?.contains(event.target as Node)) {
+        setMenuOpen(false);
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMenuOpen(false);
+    };
+
+    document.addEventListener("pointerdown", closeOnOutsideInteraction);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsideInteraction);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [menuOpen]);
 
   return (
     <div
@@ -290,7 +311,7 @@ function ConversationRow({
         <span className="conversation-title">
           {conversation.title || "未命名会话"}
         </span>
-        <div className="conversation-row-actions">
+        <div ref={actionsRef} className="conversation-row-actions">
           <button
             type="button"
             aria-label="更多会话操作"
@@ -301,7 +322,7 @@ function ConversationRow({
               setMenuOpen((open) => !open);
             }}
           >
-            <MoreHorizontal size={13} />
+            <MoreHorizontal size={15} />
           </button>
           {menuOpen && (
             <div
@@ -320,7 +341,7 @@ function ConversationRow({
                   setMenuOpen(false);
                 }}
               >
-                {conversation.pinned ? <PinOff size={13} /> : <Pin size={13} />}
+                {conversation.pinned ? <PinOff size={16} /> : <Pin size={16} />}
               </button>
               <button
                 type="button"
@@ -332,7 +353,7 @@ function ConversationRow({
                   setMenuOpen(false);
                 }}
               >
-                <Copy size={13} />
+                <Copy size={16} />
               </button>
               <button
                 type="button"
@@ -345,7 +366,7 @@ function ConversationRow({
                   setMenuOpen(false);
                 }}
               >
-                <Trash2 size={13} />
+                <Trash2 size={16} />
               </button>
             </div>
           )}
@@ -355,9 +376,6 @@ function ConversationRow({
         <span>{formatRelativeDate(conversation.last_active)}</span>
         {conversation.message_count > 0 && (
           <span>{conversation.message_count} 条消息</span>
-        )}
-        {conversation.queue_size > 0 && (
-          <span>{conversation.queue_size} 排队</span>
         )}
       </div>
       {conversation.preview && (

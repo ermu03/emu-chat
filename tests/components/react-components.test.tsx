@@ -65,6 +65,11 @@ describe("React Components Static Tests", () => {
       expect(onToggleCollapse).toHaveBeenCalledTimes(1);
 
       fireEvent.click(screen.getByTitle("更多操作"));
+      expect(screen.getByRole("menu", { name: "会话操作" })).toBeDefined();
+      fireEvent.pointerDown(document.body);
+      expect(screen.queryByRole("menu", { name: "会话操作" })).toBeNull();
+
+      fireEvent.click(screen.getByTitle("更多操作"));
       fireEvent.click(screen.getByTitle("删除会话"));
 
       expect(
