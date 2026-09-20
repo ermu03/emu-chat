@@ -18,13 +18,19 @@ import { CurrentSegmentBanner } from "./features/messages/current-segment-banner
 import { MessageView } from "./features/messages/message-view.js";
 import { DraftComposer } from "./features/composer/draft-composer.js";
 import { QueuePanel } from "./features/queue/queue-panel.js";
+import {
+  getCurrentRunId,
+  getQueuedFollowUps,
+  isAgentGenerating,
+  isLiveQueueState,
+  isLiveRun,
+} from "./features/queue/queue-state.js";
 import { ApprovalDialog } from "./features/approval/approval-dialog.js";
 import {
   PreferencesDrawer,
   type PreferencesState,
 } from "./features/preferences/preferences-drawer.js";
 import {
-  ListTodo,
   MessageSquarePlus,
   Menu,
   RefreshCw,
@@ -81,7 +87,9 @@ export function AppShell() {
   const activeLoadRef = useRef(0);
   const activeConversationIdRef = useRef<string | null>(null);
   const activeRunRef = useRef<RunResponse | null>(null);
+  const queueRef = useRef<QueueListResponse | null>(null);
   const pendingSendRef = useRef<PendingSend | null>(null);
+  const previousQueuedMessageCountRef = useRef(0);
 
   useEffect(() => {
     activeConversationIdRef.current = activeConversationId;
@@ -90,6 +98,10 @@ export function AppShell() {
   useEffect(() => {
     activeRunRef.current = activeRun;
   }, [activeRun]);
+
+  useEffect(() => {
+    queueRef.current = queue;
+  }, [queue]);
 
   useEffect(() => {
     setStreamNotice(null);
@@ -180,7 +192,7 @@ export function AppShell() {
 
     if (queueResult.status === "fulfilled") {
       setQueue(queueResult.value);
-      setQueueOpen((open) => open || hasActiveQueueItems(queueResult.value));
+      queueRef.current = queueResult.value;
       const runId = getCurrentRunId(queueResult.value);
       if (runId) {
         try {
@@ -196,6 +208,7 @@ export function AppShell() {
       }
     } else {
       setQueue(null);
+      queueRef.current = null;
       setActiveRun(null);
       setQueueOpen(false);
       setWorkspaceError(
@@ -212,6 +225,7 @@ export function AppShell() {
         const nextQueue = await apiClient.getQueue(conversationId);
         if (activeConversationIdRef.current !== conversationId) return;
         setQueue(nextQueue);
+        queueRef.current = nextQueue;
 
         const runId =
           knownRunId ??
@@ -280,6 +294,19 @@ export function AppShell() {
     onEvent: handleRunStreamEvent,
   });
 
+  const queuedMessages = useMemo(
+    () => getQueuedFollowUps(queue, activeRun),
+    [activeRun, queue],
+  );
+  const agentGenerating = isAgentGenerating(activeRun, queue);
+
+  useEffect(() => {
+    if (queuedMessages.length > previousQueuedMessageCountRef.current) {
+      setQueueOpen(true);
+    }
+    previousQueuedMessageCountRef.current = queuedMessages.length;
+  }, [queuedMessages.length]);
+
   useEffect(() => {
     void loadStatus();
     void loadConversations();
@@ -303,8 +330,10 @@ export function AppShell() {
     setMessages([]);
     setDraft(null);
     setQueue(null);
+    queueRef.current = null;
     setActiveRun(null);
     setQueueOpen(false);
+    previousQueuedMessageCountRef.current = 0;
   }, [activeConversationId, loadActiveConversation]);
 
   const shouldPollRuntime = useMemo(() => {
@@ -429,15 +458,20 @@ export function AppShell() {
 
   const handleSend = async (expectedDraftRevision: number) => {
     if (!activeConversationId) throw new Error("请先选择会话");
+    const conversationId = activeConversationId;
+    const isFollowUp = isAgentGenerating(
+      activeRunRef.current,
+      queueRef.current,
+    );
 
     let pending = pendingSendRef.current;
     if (
       !pending ||
-      pending.conversationId !== activeConversationId ||
+      pending.conversationId !== conversationId ||
       pending.expectedRevision !== expectedDraftRevision
     ) {
       pending = {
-        conversationId: activeConversationId,
+        conversationId,
         requestId: generateBrowserUuid(),
         expectedRevision: expectedDraftRevision,
       };
@@ -445,17 +479,23 @@ export function AppShell() {
     }
 
     try {
-      const result = await apiClient.sendMessage(activeConversationId, {
+      const result = await apiClient.sendMessage(conversationId, {
         client_request_id: pending.requestId,
         expected_draft_revision: expectedDraftRevision,
       });
       pendingSendRef.current = null;
-      setDraft(result.draft);
-      setQueue((current) =>
-        upsertQueueItem(current, activeConversationId, result.queue_item),
-      );
-      setQueueOpen(true);
-      void refreshRuntime(activeConversationId, result.queue_item.local_run_id);
+      if (activeConversationIdRef.current === conversationId) {
+        setDraft(result.draft);
+        const nextQueue = upsertQueueItem(
+          queueRef.current,
+          conversationId,
+          result.queue_item,
+        );
+        queueRef.current = nextQueue;
+        setQueue(nextQueue);
+        if (isFollowUp) setQueueOpen(true);
+        void refreshRuntime(conversationId, result.queue_item.local_run_id);
+      }
       void loadConversations();
       return {
         draft: {
@@ -478,7 +518,9 @@ export function AppShell() {
     const item = await apiClient.cancelQueueItem(queueItemId, {
       expected_revision: expectedRevision,
     });
-    setQueue((current) => replaceQueueItem(current, item));
+    const nextQueue = replaceQueueItem(queueRef.current, item);
+    queueRef.current = nextQueue;
+    setQueue(nextQueue);
     if (activeConversationId) void refreshRuntime(activeConversationId);
   };
 
@@ -491,37 +533,9 @@ export function AppShell() {
       content,
       expected_revision: expectedRevision,
     });
-    setQueue((current) => replaceQueueItem(current, item));
-  };
-
-  const handleResumeQueue = async () => {
-    if (!activeConversationId) throw new Error("请先选择会话");
-    const nextQueue = await apiClient.resumeQueue(activeConversationId);
+    const nextQueue = replaceQueueItem(queueRef.current, item);
+    queueRef.current = nextQueue;
     setQueue(nextQueue);
-    void refreshRuntime(activeConversationId);
-  };
-
-  const handleCopyToDraft = async (queueItemId: string) => {
-    if (!draft) throw new Error("草稿尚未加载");
-    const overwrite = draft.content.length > 0;
-    if (
-      overwrite &&
-      !window.confirm(
-        "当前草稿会被恢复正文覆盖。再次发送可能产生重复。继续吗？",
-      )
-    ) {
-      return;
-    }
-    const result = await apiClient.copyToDraft(queueItemId, {
-      expected_draft_revision: draft.revision,
-      overwrite_nonempty: overwrite,
-    });
-    setDraft(result.draft);
-  };
-
-  const handleDiscardRecovery = async (queueItemId: string) => {
-    const item = await apiClient.discardRecovery(queueItemId);
-    setQueue((current) => replaceQueueItem(current, item));
   };
 
   const handleStopRun = async () => {
@@ -547,7 +561,9 @@ export function AppShell() {
     if (!activeRun) return;
     const result = await apiClient.reconcileRun(activeRun.id);
     setActiveRun(result.run);
-    setQueue((current) => replaceQueueItem(current, result.queue_item));
+    const nextQueue = replaceQueueItem(queueRef.current, result.queue_item);
+    queueRef.current = nextQueue;
+    setQueue(nextQueue);
     if (activeConversationId)
       void refreshRuntime(activeConversationId, result.run.id);
   };
@@ -650,19 +666,6 @@ export function AppShell() {
                 <CurrentSegmentBanner conversation={activeConversation} />
                 <button
                   type="button"
-                  className={`toolbar-button ${queueOpen ? "active" : ""}`}
-                  onClick={() => setQueueOpen((open) => !open)}
-                  aria-expanded={queueOpen}
-                  aria-label="切换消息队列"
-                  title="消息队列"
-                >
-                  <ListTodo size={14} strokeWidth={1.8} />
-                  <span className="queue-toolbar-label">
-                    {getActiveQueueCount(queue)}
-                  </span>
-                </button>
-                <button
-                  type="button"
                   className="icon-button"
                   onClick={() => setPreferencesOpen(true)}
                   aria-label="打开设置"
@@ -679,13 +682,15 @@ export function AppShell() {
               onRecheck={() => void loadStatus(true)}
             />
 
-            {activeRun && (
+            {agentGenerating && (
               <div className="run-strip" aria-live="polite">
                 <div className="run-strip-label">
-                  <span
-                    className={`status-dot ${isLiveRun(activeRun) ? "running" : ""}`}
-                  />
-                  <span>{getRunLabel(activeRun)}</span>
+                  <span className="status-dot running" />
+                  <span>
+                    {activeRun && isLiveRun(activeRun)
+                      ? getRunLabel(activeRun)
+                      : "Agent 正在生成"}
+                  </span>
                 </div>
                 <div className="run-strip-actions">
                   {showStop && (
@@ -723,18 +728,13 @@ export function AppShell() {
 
             <div className="composer-shell">
               <div className="composer-inner">
-                {queueOpen && queue && hasActiveQueueItems(queue) && (
+                {queueOpen && queuedMessages.length > 0 && (
                   <QueuePanel
                     isOpen={queueOpen}
                     onClose={() => setQueueOpen(false)}
-                    items={queue.data}
-                    paused={queue.paused}
-                    pauseReason={queue.pause_reason}
+                    items={queuedMessages}
                     onCancelItem={handleCancelQueueItem}
                     onEditItem={handleEditQueueItem}
-                    onResume={handleResumeQueue}
-                    onCopyToDraft={handleCopyToDraft}
-                    onDiscardRecovery={handleDiscardRecovery}
                   />
                 )}
                 {draft ? (
@@ -854,62 +854,10 @@ function getConversationIdFromPath(pathname: string): string | null {
   }
 }
 
-function getCurrentRunId(queue: QueueListResponse): string | null {
-  return (
-    queue.data.find((item) => item.local_run_id && isLiveQueueState(item.state))
-      ?.local_run_id ?? null
-  );
-}
-
-function isLiveQueueState(state: QueueItemResponse["state"]): boolean {
-  return (
-    state === "queued" ||
-    state === "dispatching" ||
-    state === "accepted" ||
-    state === "reconciling"
-  );
-}
-
-function isLiveRun(run: RunResponse | null): boolean {
-  if (!run) return false;
-  return (
-    run.local_state === "submitting" ||
-    run.local_state === "accepted" ||
-    run.local_state === "reconciling" ||
-    run.upstream_status === "queued" ||
-    run.upstream_status === "running" ||
-    run.upstream_status === "waiting_for_approval" ||
-    run.upstream_status === "stopping"
-  );
-}
-
-function hasActiveQueueItems(queue: QueueListResponse): boolean {
-  return (
-    queue.paused ||
-    queue.data.some(
-      (item) => item.state !== "done" && item.state !== "cancelled",
-    )
-  );
-}
-
-function getActiveQueueCount(queue: QueueListResponse | null): number {
-  return (
-    queue?.data.filter(
-      (item) => item.state !== "done" && item.state !== "cancelled",
-    ).length ?? 0
-  );
-}
-
 function getRunLabel(run: RunResponse): string {
   if (run.upstream_status === "waiting_for_approval") return "运行等待确认";
   if (run.upstream_status === "stopping") return "正在停止运行";
-  if (run.local_state === "submitting" || run.upstream_status === "queued")
-    return "正在提交到 Hermes";
-  if (run.local_state === "reconciling") return "正在核对最终结果";
-  if (run.local_state === "review_required") return "需要人工复核";
-  if (run.upstream_status === "running") return "Hermes 正在运行";
-  if (run.local_state === "reconciled") return "运行已完成";
-  return "运行状态已更新";
+  return "Agent 正在生成";
 }
 
 function upsertQueueItem(

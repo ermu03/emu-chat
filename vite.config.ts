@@ -3,7 +3,7 @@ import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
 
 const apiProxyTarget =
-  process.env["EMU_CHAT_SERVER_URL"] ?? "http://127.0.0.1:3000";
+  process.env["EMU_CHAT_SERVER_URL"] ?? "http://127.0.0.1:3104";
 
 export default defineConfig({
   build: {

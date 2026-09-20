@@ -280,23 +280,18 @@ describe("React Components Static Tests", () => {
   });
 
   describe("QueuePanel", () => {
-    it("renders empty placeholder when queue is empty", () => {
+    it("does not render without queued follow-up messages", () => {
       render(
         <QueuePanel
           isOpen={true}
           onClose={vi.fn()}
           items={[]}
-          paused={false}
-          pauseReason={null}
           onCancelItem={vi.fn().mockResolvedValue(undefined)}
           onEditItem={vi.fn().mockResolvedValue(undefined)}
-          onResume={vi.fn().mockResolvedValue(undefined)}
-          onCopyToDraft={vi.fn().mockResolvedValue(undefined)}
-          onDiscardRecovery={vi.fn().mockResolvedValue(undefined)}
         />,
       );
 
-      expect(screen.getByText(/队列为空/i)).toBeDefined();
+      expect(screen.queryByRole("region", { name: "消息队列" })).toBeNull();
     });
 
     it("renders queued items with inline edit and delete actions", async () => {
@@ -328,17 +323,12 @@ describe("React Components Static Tests", () => {
           isOpen={true}
           onClose={vi.fn()}
           items={items}
-          paused={false}
-          pauseReason={null}
           onCancelItem={vi
             .fn()
             .mockImplementation(async (id: string, revision: number) =>
               onCancelItem(id, revision),
             )}
           onEditItem={onEditItem}
-          onResume={vi.fn().mockResolvedValue(undefined)}
-          onCopyToDraft={vi.fn().mockResolvedValue(undefined)}
-          onDiscardRecovery={vi.fn().mockResolvedValue(undefined)}
         />,
       );
 

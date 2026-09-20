@@ -992,31 +992,6 @@ select:focus-visible {
 .queue-close-button {
   flex: 0 0 auto;
 }
-.queue-warning button {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  flex: 0 0 auto;
-  width: auto;
-  height: auto;
-  padding: 4px 7px;
-  border: 1px solid color-mix(in srgb, var(--warning) 30%, var(--line));
-  border-radius: 6px;
-  color: var(--warning);
-  background: transparent;
-  font-size: 10px;
-}
-.queue-warning {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 9px 12px;
-  border-bottom: 1px solid var(--line);
-  color: var(--warning);
-  background: var(--warning-wash);
-  font-size: 11px;
-}
 .queue-error {
   padding: 8px 12px;
   border-bottom: 1px solid var(--line);
@@ -1082,15 +1057,8 @@ select:focus-visible {
   color: var(--ink-faint);
   font-size: 10px;
 }
-.queue-item-state.running,
 .queue-item-state.queued {
   color: var(--accent-strong);
-}
-.queue-item-state.recovery {
-  color: var(--warning);
-}
-.queue-item-state.done {
-  color: var(--success);
 }
 .queue-item-actions {
   flex: 0 0 auto;
@@ -1159,13 +1127,6 @@ select:focus-visible {
   border-color: var(--accent);
   background: var(--accent);
 }
-.queue-empty {
-  padding: 14px 12px;
-  color: var(--ink-faint);
-  font-size: 11px;
-  text-align: center;
-}
-
 .confirmation-backdrop,
 .drawer-backdrop {
   position: fixed;
