@@ -1,4 +1,5 @@
 import React from "react";
+import { X } from "lucide-react";
 
 export interface PreferencesState {
   theme: "system" | "light" | "dark";
@@ -24,139 +25,85 @@ export const PreferencesDrawer: React.FC<PreferencesDrawerProps> = ({
 
   return (
     <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        backgroundColor: "rgba(0, 0, 0, 0.5)",
-        display: "flex",
-        justifyContent: "flex-end",
-        zIndex: 50,
+      className="drawer-backdrop"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.currentTarget === event.target) onClose();
       }}
-      onClick={onClose}
     >
-      <div
-        style={{
-          width: "360px",
-          height: "100%",
-          backgroundColor: "#ffffff",
-          padding: "24px",
-          boxShadow: "-4px 0 12px rgba(0, 0, 0, 0.1)",
-          display: "flex",
-          flexDirection: "column",
-          gap: "20px",
-        }}
-        onClick={(e) => e.stopPropagation()}
+      <aside
+        className="preferences-drawer"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="preferences-title"
       >
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-          }}
-        >
-          <h2 style={{ margin: 0, fontSize: "18px", fontWeight: 600 }}>
-            偏好设置
-          </h2>
+        <div className="preferences-drawer-header">
+          <h2 id="preferences-title">设置</h2>
           <button
+            type="button"
+            className="icon-button"
             onClick={onClose}
-            style={{
-              background: "none",
-              border: "none",
-              fontSize: "18px",
-              cursor: "pointer",
-            }}
+            aria-label="关闭设置"
           >
-            ×
+            <X size={17} />
           </button>
         </div>
 
-        <div>
-          <label
-            style={{
-              display: "block",
-              fontSize: "14px",
-              marginBottom: "8px",
-              fontWeight: 500,
-            }}
-          >
-            外观主题
-          </label>
+        <div className="preference-field">
+          <label htmlFor="preference-theme">外观</label>
           <select
+            id="preference-theme"
             value={preferences.theme}
-            onChange={(e) =>
-              onUpdate({ theme: e.target.value as "system" | "light" | "dark" })
-            }
-            style={{
-              width: "100%",
-              padding: "8px",
-              borderRadius: "4px",
-              border: "1px solid #d1d5db",
-            }}
-          >
-            <option value="system">跟随系统</option>
-            <option value="light">浅色模式</option>
-            <option value="dark">深色模式</option>
-          </select>
-        </div>
-
-        <div>
-          <label
-            style={{
-              display: "block",
-              fontSize: "14px",
-              marginBottom: "8px",
-              fontWeight: 500,
-            }}
-          >
-            发送快捷键
-          </label>
-          <select
-            value={preferences.send_shortcut}
-            onChange={(e) =>
-              onUpdate({
-                send_shortcut: e.target.value as "enter" | "mod_enter",
+            onChange={(event) =>
+              void onUpdate({
+                theme: event.target.value as PreferencesState["theme"],
               })
             }
-            style={{
-              width: "100%",
-              padding: "8px",
-              borderRadius: "4px",
-              border: "1px solid #d1d5db",
-            }}
           >
-            <option value="enter">Enter 发送 (Shift+Enter 换行)</option>
-            <option value="mod_enter">Ctrl+Enter / Cmd+Enter 发送</option>
+            <option value="system">跟随系统</option>
+            <option value="light">浅色</option>
+            <option value="dark">深色</option>
           </select>
         </div>
 
-        <div>
-          <label
-            style={{
-              display: "block",
-              fontSize: "14px",
-              marginBottom: "8px",
-              fontWeight: 500,
-            }}
+        <div className="preference-field">
+          <label htmlFor="preference-shortcut">发送方式</label>
+          <select
+            id="preference-shortcut"
+            value={preferences.send_shortcut}
+            onChange={(event) =>
+              void onUpdate({
+                send_shortcut: event.target
+                  .value as PreferencesState["send_shortcut"],
+              })
+            }
           >
-            侧边栏宽度 ({preferences.sidebar_width}px)
+            <option value="enter">Enter 发送</option>
+            <option value="mod_enter">Ctrl / Cmd + Enter 发送</option>
+          </select>
+        </div>
+
+        <div className="preference-field">
+          <label htmlFor="preference-sidebar">
+            侧栏宽度 · {preferences.sidebar_width}px
           </label>
           <input
+            id="preference-sidebar"
             type="range"
             min={240}
-            max={480}
+            max={420}
             step={10}
             value={preferences.sidebar_width}
-            onChange={(e) =>
-              onUpdate({ sidebar_width: Number(e.target.value) })
+            onChange={(event) =>
+              void onUpdate({ sidebar_width: Number(event.target.value) })
             }
-            style={{ width: "100%" }}
           />
         </div>
 
-        <div style={{ marginTop: "auto", fontSize: "12px", color: "#9ca3af" }}>
-          偏好设置 revision: {preferences.revision}
+        <div className="preference-note">
+          本地偏好版本 {preferences.revision}
         </div>
-      </div>
+      </aside>
     </div>
   );
 };

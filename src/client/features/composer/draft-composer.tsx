@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { LoaderCircle, Send, Sparkles } from "lucide-react";
 import { LIMITS } from "../../../shared/limits.js";
 
 export interface DraftSnapshot {
@@ -40,30 +41,39 @@ export const DraftComposer: React.FC<DraftComposerProps> = ({
   const [isSending, setIsSending] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
-
-  const debounceTimerRef = useRef<number | null>(null);
-  const savePromiseRef = useRef<Promise<void> | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const debounceRef = useRef<number | null>(null);
   const contentRef = useRef(initialDraft);
   const savedContentRef = useRef(initialDraft);
   const revisionRef = useRef(initialRevision);
+  const sendingRef = useRef(false);
   const generationRef = useRef(0);
-  const isSendingRef = useRef(false);
-  const synchronizedConversationRef = useRef(conversationId);
+  const savePromiseRef = useRef<Promise<void> | null>(null);
+  const conversationRef = useRef(conversationId);
+
+  const resizeTextarea = useCallback(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    textarea.style.height = "0px";
+    textarea.style.height = `${Math.min(Math.max(textarea.scrollHeight, 84), 230)}px`;
+  }, []);
 
   const clearDebounce = useCallback(() => {
-    if (debounceTimerRef.current !== null) {
-      window.clearTimeout(debounceTimerRef.current);
-      debounceTimerRef.current = null;
+    if (debounceRef.current !== null) {
+      window.clearTimeout(debounceRef.current);
+      debounceRef.current = null;
     }
   }, []);
 
   useEffect(() => {
-    if (synchronizedConversationRef.current === conversationId) return;
+    resizeTextarea();
+  }, [content, resizeTextarea]);
 
-    synchronizedConversationRef.current = conversationId;
+  useEffect(() => {
+    if (conversationRef.current === conversationId) return;
+    conversationRef.current = conversationId;
     generationRef.current += 1;
     clearDebounce();
-    savePromiseRef.current = null;
     contentRef.current = initialDraft;
     savedContentRef.current = initialDraft;
     revisionRef.current = initialRevision;
@@ -71,14 +81,11 @@ export const DraftComposer: React.FC<DraftComposerProps> = ({
     setRevision(initialRevision);
     setSaveError(null);
     setSendError(null);
-    setIsSaving(false);
-    isSendingRef.current = false;
+    sendingRef.current = false;
     setIsSending(false);
   }, [clearDebounce, conversationId, initialDraft, initialRevision]);
 
   useEffect(() => {
-    // Parent snapshots normally arrive after a successful save. Do not apply
-    // one over edits made while that earlier request was still in flight.
     if (contentRef.current !== savedContentRef.current) return;
     if (initialRevision < revisionRef.current) return;
     if (
@@ -87,47 +94,40 @@ export const DraftComposer: React.FC<DraftComposerProps> = ({
     ) {
       return;
     }
-
     contentRef.current = initialDraft;
     savedContentRef.current = initialDraft;
     revisionRef.current = initialRevision;
     setContent(initialDraft);
     setRevision(initialRevision);
     setSaveError(null);
-  }, [conversationId, initialDraft, initialRevision]);
+  }, [initialDraft, initialRevision]);
 
   useEffect(() => {
     return () => {
       generationRef.current += 1;
-      isSendingRef.current = false;
       clearDebounce();
+      sendingRef.current = false;
     };
   }, [clearDebounce]);
 
   const saveSnapshot = useCallback(
-    async (contentToSave: string) => {
+    async (nextContent: string) => {
       const generation = generationRef.current;
-      const expectedRevision = revisionRef.current;
-
       setIsSaving(true);
       setSaveError(null);
-
       try {
-        const result = await onSaveDraft(contentToSave, expectedRevision);
+        const result = await onSaveDraft(nextContent, revisionRef.current);
         if (generation !== generationRef.current) return;
-
-        savedContentRef.current = contentToSave;
+        savedContentRef.current = nextContent;
         revisionRef.current = result.revision;
         setRevision(result.revision);
-      } catch (error: unknown) {
+      } catch (error) {
         if (generation === generationRef.current) {
-          setSaveError(getErrorMessage(error, "草稿保存失败"));
+          setSaveError(error instanceof Error ? error.message : "保存失败");
         }
         throw error;
       } finally {
-        if (generation === generationRef.current) {
-          setIsSaving(false);
-        }
+        if (generation === generationRef.current) setIsSaving(false);
       }
     },
     [onSaveDraft],
@@ -135,31 +135,26 @@ export const DraftComposer: React.FC<DraftComposerProps> = ({
 
   const flushDraft = useCallback(async () => {
     clearDebounce();
-
     while (savedContentRef.current !== contentRef.current) {
       if (savePromiseRef.current) {
         await savePromiseRef.current;
         continue;
       }
-
       const snapshot = contentRef.current;
-      const savePromise = saveSnapshot(snapshot);
-      savePromiseRef.current = savePromise;
-
+      const promise = saveSnapshot(snapshot);
+      savePromiseRef.current = promise;
       try {
-        await savePromise;
+        await promise;
       } finally {
-        if (savePromiseRef.current === savePromise) {
-          savePromiseRef.current = null;
-        }
+        if (savePromiseRef.current === promise) savePromiseRef.current = null;
       }
     }
   }, [clearDebounce, saveSnapshot]);
 
   const scheduleSave = useCallback(() => {
     clearDebounce();
-    debounceTimerRef.current = window.setTimeout(() => {
-      debounceTimerRef.current = null;
+    debounceRef.current = window.setTimeout(() => {
+      debounceRef.current = null;
       void flushDraft().catch(() => undefined);
     }, 500);
   }, [clearDebounce, flushDraft]);
@@ -173,163 +168,110 @@ export const DraftComposer: React.FC<DraftComposerProps> = ({
   };
 
   const handleSend = async () => {
-    const currentContent = contentRef.current;
-    const trimmed = currentContent.trim();
+    const current = contentRef.current;
     const isOverLimit =
-      new TextEncoder().encode(currentContent).length > LIMITS.INPUT_MAX_BYTES;
+      new TextEncoder().encode(current).length > LIMITS.INPUT_MAX_BYTES;
     if (
-      !trimmed ||
+      !current.trim() ||
       disabled ||
       sendDisabled ||
-      isSendingRef.current ||
+      sendingRef.current ||
       isOverLimit
     )
       return;
 
     const generation = generationRef.current;
-    isSendingRef.current = true;
+    sendingRef.current = true;
     setIsSending(true);
     setSendError(null);
-
     try {
       await flushDraft();
-    } catch {
-      if (generation === generationRef.current) {
-        isSendingRef.current = false;
-        setIsSending(false);
-      }
-      return;
-    }
-
-    if (generation !== generationRef.current) return;
-
-    try {
+      if (generation !== generationRef.current) return;
       const result = await onSend(revisionRef.current);
       if (generation !== generationRef.current) return;
-
       contentRef.current = result.draft.content;
       savedContentRef.current = result.draft.content;
       revisionRef.current = result.draft.revision;
       setContent(result.draft.content);
       setRevision(result.draft.revision);
       setSaveError(null);
-    } catch (error: unknown) {
+    } catch (error) {
       if (generation === generationRef.current) {
-        setSendError(getErrorMessage(error, "发送失败"));
+        setSendError(error instanceof Error ? error.message : "发送失败");
       }
     } finally {
       if (generation === generationRef.current) {
-        isSendingRef.current = false;
+        sendingRef.current = false;
         setIsSending(false);
       }
     }
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (disabled) return;
-
-    const isMod = e.ctrlKey || e.metaKey;
-    const isEnter = e.key === "Enter";
-
-    let shouldSend = false;
-    if (sendShortcut === "mod_enter" && isEnter && isMod) {
-      shouldSend = true;
-    } else if (sendShortcut === "enter" && isEnter && !e.shiftKey && !isMod) {
-      shouldSend = true;
-    }
-
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    const isMod = event.ctrlKey || event.metaKey;
+    const shouldSend =
+      (sendShortcut === "mod_enter" && event.key === "Enter" && isMod) ||
+      (sendShortcut === "enter" &&
+        event.key === "Enter" &&
+        !event.shiftKey &&
+        !isMod);
     if (shouldSend) {
-      e.preventDefault();
+      event.preventDefault();
       void handleSend();
     }
   };
 
   const byteCount = new TextEncoder().encode(content).length;
   const isOverLimit = byteCount > LIMITS.INPUT_MAX_BYTES;
+  const sendTitle =
+    sendShortcut === "mod_enter" ? "发送（⌘/Ctrl + Enter）" : "发送（Enter）";
 
   return (
-    <div
-      className="composer-container"
-      style={{ display: "flex", flexDirection: "column", gap: "8px" }}
-    >
+    <div className={`composer-container ${isOverLimit ? "over-limit" : ""}`}>
       <textarea
+        ref={textareaRef}
+        className="composer-textarea"
         value={content}
         onChange={handleChange}
         onKeyDown={handleKeyDown}
         disabled={disabled || isSending}
-        placeholder={
-          sendShortcut === "mod_enter"
-            ? "输入消息... (Ctrl+Enter 或 Cmd+Enter 发送)"
-            : "输入消息... (Enter 发送, Shift+Enter 换行)"
-        }
-        rows={4}
-        style={{
-          width: "100%",
-          padding: "8px 12px",
-          borderRadius: "6px",
-          border: isOverLimit ? "1px solid #ef4444" : "1px solid #d1d5db",
-          resize: "vertical",
-          fontFamily: "inherit",
-          fontSize: "14px",
-        }}
+        placeholder="写下你的消息..."
+        rows={3}
+        aria-label="消息输入框"
       />
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          fontSize: "12px",
-          color: "#6b7280",
-        }}
-      >
-        <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
-          <span>
-            {byteCount} / {LIMITS.INPUT_MAX_BYTES} 字节
+      <div className="composer-footer">
+        <div className="composer-meta">
+          <Sparkles size={13} aria-hidden="true" />
+          <span>{isSaving ? "保存中" : "草稿已保存"}</span>
+          <span className={isOverLimit ? "error" : ""}>
+            {byteCount.toLocaleString()} /{" "}
+            {LIMITS.INPUT_MAX_BYTES.toLocaleString()} bytes
           </span>
-          {isSaving && <span>草稿保存中...</span>}
-          {saveError && <span style={{ color: "#ef4444" }}>{saveError}</span>}
-          {isSending && <span>发送中...</span>}
-          {sendError && <span style={{ color: "#ef4444" }}>{sendError}</span>}
+          {saveError && <span className="error">{saveError}</span>}
+          {sendError && <span className="error">{sendError}</span>}
         </div>
-        <button
-          onClick={() => void handleSend()}
-          disabled={
-            disabled ||
-            sendDisabled ||
-            isSending ||
-            !content.trim() ||
-            isOverLimit
-          }
-          style={{
-            padding: "6px 16px",
-            backgroundColor:
+        <div className="composer-actions">
+          {isSending && (
+            <LoaderCircle size={15} className="spin" aria-label="发送中" />
+          )}
+          <button
+            type="button"
+            className="send-button"
+            onClick={() => void handleSend()}
+            disabled={
               disabled ||
               sendDisabled ||
               isSending ||
               !content.trim() ||
               isOverLimit
-                ? "#9ca3af"
-                : "#2563eb",
-            color: "#ffffff",
-            border: "none",
-            borderRadius: "4px",
-            cursor:
-              disabled ||
-              sendDisabled ||
-              isSending ||
-              !content.trim() ||
-              isOverLimit
-                ? "not-allowed"
-                : "pointer",
-          }}
-        >
-          {isSending ? "发送中..." : "发送"}
-        </button>
+            }
+            aria-label={sendTitle}
+            title={sendTitle}
+          >
+            <Send size={15} strokeWidth={2} />
+          </button>
+        </div>
       </div>
     </div>
   );
 };
-
-function getErrorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error && error.message ? error.message : fallback;
-}

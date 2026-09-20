@@ -37,8 +37,6 @@ export interface NormalizedMessageList {
 }
 
 export class HermesAdapter {
-  private lastHealth: HermesHealthDetailedResponse | null = null;
-
   constructor(private readonly client: HermesClient) {}
 
   isConfigured(): boolean {
@@ -90,7 +88,6 @@ export class HermesAdapter {
       throw new HermesProtocolError(
         `Hermes readiness normalization failed: ${normalized.error.message}`,
       );
-    this.lastHealth = normalized.data;
     return normalized.data;
   }
 

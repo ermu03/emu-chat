@@ -10,7 +10,6 @@ import {
   ThemePreferenceValues,
   SendShortcutPreferenceValues,
   ErrorCodeValues,
-  StreamGapReasonValues,
   MessageRoleValues,
 } from "./domain-enums.js";
 import { LIMITS } from "./limits.js";
@@ -402,60 +401,3 @@ export const PutPreferencesRequestSchema = z.object({
   expected_revision: z.number().int().nonnegative(),
 });
 export type PutPreferencesRequest = z.infer<typeof PutPreferencesRequestSchema>;
-
-// --- SSE Event Schemas ---
-export const SseRunDeltaPayloadSchema = z.object({
-  local_run_id: z.string(),
-  text: z.string(),
-});
-export const SseRunToolStartedPayloadSchema = z.object({
-  local_run_id: z.string(),
-  tool_name: z.string(),
-  tool_call_id: z.string().optional(),
-});
-export const SseRunToolCompletedPayloadSchema = z.object({
-  local_run_id: z.string(),
-  tool_name: z.string(),
-  tool_call_id: z.string().optional(),
-  preview: z.string().optional(),
-});
-export const SseRunReasoningDeltaPayloadSchema = z.object({
-  local_run_id: z.string(),
-  text: z.string(),
-});
-export const SseRunSubagentStartedPayloadSchema = z.object({
-  local_run_id: z.string(),
-  id: z.string(),
-  name: z.string().optional(),
-});
-export const SseRunSubagentCompletedPayloadSchema = z.object({
-  local_run_id: z.string(),
-  id: z.string(),
-});
-export const SseRunApprovalRequiredPayloadSchema = z.object({
-  local_run_id: z.string(),
-  request_id: z.string(),
-  command: z.string().optional(),
-  description: z.string().optional(),
-  choices: z.array(z.string()),
-  deadline_at: z.string().optional(),
-});
-export const SseRunReconciledPayloadSchema = z.object({
-  local_run_id: z.string(),
-  upstream_status: z.enum(UpstreamRunStatusValues),
-  effective_hermes_session_id: z.string(),
-});
-export const SseRunPausedPayloadSchema = z.object({
-  local_run_id: z.string(),
-  reason: z.enum(PauseReasonValues),
-  review_required: z.boolean(),
-});
-export const SseStreamGapPayloadSchema = z.object({
-  local_run_id: z.string(),
-  reason: z.enum(StreamGapReasonValues),
-  suggested_action: z.literal("refresh_status"),
-});
-export const SseHeartbeatPayloadSchema = z.object({
-  local_run_id: z.string(),
-  timestamp: z.number().nonnegative(),
-});

@@ -1,10 +1,4 @@
-import React, {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { ApiClientError, apiClient } from "./api/client.js";
 import type {
@@ -29,6 +23,14 @@ import {
   PreferencesDrawer,
   type PreferencesState,
 } from "./features/preferences/preferences-drawer.js";
+import {
+  ListTodo,
+  MessageSquarePlus,
+  Menu,
+  RefreshCw,
+  Settings2,
+  Square,
+} from "lucide-react";
 import {
   useStreamEvents,
   type RunStreamEvent,
@@ -178,6 +180,10 @@ export function AppShell() {
 
     if (queueResult.status === "fulfilled") {
       setQueue(queueResult.value);
+      setQueueOpen(
+        (open) =>
+          open || queueResult.value.data.length > 0 || queueResult.value.paused,
+      );
       const runId = getCurrentRunId(queueResult.value);
       if (runId) {
         try {
@@ -194,6 +200,7 @@ export function AppShell() {
     } else {
       setQueue(null);
       setActiveRun(null);
+      setQueueOpen(false);
       setWorkspaceError(
         getErrorMessage(queueResult.reason, "无法加载消息队列"),
       );
@@ -300,6 +307,7 @@ export function AppShell() {
     setDraft(null);
     setQueue(null);
     setActiveRun(null);
+    setQueueOpen(false);
   }, [activeConversationId, loadActiveConversation]);
 
   const shouldPollRuntime = useMemo(() => {
@@ -449,6 +457,7 @@ export function AppShell() {
       setQueue((current) =>
         upsertQueueItem(current, activeConversationId, result.queue_item),
       );
+      setQueueOpen(true);
       void refreshRuntime(activeConversationId, result.queue_item.local_run_id);
       void loadConversations();
       return {
@@ -569,174 +578,173 @@ export function AppShell() {
       activeRun.hermes_run_id !== null);
 
   return (
-    <div className="flex flex-col h-screen w-screen overflow-hidden bg-neutral-100 dark:bg-neutral-950 font-sans">
-      <StatusBar
-        status={status}
-        loading={statusLoading}
-        onRecheck={() => void loadStatus(true)}
+    <div className="app-shell">
+      {sidebarOpen && (
+        <button
+          type="button"
+          aria-label="关闭侧边栏"
+          className="sidebar-backdrop"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+      <ConversationList
+        conversations={conversations}
+        activeConversationId={activeConversationId}
+        onSelect={selectConversation}
+        onCreate={() => void handleCreateConversation()}
+        onFork={(conversationId) => void handleFork(conversationId)}
+        onDelete={(conversationId, hermesSessionId, confirmed) =>
+          void handleDelete(conversationId, hermesSessionId, confirmed)
+        }
+        onUpdateMetadata={(conversationId, title, pinned) =>
+          void handleUpdateMetadata(conversationId, title, pinned)
+        }
+        searchQuery={searchQuery}
+        onSearchChange={setSearchQuery}
+        loading={conversationsLoading}
+        style={{
+          width: effectivePreferences.sidebar_width,
+          flex: `0 0 ${effectivePreferences.sidebar_width}px`,
+        }}
+        mobileOpen={sidebarOpen}
+        onMobileClose={() => setSidebarOpen(false)}
+        status={status?.status}
+        onOpenPreferences={() => setPreferencesOpen(true)}
       />
 
-      {workspaceError && (
-        <div
-          role="alert"
-          className="px-4 py-2 text-xs bg-rose-50 text-rose-800 border-b border-rose-200"
-        >
-          {workspaceError}
-        </div>
-      )}
-
-      <div className="flex flex-1 overflow-hidden">
-        {sidebarOpen && (
-          <button
-            aria-label="关闭侧边栏"
-            className="conversation-sidebar-backdrop"
-            onClick={() => setSidebarOpen(false)}
-          />
+      <main className="app-main">
+        {workspaceError && (
+          <div className="workspace-alert error" role="alert">
+            <span>{workspaceError}</span>
+            <button type="button" onClick={() => setWorkspaceError(null)}>
+              关闭
+            </button>
+          </div>
         )}
-        <ConversationList
-          conversations={conversations}
-          activeConversationId={activeConversationId}
-          onSelect={selectConversation}
-          onCreate={() => void handleCreateConversation()}
-          onFork={(conversationId) => void handleFork(conversationId)}
-          onDelete={(conversationId, hermesSessionId, confirmed) =>
-            void handleDelete(conversationId, hermesSessionId, confirmed)
-          }
-          onUpdateMetadata={(conversationId, title, pinned) =>
-            void handleUpdateMetadata(conversationId, title, pinned)
-          }
-          searchQuery={searchQuery}
-          onSearchChange={setSearchQuery}
-          loading={conversationsLoading}
-          style={{
-            width: effectivePreferences.sidebar_width,
-            flex: `0 0 ${effectivePreferences.sidebar_width}px`,
-          }}
-          mobileOpen={sidebarOpen}
-          onMobileClose={() => setSidebarOpen(false)}
-        />
 
-        <main className="flex-1 flex flex-col h-full overflow-hidden bg-white dark:bg-neutral-900">
-          {activeConversation ? (
-            <>
-              <CurrentSegmentBanner conversation={activeConversation} />
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: 12,
-                  padding: "8px 16px",
-                  borderBottom: "1px solid var(--border-color)",
-                }}
-              >
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 8,
-                    minWidth: 0,
-                  }}
+        {activeConversation ? (
+          <>
+            <header className="main-toolbar">
+              <div className="main-toolbar-start">
+                <button
+                  type="button"
+                  className="icon-button mobile-only"
+                  aria-label="打开会话列表"
+                  title="会话列表"
+                  onClick={() => setSidebarOpen(true)}
                 >
-                  <button
-                    className="mobile-sidebar-toggle"
-                    aria-label="Toggle Sidebar"
-                    onClick={() => setSidebarOpen(true)}
-                    style={toolbarButtonStyle}
-                  >
-                    会话
-                  </button>
-                  <strong
-                    style={{
-                      fontSize: 13,
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
+                  <Menu size={17} />
+                </button>
+                <span className="brand-mark" aria-hidden="true">
+                  e
+                </span>
+                <div className="toolbar-title-block">
+                  <div className="main-toolbar-title">
                     {activeConversation.title || "未命名会话"}
-                  </strong>
-                </div>
-                <div style={{ display: "flex", gap: 8 }}>
-                  <button
-                    onClick={() => setQueueOpen(true)}
-                    aria-label="打开消息队列"
-                    style={toolbarButtonStyle}
-                  >
-                    队列 {queue?.data.length ?? 0}
-                  </button>
-                  <button
-                    onClick={() => setPreferencesOpen(true)}
-                    aria-label="打开偏好设置"
-                    style={toolbarButtonStyle}
-                  >
-                    设置
-                  </button>
-                </div>
-              </div>
-
-              {activeRun && (
-                <div
-                  aria-live="polite"
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    gap: 12,
-                    padding: "8px 16px",
-                    background: "#f8fafc",
-                    borderBottom: "1px solid var(--border-color)",
-                    fontSize: 12,
-                  }}
-                >
-                  <span>{getRunLabel(activeRun)}</span>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    {showStop && (
-                      <button
-                        onClick={() => void handleStopRun()}
-                        style={dangerToolbarButtonStyle}
-                      >
-                        停止
-                      </button>
-                    )}
-                    {showReconcile && (
-                      <button
-                        onClick={() => void handleReconcile()}
-                        style={toolbarButtonStyle}
-                      >
-                        重新核对状态
-                      </button>
-                    )}
+                  </div>
+                  <div className="main-toolbar-subtitle">
+                    <span
+                      className={`status-dot ${status?.status === "healthy" ? "healthy" : status?.status === "degraded" ? "degraded" : status ? "error" : ""}`}
+                    />
+                    <span>
+                      {status?.hermes_version
+                        ? `Hermes ${status.hermes_version}`
+                        : "Hermes"}
+                    </span>
                   </div>
                 </div>
-              )}
-
-              {streamNotice && (
-                <div
-                  className="text-xs text-amber-700"
-                  style={{ padding: "6px 16px", background: "#fffbeb" }}
+              </div>
+              <div className="main-toolbar-end">
+                <CurrentSegmentBanner conversation={activeConversation} />
+                <button
+                  type="button"
+                  className={`toolbar-button ${queueOpen ? "active" : ""}`}
+                  onClick={() => setQueueOpen((open) => !open)}
+                  aria-expanded={queueOpen}
+                  aria-label="切换消息队列"
+                  title="消息队列"
                 >
-                  {streamNotice}
-                </div>
-              )}
-              {stream.isReconnecting && (
-                <div
-                  className="text-xs text-neutral-500"
-                  style={{ padding: "6px 16px" }}
+                  <ListTodo size={14} strokeWidth={1.8} />
+                  <span className="queue-toolbar-label">
+                    {queue?.data.length ?? 0}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="icon-button"
+                  onClick={() => setPreferencesOpen(true)}
+                  aria-label="打开设置"
+                  title="设置"
                 >
-                  {stream.error ?? "正在重新连接实时过程..."}
+                  <Settings2 size={16} strokeWidth={1.8} />
+                </button>
+              </div>
+            </header>
+
+            <StatusBar
+              status={status}
+              loading={statusLoading}
+              onRecheck={() => void loadStatus(true)}
+            />
+
+            {activeRun && (
+              <div className="run-strip" aria-live="polite">
+                <div className="run-strip-label">
+                  <span
+                    className={`status-dot ${isLiveRun(activeRun) ? "running" : ""}`}
+                  />
+                  <span>{getRunLabel(activeRun)}</span>
                 </div>
-              )}
+                <div className="run-strip-actions">
+                  {showStop && (
+                    <button
+                      type="button"
+                      className="danger"
+                      onClick={() => void handleStopRun()}
+                    >
+                      <Square size={11} fill="currentColor" />
+                      停止
+                    </button>
+                  )}
+                  {showReconcile && (
+                    <button
+                      type="button"
+                      onClick={() => void handleReconcile()}
+                    >
+                      <RefreshCw size={11} />
+                      重新核对
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
 
-              <MessageView messages={messages} loading={messagesLoading} />
+            {(streamNotice || stream.isReconnecting) && (
+              <div className="workspace-alert" role="status">
+                <span>
+                  {streamNotice ?? stream.error ?? "正在重新连接实时过程"}
+                </span>
+              </div>
+            )}
 
-              <div
-                style={{
-                  borderTop: "1px solid var(--border-color)",
-                  padding: 12,
-                  background: "var(--bg-primary)",
-                }}
-              >
+            <MessageView messages={messages} loading={messagesLoading} />
+
+            <div className="composer-shell">
+              <div className="composer-inner">
+                {queueOpen && queue && (
+                  <QueueDrawer
+                    isOpen={queueOpen}
+                    onClose={() => setQueueOpen(false)}
+                    items={queue.data}
+                    paused={queue.paused}
+                    pauseReason={queue.pause_reason}
+                    onCancelItem={handleCancelQueueItem}
+                    onEditItem={handleEditQueueItem}
+                    onResume={handleResumeQueue}
+                    onCopyToDraft={handleCopyToDraft}
+                    onDiscardRecovery={handleDiscardRecovery}
+                  />
+                )}
                 {draft ? (
                   <DraftComposer
                     conversationId={activeConversation.conversation_id}
@@ -744,62 +752,79 @@ export function AppShell() {
                     initialRevision={draft.revision}
                     sendShortcut={effectivePreferences.send_shortcut}
                     onSaveDraft={handleSaveDraft}
-                    onSend={handleSend}
+                    onSend={async (revision) => {
+                      const result = await handleSend(revision);
+                      return result;
+                    }}
                     disabled={composerDisabled}
                     sendDisabled={sendDisabled}
                   />
                 ) : (
-                  <div className="text-xs text-neutral-400">
-                    正在加载草稿...
+                  <div className="composer-container composer-loading">
+                    正在准备输入框...
                   </div>
                 )}
                 {status?.status !== "healthy" && (
-                  <div
-                    className="text-xs text-neutral-500"
-                    style={{ marginTop: 6 }}
-                  >
-                    连接恢复后请手动发送；草稿仍可保存。
+                  <div className="composer-hint">
+                    Hermes 恢复后即可发送，草稿会继续保存。
                   </div>
                 )}
               </div>
-            </>
-          ) : (
-            <div
-              className="flex-1 flex flex-col items-center justify-center text-neutral-400 text-xs"
-              style={{ gap: 12 }}
-            >
-              <span>请从左侧选择或新建一个会话</span>
-              <button
-                className="mobile-sidebar-toggle"
-                aria-label="Toggle Sidebar"
-                onClick={() => setSidebarOpen(true)}
-                style={toolbarButtonStyle}
-              >
-                会话
-              </button>
-              <button
-                onClick={() => setPreferencesOpen(true)}
-                style={toolbarButtonStyle}
-              >
-                设置
-              </button>
             </div>
-          )}
-        </main>
-      </div>
-
-      <QueueDrawer
-        isOpen={queueOpen}
-        onClose={() => setQueueOpen(false)}
-        items={queue?.data ?? []}
-        paused={queue?.paused ?? false}
-        pauseReason={queue?.pause_reason ?? null}
-        onCancelItem={handleCancelQueueItem}
-        onEditItem={handleEditQueueItem}
-        onResume={handleResumeQueue}
-        onCopyToDraft={handleCopyToDraft}
-        onDiscardRecovery={handleDiscardRecovery}
-      />
+          </>
+        ) : (
+          <>
+            <header className="main-toolbar">
+              <div className="main-toolbar-start">
+                <button
+                  type="button"
+                  className="icon-button mobile-only"
+                  aria-label="打开会话列表"
+                  title="会话列表"
+                  onClick={() => setSidebarOpen(true)}
+                >
+                  <Menu size={17} />
+                </button>
+                <span className="brand-mark" aria-hidden="true">
+                  e
+                </span>
+                <span className="main-toolbar-title">emu-chat</span>
+              </div>
+              <button
+                type="button"
+                className="icon-button"
+                onClick={() => setPreferencesOpen(true)}
+                aria-label="打开设置"
+                title="设置"
+              >
+                <Settings2 size={16} />
+              </button>
+            </header>
+            <StatusBar
+              status={status}
+              loading={statusLoading}
+              onRecheck={() => void loadStatus(true)}
+            />
+            <div className="message-empty">
+              <div className="empty-greeting">
+                <div className="empty-greeting-mark" aria-hidden="true">
+                  e
+                </div>
+                <h2>选择一个会话开始</h2>
+                <p>从左侧打开已有会话，或创建一个全新的 Hermes 工作空间。</p>
+                <button
+                  type="button"
+                  className="button-primary"
+                  onClick={() => void handleCreateConversation()}
+                >
+                  <MessageSquarePlus size={14} />
+                  新建会话
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+      </main>
 
       <ApprovalDialog
         isOpen={
@@ -941,19 +966,3 @@ function generateBrowserUuid(): string {
 function getErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
 }
-
-const toolbarButtonStyle: React.CSSProperties = {
-  border: "1px solid var(--border-color)",
-  borderRadius: 4,
-  padding: "5px 9px",
-  background: "var(--bg-primary)",
-  color: "var(--text-primary)",
-  fontSize: 12,
-  cursor: "pointer",
-};
-
-const dangerToolbarButtonStyle: React.CSSProperties = {
-  ...toolbarButtonStyle,
-  borderColor: "#dc2626",
-  color: "#b91c1c",
-};

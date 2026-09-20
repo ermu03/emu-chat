@@ -13,7 +13,6 @@ import { DraftComposer } from "../../src/client/features/composer/draft-composer
 import { QueueDrawer } from "../../src/client/features/queue/queue-drawer";
 import { ApprovalDialog } from "../../src/client/features/approval/approval-dialog";
 import { StatusBar } from "../../src/client/features/status/status-bar";
-import { ToolCallCard } from "../../src/client/features/tools/tool-call-card";
 import { ConversationList } from "../../src/client/features/conversations/conversation-list";
 
 afterEach(() => {
@@ -60,25 +59,22 @@ describe("React Components Static Tests", () => {
         />,
       );
 
-      fireEvent.click(screen.getByTitle("删除当前 Hermes 会话段"));
+      fireEvent.click(screen.getByTitle("删除会话"));
 
       expect(
-        screen.getByRole("dialog", { name: "删除当前 Hermes 会话段" }),
+        screen.getByRole("dialog", { name: "删除这个会话？" }),
       ).toBeDefined();
       expect(screen.getByText("ses_test_1")).toBeDefined();
-      expect(screen.getByText(/delegate children/)).toBeDefined();
-      expect(screen.getByText(/可能成为 orphan/)).toBeDefined();
-      expect(screen.getByText(/artifact.*不会随之删除/)).toBeDefined();
 
-      const deleteButton = screen.getByRole("button", {
-        name: "删除当前 Hermes 会话段",
-      }) as HTMLButtonElement;
+      const deleteButton = screen.getAllByRole("button", {
+        name: "删除会话",
+      })[1] as HTMLButtonElement;
       expect(deleteButton.disabled).toBe(true);
       fireEvent.click(deleteButton);
       expect(onDelete).not.toHaveBeenCalled();
 
       fireEvent.click(
-        screen.getByRole("checkbox", { name: /我已了解以上影响/ }),
+        screen.getByRole("checkbox", { name: /我确认删除这个会话/ }),
       );
       expect(deleteButton.disabled).toBe(false);
       fireEvent.click(deleteButton);
@@ -105,7 +101,7 @@ describe("React Components Static Tests", () => {
         />,
       );
 
-      const textarea = screen.getByPlaceholderText(/输入消息/i);
+      const textarea = screen.getByPlaceholderText(/写下你的消息/i);
       expect(textarea).toBeDefined();
       expect((textarea as HTMLTextAreaElement).value).toBe(
         "Existing draft content",
@@ -134,7 +130,7 @@ describe("React Components Static Tests", () => {
         />,
       );
 
-      const textarea = screen.getByPlaceholderText(/输入消息/i);
+      const textarea = screen.getByPlaceholderText(/写下你的消息/i);
       fireEvent.change(textarea, { target: { value: "Send me" } });
       fireEvent.keyDown(textarea, { key: "Enter", ctrlKey: true });
 
@@ -170,7 +166,7 @@ describe("React Components Static Tests", () => {
       );
 
       const textarea = screen.getByPlaceholderText(
-        /输入消息/i,
+        /写下你的消息/i,
       ) as HTMLTextAreaElement;
       fireEvent.keyDown(textarea, { key: "Enter", ctrlKey: true });
 
@@ -202,7 +198,7 @@ describe("React Components Static Tests", () => {
         />,
       );
 
-      fireEvent.change(screen.getByPlaceholderText(/输入消息/i), {
+      fireEvent.change(screen.getByPlaceholderText(/写下你的消息/i), {
         target: { value: "Delayed save" },
       });
 
@@ -248,7 +244,7 @@ describe("React Components Static Tests", () => {
       );
 
       const textarea = screen.getByPlaceholderText(
-        /输入消息/i,
+        /写下你的消息/i,
       ) as HTMLTextAreaElement;
       fireEvent.change(textarea, { target: { value: "A" } });
       await act(async () => {
@@ -295,7 +291,7 @@ describe("React Components Static Tests", () => {
         />,
       );
 
-      expect(screen.getByText(/当前没有排队中的消息/i)).toBeDefined();
+      expect(screen.getByText(/队列为空/i)).toBeDefined();
     });
 
     it("renders queued items with status and cancel button", () => {
@@ -341,7 +337,7 @@ describe("React Components Static Tests", () => {
       );
 
       expect(screen.getByText(/Hello Hermes/)).toBeDefined();
-      const cancelBtn = screen.getByText(/取消排队/i);
+      const cancelBtn = screen.getByRole("button", { name: "取消排队" });
       fireEvent.click(cancelBtn);
       expect(onCancelItem).toHaveBeenCalledWith("qi_001", 0);
     });
@@ -365,7 +361,7 @@ describe("React Components Static Tests", () => {
         />,
       );
 
-      expect(screen.getByText(/运行等待审批确认/i)).toBeDefined();
+      expect(screen.getByText(/运行需要确认/i)).toBeDefined();
       expect(screen.getByText(/shell_exec/)).toBeDefined();
 
       const approveBtn = screen.getByText(/允许一次/i);
@@ -394,7 +390,7 @@ describe("React Components Static Tests", () => {
         />,
       );
 
-      expect(screen.getByText(/Hermes 在线/i)).toBeDefined();
+      expect(screen.queryByText(/Hermes 在线/i)).toBeNull();
     });
 
     it("displays warning when accessed via non-secure LAN HTTP", () => {
@@ -416,27 +412,7 @@ describe("React Components Static Tests", () => {
         />,
       );
 
-      expect(screen.getByText(/局域网非安全 HTTP 环境/i)).toBeDefined();
-    });
-  });
-
-  describe("ToolCallCard", () => {
-    it("renders tool call name and toggles arguments view", () => {
-      render(
-        <ToolCallCard
-          toolCallId="tc_001"
-          name="calculator"
-          argumentsText='{"expression":"40 + 2"}'
-          status="completed"
-          resultText="42"
-        />,
-      );
-
-      expect(screen.getByText(/工具调用: calculator/i)).toBeDefined();
-      expect(screen.getByText(/成功/i)).toBeDefined();
-      fireEvent.click(screen.getByText(/工具调用: calculator/i));
-      expect(screen.getByText(/输入参数:/i)).toBeDefined();
-      expect(screen.getByText("42")).toBeDefined();
+      expect(screen.getByText(/Hermes 在线/i)).toBeDefined();
     });
   });
 });

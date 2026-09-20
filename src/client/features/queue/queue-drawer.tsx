@@ -1,4 +1,17 @@
 import React, { useState } from "react";
+import {
+  AlertCircle,
+  Check,
+  ChevronUp,
+  CircleDot,
+  Copy,
+  LoaderCircle,
+  Pencil,
+  RotateCcw,
+  Send,
+  Trash2,
+  X,
+} from "lucide-react";
 import type { QueueItemResponse } from "../../../shared/api-schemas.js";
 
 interface QueueDrawerProps {
@@ -36,12 +49,6 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
 
   if (!isOpen) return null;
 
-  const beginEdit = (item: QueueItemResponse) => {
-    setEditingItemId(item.id);
-    setEditedContent(item.content ?? "");
-    setActionError(null);
-  };
-
   const runAction = async (action: () => Promise<void>) => {
     setActionError(null);
     try {
@@ -51,232 +58,160 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
     }
   };
 
+  const activeItems = items.filter((item) => item.state !== "cancelled");
+
   return (
-    <div
-      role="dialog"
-      aria-label="会话消息队列"
-      style={{
-        position: "fixed",
-        top: 0,
-        right: 0,
-        bottom: 0,
-        width: "min(360px, 100vw)",
-        backgroundColor: "#1f2430",
-        color: "#cbccc6",
-        boxShadow: "-4px 0 16px rgba(0,0,0,0.5)",
-        zIndex: 100,
-        display: "flex",
-        flexDirection: "column",
-      }}
-    >
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          padding: "16px",
-          borderBottom: "1px solid #2d3345",
-        }}
-      >
-        <h3 style={{ margin: 0, fontSize: 16 }}>
-          会话消息队列 ({items.length})
-        </h3>
-        <button
-          aria-label="关闭队列"
-          onClick={onClose}
-          style={{
-            background: "none",
-            border: "none",
-            color: "#cbccc6",
-            cursor: "pointer",
-            fontSize: 18,
-          }}
-        >
-          x
+    <section className="queue-panel" aria-label="消息队列">
+      <div className="queue-header">
+        <div className="queue-header-title">
+          <CircleDot size={14} strokeWidth={1.8} />
+          <span>消息队列</span>
+          <span className="queue-count">{activeItems.length}</span>
+        </div>
+        <button type="button" onClick={onClose} aria-label="收起消息队列">
+          <ChevronUp size={14} strokeWidth={1.8} />
+          收起
         </button>
       </div>
 
       {paused && (
-        <div
-          style={{
-            padding: "12px 16px",
-            borderBottom: "1px solid #57411f",
-            background: "#372d18",
-          }}
-        >
-          <div style={{ color: "#ffcc66", fontSize: 13 }}>
-            队列已暂停{pauseReason ? `: ${pauseReason}` : ""}
-          </div>
-          <button
-            onClick={() => void runAction(onResume)}
-            style={secondaryButtonStyle}
-          >
-            继续后续队列
+        <div className="queue-warning">
+          <span>
+            队列已暂停
+            {pauseReason ? ` · ${formatPauseReason(pauseReason)}` : ""}
+          </span>
+          <button type="button" onClick={() => void runAction(onResume)}>
+            <RotateCcw size={12} />
+            继续
           </button>
         </div>
       )}
 
-      {actionError && (
-        <div
-          role="alert"
-          style={{ padding: "10px 16px", color: "#ff9999", fontSize: 12 }}
-        >
-          {actionError}
-        </div>
-      )}
+      {actionError && <div className="queue-error">{actionError}</div>}
 
-      <div style={{ flex: 1, overflowY: "auto", padding: 16 }}>
-        {items.length === 0 ? (
-          <div style={{ color: "#707a8c", textAlign: "center", marginTop: 40 }}>
-            当前没有排队中的消息
-          </div>
+      <div className="queue-items">
+        {activeItems.length === 0 ? (
+          <div className="sidebar-empty">队列为空</div>
         ) : (
-          items.map((item) => {
-            const state = item.state;
-            const queued = state === "queued";
-            const recovery = ["paused", "review_required", "rejected"].includes(
-              state,
-            );
-            const sequence = item.fifo_seq;
+          activeItems.map((item) => {
             const editing = editingItemId === item.id;
-
+            const recovery = ["paused", "review_required", "rejected"].includes(
+              item.state,
+            );
             return (
-              <div
-                key={item.id}
-                style={{
-                  backgroundColor: "#151922",
-                  borderRadius: 6,
-                  padding: 12,
-                  marginBottom: 12,
-                  border: "1px solid #2d3345",
-                }}
-              >
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    gap: 8,
-                    marginBottom: 8,
-                    fontSize: 12,
-                    color: "#707a8c",
-                  }}
-                >
-                  <span>#{sequence}</span>
-                  <span style={{ color: getStateColor(state) }}>
-                    {getStateLabel(state)}
-                  </span>
+              <div className="queue-item" key={item.id}>
+                <span className="queue-number">{item.fifo_seq}</span>
+                <div className="queue-item-main">
+                  {editing ? (
+                    <div className="queue-edit-content">
+                      <textarea
+                        className="queue-edit"
+                        value={editedContent}
+                        onChange={(event) =>
+                          setEditedContent(event.target.value)
+                        }
+                        rows={3}
+                        aria-label={`编辑第 ${item.fifo_seq} 条队列消息`}
+                      />
+                      <div className="queue-edit-actions">
+                        <button
+                          type="button"
+                          onClick={() => setEditingItemId(null)}
+                        >
+                          <X size={12} />
+                          取消
+                        </button>
+                        <button
+                          type="button"
+                          className="primary"
+                          disabled={!editedContent.trim()}
+                          onClick={() =>
+                            void runAction(async () => {
+                              await onEditItem(
+                                item.id,
+                                editedContent,
+                                item.revision,
+                              );
+                              setEditingItemId(null);
+                            })
+                          }
+                        >
+                          <Check size={12} />
+                          保存
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <span
+                        className={`queue-item-state ${getStateClass(item.state)}`}
+                      >
+                        {getStateIcon(item.state)}
+                        {getStateLabel(item.state)}
+                      </span>
+                      <span className="queue-item-content">
+                        {item.content || "正文已清除"}
+                      </span>
+                    </>
+                  )}
                 </div>
 
-                {editing ? (
-                  <>
-                    <textarea
-                      aria-label={`编辑队列消息 ${sequence}`}
-                      value={editedContent}
-                      onChange={(event) => setEditedContent(event.target.value)}
-                      rows={4}
-                      style={{ ...editorStyle, marginBottom: 8 }}
-                    />
-                    <div
-                      style={{
-                        display: "flex",
-                        justifyContent: "flex-end",
-                        gap: 8,
-                      }}
-                    >
+                {!editing && (
+                  <div className="queue-item-actions">
+                    {item.state === "queued" && (
+                      <>
+                        <button
+                          type="button"
+                          title="编辑消息"
+                          aria-label="编辑消息"
+                          onClick={() => {
+                            setEditedContent(item.content ?? "");
+                            setEditingItemId(item.id);
+                            setActionError(null);
+                          }}
+                        >
+                          <Pencil size={13} />
+                        </button>
+                        <button
+                          type="button"
+                          className="danger"
+                          title="取消排队"
+                          aria-label="取消排队"
+                          onClick={() =>
+                            void runAction(() =>
+                              onCancelItem(item.id, item.revision),
+                            )
+                          }
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </>
+                    )}
+                    {recovery && item.payload_available && (
                       <button
-                        onClick={() => setEditingItemId(null)}
-                        style={secondaryButtonStyle}
-                      >
-                        取消
-                      </button>
-                      <button
-                        disabled={!editedContent.trim()}
-                        onClick={() => {
-                          void runAction(async () => {
-                            await onEditItem(
-                              item.id,
-                              editedContent,
-                              item.revision,
-                            );
-                            setEditingItemId(null);
-                          });
-                        }}
-                        style={primaryButtonStyle}
-                      >
-                        保存修改
-                      </button>
-                    </div>
-                  </>
-                ) : (
-                  <div
-                    style={{
-                      fontSize: 14,
-                      lineHeight: 1.4,
-                      maxHeight: 60,
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "pre-wrap",
-                      marginBottom: 8,
-                    }}
-                  >
-                    {item.content ?? "正文已清除"}
-                  </div>
-                )}
-
-                {!editing && queued && (
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "flex-end",
-                      gap: 8,
-                    }}
-                  >
-                    <button
-                      onClick={() => beginEdit(item)}
-                      style={secondaryButtonStyle}
-                    >
-                      编辑
-                    </button>
-                    <button
-                      onClick={() =>
-                        void runAction(() =>
-                          onCancelItem(item.id, item.revision),
-                        )
-                      }
-                      style={dangerButtonStyle}
-                    >
-                      取消排队
-                    </button>
-                  </div>
-                )}
-
-                {!editing && recovery && (
-                  <div
-                    style={{
-                      display: "flex",
-                      flexWrap: "wrap",
-                      justifyContent: "flex-end",
-                      gap: 8,
-                    }}
-                  >
-                    {item.payload_available && (
-                      <button
+                        type="button"
+                        title="复制到草稿"
+                        aria-label="复制到草稿"
                         onClick={() =>
                           void runAction(() => onCopyToDraft(item.id))
                         }
-                        style={secondaryButtonStyle}
                       >
-                        复制为新草稿
+                        <Copy size={13} />
                       </button>
                     )}
-                    <button
-                      onClick={() =>
-                        void runAction(() => onDiscardRecovery(item.id))
-                      }
-                      style={dangerButtonStyle}
-                    >
-                      丢弃恢复副本
-                    </button>
+                    {recovery && (
+                      <button
+                        type="button"
+                        className="danger"
+                        title="丢弃恢复副本"
+                        aria-label="丢弃恢复副本"
+                        onClick={() =>
+                          void runAction(() => onDiscardRecovery(item.id))
+                        }
+                      >
+                        <X size={13} />
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -284,7 +219,7 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
           })
         )}
       </div>
-    </div>
+    </section>
   );
 };
 
@@ -293,63 +228,48 @@ function getStateLabel(state: string): string {
     queued: "等待发送",
     dispatching: "正在提交",
     accepted: "运行中",
-    reconciling: "正在核对结果",
+    reconciling: "核对结果",
     done: "已完成",
     paused: "已暂停",
-    review_required: "需要人工复核",
-    rejected: "提交被拒绝",
+    review_required: "需要复核",
+    rejected: "已拒绝",
     cancelled: "已取消",
   };
   return labels[state] ?? state;
 }
 
-function getStateColor(state: string): string {
-  if (state === "queued") return "#73d0ff";
-  if (state === "dispatching" || state === "accepted") return "#ffb454";
-  if (state === "done") return "#7fd962";
-  if (state === "paused" || state === "review_required" || state === "rejected")
-    return "#ff9999";
-  return "#cbccc6";
+function getStateClass(state: string): string {
+  if (state === "queued") return "queued";
+  if (["dispatching", "accepted", "reconciling"].includes(state))
+    return "running";
+  if (["paused", "review_required", "rejected"].includes(state))
+    return "recovery";
+  if (state === "done") return "done";
+  return "";
 }
 
-const primaryButtonStyle: React.CSSProperties = {
-  background: "#2563eb",
-  color: "#fff",
-  border: "none",
-  borderRadius: 4,
-  padding: "5px 9px",
-  fontSize: 12,
-  cursor: "pointer",
-};
+function getStateIcon(state: string) {
+  if (["dispatching", "accepted", "reconciling"].includes(state)) {
+    return <LoaderCircle size={12} className="spin" />;
+  }
+  if (state === "done") return <Check size={12} />;
+  if (["paused", "review_required", "rejected"].includes(state)) {
+    return <AlertCircle size={12} />;
+  }
+  return <Send size={12} />;
+}
 
-const secondaryButtonStyle: React.CSSProperties = {
-  background: "transparent",
-  color: "#cbccc6",
-  border: "1px solid #3e4b59",
-  borderRadius: 4,
-  padding: "5px 9px",
-  fontSize: 12,
-  cursor: "pointer",
-  marginTop: 8,
-};
-
-const dangerButtonStyle: React.CSSProperties = {
-  background: "#b84545",
-  color: "#fff",
-  border: "none",
-  borderRadius: 4,
-  padding: "5px 9px",
-  fontSize: 12,
-  cursor: "pointer",
-};
-
-const editorStyle: React.CSSProperties = {
-  width: "100%",
-  resize: "vertical",
-  color: "#cbccc6",
-  background: "#0f131c",
-  border: "1px solid #3e4b59",
-  borderRadius: 4,
-  padding: 8,
-  font: "inherit",
-};
+function formatPauseReason(reason: string): string {
+  const labels: Record<string, string> = {
+    run_failed: "运行失败",
+    run_partial: "运行不完整",
+    run_cancelled: "运行已取消",
+    run_interrupted: "运行被中断",
+    user_stopped: "手动停止",
+    submission_rejected: "提交被拒绝",
+    reconciliation_failed: "状态核对失败",
+    review_required: "需要人工复核",
+    manual_resume_required: "等待手动继续",
+  };
+  return labels[reason] ?? reason;
+}

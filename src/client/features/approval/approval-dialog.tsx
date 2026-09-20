@@ -1,4 +1,5 @@
 import React from "react";
+import { ShieldAlert, X } from "lucide-react";
 
 interface ApprovalDialogProps {
   isOpen: boolean;
@@ -22,93 +23,42 @@ export const ApprovalDialog: React.FC<ApprovalDialogProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div
-      style={{
-        position: "fixed",
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        backgroundColor: "rgba(0,0,0,0.65)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: 200,
-      }}
-    >
+    <div className="confirmation-backdrop" role="presentation">
       <div
-        style={{
-          width: 480,
-          backgroundColor: "#1f2430",
-          borderRadius: 8,
-          border: "1px solid #3e4b59",
-          color: "#cbccc6",
-          padding: 24,
-          boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
-        }}
+        className="approval-card"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="approval-title"
       >
-        <h3 style={{ margin: "0 0 12px 0", color: "#ffb454" }}>
-          ⚠️ 运行等待审批确认
+        <h3 id="approval-title" className="approval-title">
+          <ShieldAlert size={18} />
+          运行需要确认
         </h3>
-        <p style={{ fontSize: 13, color: "#707a8c", margin: "0 0 16px 0" }}>
-          Run ID: {runId} | 原因: {reason}
+        <p>Hermes 正在等待工具审批。你可以允许这一次、拒绝，或停止当前运行。</p>
+        <p>
+          <code>{runId}</code> · {reason}
         </p>
-
-        {details && (
-          <pre
-            style={{
-              backgroundColor: "#151922",
-              padding: 12,
-              borderRadius: 4,
-              fontSize: 12,
-              maxHeight: 200,
-              overflow: "auto",
-              border: "1px solid #2d3345",
-              margin: "0 0 20px 0",
-            }}
-          >
-            {JSON.stringify(details, null, 2)}
-          </pre>
-        )}
-
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 12 }}>
+        {details && <pre>{JSON.stringify(details, null, 2)}</pre>}
+        <div className="approval-actions">
           <button
-            onClick={onCancel}
-            style={{
-              backgroundColor: "transparent",
-              color: "#cbccc6",
-              border: "1px solid #3e4b59",
-              borderRadius: 4,
-              padding: "6px 12px",
-              cursor: "pointer",
-            }}
+            type="button"
+            className="button-secondary"
+            onClick={() => void onCancel()}
           >
+            <X size={13} />
             停止运行
           </button>
           <button
-            onClick={onReject}
-            style={{
-              backgroundColor: "#d95757",
-              color: "#fff",
-              border: "none",
-              borderRadius: 4,
-              padding: "6px 12px",
-              cursor: "pointer",
-            }}
+            type="button"
+            className="button-danger"
+            onClick={() => void onReject()}
           >
             拒绝
           </button>
           <button
-            onClick={onApprove}
-            style={{
-              backgroundColor: "#7fd962",
-              color: "#151922",
-              fontWeight: "bold",
-              border: "none",
-              borderRadius: 4,
-              padding: "6px 16px",
-              cursor: "pointer",
-            }}
+            type="button"
+            className="button-primary"
+            onClick={() => void onApprove()}
           >
             允许一次
           </button>
