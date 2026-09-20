@@ -17,7 +17,7 @@ import { ConversationList } from "./features/conversations/conversation-list.js"
 import { CurrentSegmentBanner } from "./features/messages/current-segment-banner.js";
 import { MessageView } from "./features/messages/message-view.js";
 import { DraftComposer } from "./features/composer/draft-composer.js";
-import { QueueDrawer } from "./features/queue/queue-drawer.js";
+import { QueuePanel } from "./features/queue/queue-panel.js";
 import { ApprovalDialog } from "./features/approval/approval-dialog.js";
 import {
   PreferencesDrawer,
@@ -180,10 +180,7 @@ export function AppShell() {
 
     if (queueResult.status === "fulfilled") {
       setQueue(queueResult.value);
-      setQueueOpen(
-        (open) =>
-          open || queueResult.value.data.length > 0 || queueResult.value.paused,
-      );
+      setQueueOpen((open) => open || hasActiveQueueItems(queueResult.value));
       const runId = getCurrentRunId(queueResult.value);
       if (runId) {
         try {
@@ -666,7 +663,7 @@ export function AppShell() {
                 >
                   <ListTodo size={14} strokeWidth={1.8} />
                   <span className="queue-toolbar-label">
-                    {queue?.data.length ?? 0}
+                    {getActiveQueueCount(queue)}
                   </span>
                 </button>
                 <button
@@ -731,8 +728,8 @@ export function AppShell() {
 
             <div className="composer-shell">
               <div className="composer-inner">
-                {queueOpen && queue && (
-                  <QueueDrawer
+                {queueOpen && queue && hasActiveQueueItems(queue) && (
+                  <QueuePanel
                     isOpen={queueOpen}
                     onClose={() => setQueueOpen(false)}
                     items={queue.data}
@@ -885,6 +882,23 @@ function isLiveRun(run: RunResponse | null): boolean {
     run.upstream_status === "running" ||
     run.upstream_status === "waiting_for_approval" ||
     run.upstream_status === "stopping"
+  );
+}
+
+function hasActiveQueueItems(queue: QueueListResponse): boolean {
+  return (
+    queue.paused ||
+    queue.data.some(
+      (item) => item.state !== "done" && item.state !== "cancelled",
+    )
+  );
+}
+
+function getActiveQueueCount(queue: QueueListResponse | null): number {
+  return (
+    queue?.data.filter(
+      (item) => item.state !== "done" && item.state !== "cancelled",
+    ).length ?? 0
   );
 }
 

@@ -10,7 +10,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { DraftComposer } from "../../src/client/features/composer/draft-composer";
-import { QueueDrawer } from "../../src/client/features/queue/queue-drawer";
+import { QueuePanel } from "../../src/client/features/queue/queue-panel";
 import { ApprovalDialog } from "../../src/client/features/approval/approval-dialog";
 import { StatusBar } from "../../src/client/features/status/status-bar";
 import { ConversationList } from "../../src/client/features/conversations/conversation-list";
@@ -274,10 +274,10 @@ describe("React Components Static Tests", () => {
     });
   });
 
-  describe("QueueDrawer", () => {
+  describe("QueuePanel", () => {
     it("renders empty placeholder when queue is empty", () => {
       render(
-        <QueueDrawer
+        <QueuePanel
           isOpen={true}
           onClose={vi.fn()}
           items={[]}
@@ -294,8 +294,9 @@ describe("React Components Static Tests", () => {
       expect(screen.getByText(/队列为空/i)).toBeDefined();
     });
 
-    it("renders queued items with status and cancel button", () => {
+    it("renders queued items with inline edit and delete actions", async () => {
       const onCancelItem = vi.fn();
+      const onEditItem = vi.fn().mockResolvedValue(undefined);
       const items = [
         {
           id: "qi_001",
@@ -318,7 +319,7 @@ describe("React Components Static Tests", () => {
       ];
 
       render(
-        <QueueDrawer
+        <QueuePanel
           isOpen={true}
           onClose={vi.fn()}
           items={items}
@@ -329,7 +330,7 @@ describe("React Components Static Tests", () => {
             .mockImplementation(async (id: string, revision: number) =>
               onCancelItem(id, revision),
             )}
-          onEditItem={vi.fn().mockResolvedValue(undefined)}
+          onEditItem={onEditItem}
           onResume={vi.fn().mockResolvedValue(undefined)}
           onCopyToDraft={vi.fn().mockResolvedValue(undefined)}
           onDiscardRecovery={vi.fn().mockResolvedValue(undefined)}
@@ -337,7 +338,19 @@ describe("React Components Static Tests", () => {
       );
 
       expect(screen.getByText(/Hello Hermes/)).toBeDefined();
-      const cancelBtn = screen.getByRole("button", { name: "取消排队" });
+      fireEvent.click(screen.getByRole("button", { name: "编辑排队消息" }));
+      const editor = screen.getByRole("textbox", {
+        name: "编辑第 1 条队列消息",
+      });
+      fireEvent.change(editor, { target: { value: "Updated Hermes" } });
+      fireEvent.click(screen.getByRole("button", { name: "保存消息" }));
+      await waitFor(() => {
+        expect(onEditItem).toHaveBeenCalledWith("qi_001", "Updated Hermes", 0);
+      });
+
+      const cancelBtn = screen.getByRole("button", {
+        name: "删除排队消息",
+      });
       fireEvent.click(cancelBtn);
       expect(onCancelItem).toHaveBeenCalledWith("qi_001", 0);
     });
