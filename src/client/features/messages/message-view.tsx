@@ -1,10 +1,19 @@
-import React from "react";
+import React, { useEffect, useRef } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
-import { Bot, ChevronDown, Terminal, UserRound, Wrench } from "lucide-react";
+import {
+  Bot,
+  ChevronDown,
+  LoaderCircle,
+  RefreshCw,
+  Square,
+  Terminal,
+  UserRound,
+  Wrench,
+} from "lucide-react";
 import type { MessageItem } from "../../../shared/api-schemas.js";
 import {
   getRenderableMessages,
@@ -14,15 +23,31 @@ import {
 export interface MessageViewProps {
   messages: MessageItem[];
   loading: boolean;
+  isGenerating?: boolean;
+  streamingContent?: string;
+  onStopGenerating?: (() => void) | undefined;
+  onReconcile?: (() => void) | undefined;
 }
 
 export const MessageView: React.FC<MessageViewProps> = ({
   messages,
   loading,
+  isGenerating = false,
+  streamingContent = "",
+  onStopGenerating,
+  onReconcile,
 }) => {
   const renderableMessages = getRenderableMessages(messages);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const stickToBottomRef = useRef(true);
 
-  if (loading && renderableMessages.length === 0) {
+  useEffect(() => {
+    const scroller = scrollRef.current;
+    if (!scroller || !stickToBottomRef.current) return;
+    scroller.scrollTop = scroller.scrollHeight;
+  }, [isGenerating, renderableMessages.length, streamingContent]);
+
+  if (loading && renderableMessages.length === 0 && !isGenerating) {
     return (
       <div className="message-scroll">
         <div className="message-empty">正在加载会话历史</div>
@@ -30,7 +55,7 @@ export const MessageView: React.FC<MessageViewProps> = ({
     );
   }
 
-  if (renderableMessages.length === 0) {
+  if (renderableMessages.length === 0 && !isGenerating) {
     return (
       <div className="message-scroll">
         <div className="message-empty">
@@ -47,11 +72,26 @@ export const MessageView: React.FC<MessageViewProps> = ({
   }
 
   return (
-    <div className="message-scroll" aria-label="聊天消息">
+    <div
+      ref={scrollRef}
+      className="message-scroll"
+      aria-label="聊天消息"
+      onScroll={(event) => {
+        const { scrollHeight, scrollTop, clientHeight } = event.currentTarget;
+        stickToBottomRef.current = scrollHeight - scrollTop - clientHeight < 80;
+      }}
+    >
       <div className="message-list" role="log" aria-live="polite">
         {renderableMessages.map((message) => (
           <MessageRow key={message.id} message={message} />
         ))}
+        {isGenerating && (
+          <LiveAssistantRow
+            content={streamingContent}
+            onStopGenerating={onStopGenerating}
+            onReconcile={onReconcile}
+          />
+        )}
       </div>
     </div>
   );
@@ -110,6 +150,65 @@ function MessageRow({ message }: { message: MessageItem }) {
         {message.content && !message.tool_name && (
           <div className="message-body">
             <MarkdownContent text={message.content} />
+          </div>
+        )}
+      </div>
+    </article>
+  );
+}
+
+function LiveAssistantRow({
+  content,
+  onStopGenerating,
+  onReconcile,
+}: {
+  content: string;
+  onStopGenerating?: (() => void) | undefined;
+  onReconcile?: (() => void) | undefined;
+}) {
+  return (
+    <article className="message-row assistant assistant-live" role="status">
+      <div className="message-avatar" aria-hidden="true">
+        <Bot size={14} strokeWidth={1.8} />
+      </div>
+      <div className="message-content-wrap">
+        <div className="message-meta assistant-live-meta">
+          <span className="message-role">Hermes</span>
+          {(onStopGenerating || onReconcile) && (
+            <div className="assistant-live-actions">
+              {onReconcile && (
+                <button
+                  type="button"
+                  className="assistant-live-action"
+                  onClick={onReconcile}
+                  aria-label="重新核对运行状态"
+                  title="重新核对运行状态"
+                >
+                  <RefreshCw size={13} strokeWidth={1.8} />
+                </button>
+              )}
+              {onStopGenerating && (
+                <button
+                  type="button"
+                  className="assistant-live-action danger"
+                  onClick={onStopGenerating}
+                  aria-label="停止生成"
+                  title="停止生成"
+                >
+                  <Square size={11} fill="currentColor" />
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+        {content ? (
+          <div className="message-body is-streaming">
+            <MarkdownContent text={content} />
+          </div>
+        ) : (
+          <div className="assistant-thinking" aria-label="Hermes 正在生成">
+            <LoaderCircle size={16} strokeWidth={1.9} />
+            <span className="assistant-stream-cursor" aria-hidden="true" />
           </div>
         )}
       </div>

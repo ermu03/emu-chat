@@ -93,13 +93,6 @@ export const QueuePanel: React.FC<QueuePanelProps> = ({
 
               return (
                 <div className="queue-item" key={item.id}>
-                  <div className="queue-item-leading">
-                    <span className="queue-number">{item.fifo_seq}</span>
-                    <span className="queue-item-state queued">
-                      <Clock3 size={13} />
-                    </span>
-                  </div>
-
                   <div className="queue-item-main">
                     {editing ? (
                       <div className="queue-edit-content">
@@ -110,7 +103,7 @@ export const QueuePanel: React.FC<QueuePanelProps> = ({
                             setEditedContent(event.target.value)
                           }
                           rows={3}
-                          aria-label={`编辑第 ${item.fifo_seq} 条队列消息`}
+                          aria-label="编辑排队消息"
                           autoFocus
                         />
                         <div className="queue-edit-actions">
@@ -145,7 +138,10 @@ export const QueuePanel: React.FC<QueuePanelProps> = ({
                       </div>
                     ) : (
                       <>
-                        <div className="queue-item-label">等待当前回复完成</div>
+                        <div className="queue-item-status">
+                          <Clock3 size={13} strokeWidth={1.8} />
+                          <span>等待当前回复结束后发送</span>
+                        </div>
                         <div className="queue-item-content">
                           {item.content || "正文已清除"}
                         </div>

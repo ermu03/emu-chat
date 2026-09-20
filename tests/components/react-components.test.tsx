@@ -14,6 +14,7 @@ import { QueuePanel } from "../../src/client/features/queue/queue-panel";
 import { ApprovalDialog } from "../../src/client/features/approval/approval-dialog";
 import { StatusBar } from "../../src/client/features/status/status-bar";
 import { ConversationList } from "../../src/client/features/conversations/conversation-list";
+import { MessageView } from "../../src/client/features/messages/message-view";
 
 afterEach(() => {
   cleanup();
@@ -333,9 +334,10 @@ describe("React Components Static Tests", () => {
       );
 
       expect(screen.getByText(/Hello Hermes/)).toBeDefined();
+      expect(screen.getByText("等待当前回复结束后发送")).toBeDefined();
       fireEvent.click(screen.getByRole("button", { name: "编辑排队消息" }));
       const editor = screen.getByRole("textbox", {
-        name: "编辑第 1 条队列消息",
+        name: "编辑排队消息",
       });
       fireEvent.change(editor, { target: { value: "Updated Hermes" } });
       fireEvent.click(screen.getByRole("button", { name: "保存消息" }));
@@ -348,6 +350,26 @@ describe("React Components Static Tests", () => {
       });
       fireEvent.click(cancelBtn);
       expect(onCancelItem).toHaveBeenCalledWith("qi_001", 0);
+    });
+  });
+
+  describe("MessageView activity", () => {
+    it("shows Hermes in the message flow while a response is being streamed", () => {
+      const onStopGenerating = vi.fn();
+      render(
+        <MessageView
+          messages={[]}
+          loading={false}
+          isGenerating={true}
+          streamingContent="正在流式输出"
+          onStopGenerating={onStopGenerating}
+        />,
+      );
+
+      expect(screen.getByText("Hermes")).toBeDefined();
+      expect(screen.getByText("正在流式输出")).toBeDefined();
+      fireEvent.click(screen.getByRole("button", { name: "停止生成" }));
+      expect(onStopGenerating).toHaveBeenCalledTimes(1);
     });
   });
 

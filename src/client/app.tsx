@@ -14,7 +14,6 @@ import type {
 } from "../shared/api-schemas.js";
 import { StatusBar } from "./features/status/status-bar.js";
 import { ConversationList } from "./features/conversations/conversation-list.js";
-import { CurrentSegmentBanner } from "./features/messages/current-segment-banner.js";
 import { MessageView } from "./features/messages/message-view.js";
 import { DraftComposer } from "./features/composer/draft-composer.js";
 import { QueuePanel } from "./features/queue/queue-panel.js";
@@ -30,13 +29,7 @@ import {
   PreferencesDrawer,
   type PreferencesState,
 } from "./features/preferences/preferences-drawer.js";
-import {
-  MessageSquarePlus,
-  Menu,
-  RefreshCw,
-  Settings2,
-  Square,
-} from "lucide-react";
+import { MessageSquarePlus, Menu, Settings2 } from "lucide-react";
 import {
   useStreamEvents,
   type RunStreamEvent,
@@ -90,6 +83,8 @@ export function AppShell() {
   const queueRef = useRef<QueueListResponse | null>(null);
   const pendingSendRef = useRef<PendingSend | null>(null);
   const previousQueuedMessageCountRef = useRef(0);
+  const streamedAssistantRunIdRef = useRef<string | null>(null);
+  const [streamedAssistantContent, setStreamedAssistantContent] = useState("");
 
   useEffect(() => {
     activeConversationIdRef.current = activeConversationId;
@@ -106,6 +101,17 @@ export function AppShell() {
   useEffect(() => {
     setStreamNotice(null);
   }, [activeConversationId, activeRun?.id]);
+
+  useEffect(() => {
+    setStreamedAssistantContent("");
+    streamedAssistantRunIdRef.current = null;
+  }, [activeConversationId]);
+
+  useEffect(() => {
+    if (activeRun?.id && streamedAssistantRunIdRef.current !== activeRun.id) {
+      setStreamedAssistantContent("");
+    }
+  }, [activeRun?.id]);
 
   const loadStatus = useCallback(async (recheck = false) => {
     setStatusLoading(true);
@@ -245,6 +251,10 @@ export function AppShell() {
           });
           if (activeConversationIdRef.current === conversationId) {
             setMessages(messageResponse.items);
+            if (streamedAssistantRunIdRef.current === run.id) {
+              setStreamedAssistantContent("");
+              streamedAssistantRunIdRef.current = null;
+            }
           }
         }
       } catch (error) {
@@ -274,12 +284,27 @@ export function AppShell() {
       if (event.event !== "run.event" || typeof event.data.type !== "string")
         return;
       const type = event.data.type;
+      if (type === "message.delta") {
+        const payload = event.data.payload;
+        const delta =
+          payload &&
+          typeof payload === "object" &&
+          typeof (payload as Record<string, unknown>).delta === "string"
+            ? (payload as Record<string, unknown>).delta
+            : "";
+        if (delta) {
+          streamedAssistantRunIdRef.current = eventRunId;
+          setStreamedAssistantContent((content) => content + delta);
+        }
+        return;
+      }
       if (
         type === "approval.request" ||
         type === "run.completed" ||
         type === "run.failed" ||
         type === "run.cancelled" ||
-        type === "run.interrupted"
+        type === "run.interrupted" ||
+        type === "run.reconciled"
       ) {
         void refreshRuntime(conversationId, eventRunId);
       }
@@ -463,6 +488,10 @@ export function AppShell() {
       activeRunRef.current,
       queueRef.current,
     );
+    if (!isFollowUp) {
+      setStreamedAssistantContent("");
+      streamedAssistantRunIdRef.current = null;
+    }
 
     let pending = pendingSendRef.current;
     if (
@@ -592,6 +621,10 @@ export function AppShell() {
     activeRun?.local_state === "reconciling" ||
     (activeRun?.local_state === "review_required" &&
       activeRun.hermes_run_id !== null);
+  const isAssistantReplying =
+    agentGenerating &&
+    activeRun?.upstream_status !== "waiting_for_approval" &&
+    activeRun?.upstream_status !== "stopping";
 
   return (
     <div className="app-shell">
@@ -663,7 +696,6 @@ export function AppShell() {
                 </div>
               </div>
               <div className="main-toolbar-end">
-                <CurrentSegmentBanner conversation={activeConversation} />
                 <button
                   type="button"
                   className="icon-button"
@@ -682,40 +714,6 @@ export function AppShell() {
               onRecheck={() => void loadStatus(true)}
             />
 
-            {agentGenerating && (
-              <div className="run-strip" aria-live="polite">
-                <div className="run-strip-label">
-                  <span className="status-dot running" />
-                  <span>
-                    {activeRun && isLiveRun(activeRun)
-                      ? getRunLabel(activeRun)
-                      : "Agent 正在生成"}
-                  </span>
-                </div>
-                <div className="run-strip-actions">
-                  {showStop && (
-                    <button
-                      type="button"
-                      className="danger"
-                      onClick={() => void handleStopRun()}
-                    >
-                      <Square size={11} fill="currentColor" />
-                      停止
-                    </button>
-                  )}
-                  {showReconcile && (
-                    <button
-                      type="button"
-                      onClick={() => void handleReconcile()}
-                    >
-                      <RefreshCw size={11} />
-                      重新核对
-                    </button>
-                  )}
-                </div>
-              </div>
-            )}
-
             {(streamNotice || stream.isReconnecting) && (
               <div className="workspace-alert" role="status">
                 <span>
@@ -724,7 +722,18 @@ export function AppShell() {
               </div>
             )}
 
-            <MessageView messages={messages} loading={messagesLoading} />
+            <MessageView
+              messages={messages}
+              loading={messagesLoading}
+              isGenerating={isAssistantReplying}
+              streamingContent={streamedAssistantContent}
+              onStopGenerating={
+                showStop ? () => void handleStopRun() : undefined
+              }
+              onReconcile={
+                showReconcile ? () => void handleReconcile() : undefined
+              }
+            />
 
             <div className="composer-shell">
               <div className="composer-inner">
@@ -852,12 +861,6 @@ function getConversationIdFromPath(pathname: string): string | null {
   } catch {
     return null;
   }
-}
-
-function getRunLabel(run: RunResponse): string {
-  if (run.upstream_status === "waiting_for_approval") return "运行等待确认";
-  if (run.upstream_status === "stopping") return "正在停止运行";
-  return "Agent 正在生成";
 }
 
 function upsertQueueItem(
