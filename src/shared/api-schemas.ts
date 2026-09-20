@@ -66,13 +66,9 @@ export const GetConversationsQuerySchema = z
       .max(LIMITS.SESSION_LIST_PAGE_MAX)
       .default(LIMITS.SESSION_LIST_PAGE_DEFAULT),
     offset: z.coerce.number().int().min(0).default(0),
-    session_id: z.string().min(1).optional(),
     title: z.string().min(1).optional(),
   })
-  .strict()
-  .refine((value) => !(value.session_id && value.title), {
-    message: "session_id and title are mutually exclusive",
-  });
+  .strict();
 export type GetConversationsQuery = z.infer<typeof GetConversationsQuerySchema>;
 
 export const GetMessagesQuerySchema = z
@@ -179,7 +175,7 @@ export type PatchLocalMetadataRequest = z.infer<
 >;
 
 export const DeleteConversationRequestSchema = z.object({
-  expected_hermes_session_id: z.string(),
+  expected_hermes_session_id: z.string().min(1),
   confirmed: z.boolean(),
 });
 export type DeleteConversationRequest = z.infer<
@@ -239,9 +235,6 @@ export const PutDraftRequestSchema = z
   })
   .strict();
 export type PutDraftRequest = z.infer<typeof PutDraftRequestSchema>;
-
-// Lowercase aliases kept for the original route implementation.
-export const putDraftRequestSchema = PutDraftRequestSchema;
 
 // --- Queue ---
 export const QueueItemResponseSchema = z.object({
@@ -351,8 +344,6 @@ export const RunApprovalSchema = z.object({
   deadline_at: z.string().optional(),
 });
 export type RunApproval = z.infer<typeof RunApprovalSchema>;
-export const RunWaitingApprovalSchema = RunApprovalSchema;
-export type RunWaitingApproval = RunApproval;
 
 export const RunResponseSchema = z.object({
   object: z.literal("emu_chat.run"),
@@ -411,8 +402,6 @@ export const PutPreferencesRequestSchema = z.object({
   expected_revision: z.number().int().nonnegative(),
 });
 export type PutPreferencesRequest = z.infer<typeof PutPreferencesRequestSchema>;
-
-export const putPreferencesRequestSchema = PutPreferencesRequestSchema;
 
 // --- SSE Event Schemas ---
 export const SseRunDeltaPayloadSchema = z.object({

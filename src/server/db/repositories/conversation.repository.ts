@@ -4,7 +4,11 @@ import type {
   DraftEntity,
   UiPreferencesEntity,
 } from "../schema-types.js";
-import { ConflictError, NotFoundError } from "../../domain/errors.js";
+import {
+  LocalConflictError,
+  LocalNotFoundError,
+  StateConflictError,
+} from "../../domain/errors.js";
 import { withImmediateTransaction } from "../transaction.js";
 
 export class ConversationRepository {
@@ -98,36 +102,35 @@ export class ConversationRepository {
       custom_order?: number | null;
     },
   ): ConversationEntity {
-    const current = this.findById(id);
-    if (!current) {
-      throw new NotFoundError("Conversation not found");
-    }
-    if (current.metadata_revision !== expectedRevision) {
-      throw new ConflictError("Conversation metadata revision conflict");
-    }
+    return withImmediateTransaction(this.db, () => {
+      const current = this.requireWritableConversation(id);
+      if (current.metadata_revision !== expectedRevision) {
+        throw new LocalConflictError("Conversation metadata revision conflict");
+      }
 
-    const nextRevision = expectedRevision + 1;
-    const now = new Date().toISOString();
-    const tags =
-      patch.tags_json !== undefined ? patch.tags_json : current.tags_json;
-    const order =
-      patch.custom_order !== undefined
-        ? patch.custom_order
-        : current.custom_order;
+      const nextRevision = expectedRevision + 1;
+      const now = new Date().toISOString();
+      const tags =
+        patch.tags_json !== undefined ? patch.tags_json : current.tags_json;
+      const order =
+        patch.custom_order !== undefined
+          ? patch.custom_order
+          : current.custom_order;
 
-    const res = this.db
-      .prepare(
-        `UPDATE conversations
-         SET tags_json = ?, custom_order = ?, metadata_revision = ?, updated_at = ?
-         WHERE id = ? AND metadata_revision = ?`,
-      )
-      .run(tags, order, nextRevision, now, id, expectedRevision);
+      const res = this.db
+        .prepare(
+          `UPDATE conversations
+           SET tags_json = ?, custom_order = ?, metadata_revision = ?, updated_at = ?
+           WHERE id = ? AND metadata_revision = ?`,
+        )
+        .run(tags, order, nextRevision, now, id, expectedRevision);
 
-    if (res.changes === 0) {
-      throw new ConflictError("Conversation metadata revision conflict");
-    }
+      if (res.changes === 0) {
+        throw new LocalConflictError("Conversation metadata revision conflict");
+      }
 
-    return this.findById(id)!;
+      return this.findById(id)!;
+    });
   }
 
   setQueuePaused(
@@ -135,19 +138,22 @@ export class ConversationRepository {
     paused: boolean,
     pauseReason: string | null,
   ): ConversationEntity {
-    const now = new Date().toISOString();
-    const res = this.db
-      .prepare(
-        `UPDATE conversations
-         SET queue_paused = ?, pause_reason = ?, updated_at = ?
-         WHERE id = ?`,
-      )
-      .run(paused ? 1 : 0, paused ? pauseReason : null, now, id);
+    return withImmediateTransaction(this.db, () => {
+      this.requireWritableConversation(id);
+      const now = new Date().toISOString();
+      const res = this.db
+        .prepare(
+          `UPDATE conversations
+           SET queue_paused = ?, pause_reason = ?, updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(paused ? 1 : 0, paused ? pauseReason : null, now, id);
 
-    if (res.changes === 0) {
-      throw new NotFoundError("Conversation not found");
-    }
-    return this.findById(id)!;
+      if (res.changes === 0) {
+        throw new LocalNotFoundError("Conversation not found");
+      }
+      return this.findById(id)!;
+    });
   }
 
   setDeleteState(
@@ -165,25 +171,86 @@ export class ConversationRepository {
       .run(deleteState, deleteErrorCode, now, id);
 
     if (res.changes === 0) {
-      throw new NotFoundError("Conversation not found");
+      throw new LocalNotFoundError("Conversation not found");
     }
     return this.findById(id)!;
   }
 
-  updateHermesSessionId(id: string, newSessionId: string): ConversationEntity {
-    const now = new Date().toISOString();
-    const res = this.db
-      .prepare(
-        `UPDATE conversations
-         SET hermes_session_id = ?, updated_at = ?
-         WHERE id = ?`,
-      )
-      .run(newSessionId, now, id);
+  /**
+   * Move a stable local conversation to Hermes' effective session segment.
+   * A list refresh may have already created a projection for that segment.
+   * It is safe to discard only the untouched projection created by that read.
+   */
+  adoptEffectiveHermesSessionId(
+    id: string,
+    newSessionId: string,
+  ): ConversationEntity {
+    return withImmediateTransaction(this.db, () => {
+      const source = this.requireWritableConversation(id);
+      if (source.hermes_session_id === newSessionId) return source;
 
-    if (res.changes === 0) {
-      throw new NotFoundError("Conversation not found");
-    }
-    return this.findById(id)!;
+      const target = this.findBySessionId(newSessionId);
+      if (target && target.id !== source.id) {
+        if (this.hasMaterialLocalState(target)) {
+          throw new LocalConflictError(
+            "Effective Hermes session already has local conversation state",
+            {
+              source_conversation_id: source.id,
+              target_conversation_id: target.id,
+              hermes_session_id: newSessionId,
+            },
+          );
+        }
+        // coordinator_leases intentionally has no foreign key to a
+        // conversation, so remove the empty target's lease explicitly.
+        this.db
+          .prepare(
+            "DELETE FROM coordinator_leases WHERE scope_type = 'conversation' AND scope_id = ?",
+          )
+          .run(target.id);
+        this.db
+          .prepare("DELETE FROM conversations WHERE id = ?")
+          .run(target.id);
+      }
+
+      const now = new Date().toISOString();
+      const res = this.db
+        .prepare(
+          `UPDATE conversations
+           SET hermes_session_id = ?, updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(newSessionId, now, source.id);
+      if (res.changes !== 1) {
+        throw new LocalNotFoundError("Conversation not found");
+      }
+      return this.findById(source.id)!;
+    });
+  }
+
+  /** Atomically enter deletion before any upstream request can be awaited. */
+  beginDeletion(
+    id: string,
+    expectedHermesSessionId: string,
+  ): ConversationEntity {
+    return withImmediateTransaction(this.db, () => {
+      const current = this.findById(id);
+      if (!current) throw new LocalNotFoundError("Conversation not found");
+      if (current.hermes_session_id !== expectedHermesSessionId) {
+        throw new LocalConflictError(
+          "expected_hermes_session_id does not match the current mapping",
+        );
+      }
+      if (current.delete_state === "pending") {
+        throw new StateConflictError(
+          "Conversation deletion is already pending",
+          {
+            current_state: current.delete_state,
+          },
+        );
+      }
+      return this.setDeleteState(id, "pending");
+    });
   }
 
   updateLastSeen(id: string, lastSeen: string): void {
@@ -192,16 +259,74 @@ export class ConversationRepository {
       .prepare(
         `UPDATE conversations
          SET last_seen_upstream_at = ?, updated_at = ?
-         WHERE id = ?`,
+         WHERE id = ? AND delete_state = 'none'`,
       )
       .run(lastSeen, now, id);
   }
 
   delete(id: string): boolean {
-    const res = this.db
-      .prepare("DELETE FROM conversations WHERE id = ?")
-      .run(id);
-    return res.changes > 0;
+    return withImmediateTransaction(this.db, () => {
+      // coordinator_leases intentionally has no conversation foreign key:
+      // the global lease must survive while this conversation lease is removed.
+      this.db
+        .prepare(
+          "DELETE FROM coordinator_leases WHERE scope_type = 'conversation' AND scope_id = ?",
+        )
+        .run(id);
+      const res = this.db
+        .prepare("DELETE FROM conversations WHERE id = ?")
+        .run(id);
+      return res.changes > 0;
+    });
+  }
+
+  private requireWritableConversation(id: string): ConversationEntity {
+    const conversation = this.findById(id);
+    if (!conversation) throw new LocalNotFoundError("Conversation not found");
+    if (conversation.delete_state !== "none") {
+      throw new StateConflictError(
+        "Conversation is unavailable while deletion is pending or failed",
+        { current_state: conversation.delete_state },
+      );
+    }
+    return conversation;
+  }
+
+  private hasMaterialLocalState(conversation: ConversationEntity): boolean {
+    if (
+      conversation.tags_json !== "[]" ||
+      conversation.custom_order !== null ||
+      conversation.metadata_revision !== 0 ||
+      conversation.queue_paused !== 0 ||
+      conversation.pause_reason !== null ||
+      conversation.delete_state !== "none" ||
+      conversation.delete_error_code !== null
+    ) {
+      return true;
+    }
+
+    const draft = this.db
+      .prepare("SELECT content, revision FROM drafts WHERE conversation_id = ?")
+      .get(conversation.id) as
+      { content: string; revision: number } | undefined;
+    if (draft && (draft.content !== "" || draft.revision !== 0)) return true;
+
+    const hasQueue = this.db
+      .prepare("SELECT 1 FROM queue_items WHERE conversation_id = ? LIMIT 1")
+      .get(conversation.id);
+    if (hasQueue) return true;
+
+    const hasRun = this.db
+      .prepare("SELECT 1 FROM runs WHERE conversation_id = ? LIMIT 1")
+      .get(conversation.id);
+    if (hasRun) return true;
+
+    const hasLease = this.db
+      .prepare(
+        "SELECT 1 FROM coordinator_leases WHERE scope_type = 'conversation' AND scope_id = ? LIMIT 1",
+      )
+      .get(conversation.id);
+    return hasLease !== undefined;
   }
 }
 
@@ -221,12 +346,23 @@ export class DraftRepository {
     expectedRevision?: number,
   ): DraftEntity {
     return withImmediateTransaction(this.db, () => {
+      const conversation = this.db
+        .prepare("SELECT delete_state FROM conversations WHERE id = ?")
+        .get(conversationId) as
+        { delete_state: ConversationEntity["delete_state"] } | undefined;
+      if (!conversation) throw new LocalNotFoundError("Conversation not found");
+      if (conversation.delete_state !== "none") {
+        throw new StateConflictError(
+          "Conversation is unavailable while deletion is pending or failed",
+          { current_state: conversation.delete_state },
+        );
+      }
       const current = this.findByConversationId(conversationId);
       const now = new Date().toISOString();
 
       if (!current) {
         if (expectedRevision !== undefined && expectedRevision !== 0) {
-          throw new ConflictError("Draft revision conflict");
+          throw new LocalConflictError("Draft revision conflict");
         }
         this.db
           .prepare(
@@ -241,7 +377,7 @@ export class DraftRepository {
         expectedRevision !== undefined &&
         current.revision !== expectedRevision
       ) {
-        throw new ConflictError("Draft revision conflict");
+        throw new LocalConflictError("Draft revision conflict");
       }
 
       const nextRevision = current.revision + 1;
@@ -255,7 +391,7 @@ export class DraftRepository {
         .run(content, nextRevision, now, conversationId, expected);
 
       if (res.changes === 0) {
-        throw new ConflictError("Draft revision conflict");
+        throw new LocalConflictError("Draft revision conflict");
       }
 
       return this.findByConversationId(conversationId)!;
@@ -303,7 +439,7 @@ export class PreferencesRepository {
   ): UiPreferencesEntity {
     const current = this.get();
     if (current.revision !== expectedRevision) {
-      throw new ConflictError("Preferences revision conflict");
+      throw new LocalConflictError("Preferences revision conflict");
     }
 
     const nextRevision = expectedRevision + 1;
@@ -328,7 +464,7 @@ export class PreferencesRepository {
       );
 
     if (res.changes === 0) {
-      throw new ConflictError("Preferences revision conflict");
+      throw new LocalConflictError("Preferences revision conflict");
     }
 
     return this.get();

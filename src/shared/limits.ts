@@ -1,7 +1,6 @@
 export const LIMITS = {
   // Input & Draft
   INPUT_MAX_BYTES: 64 * 1024, // 64 KiB UTF-8
-  USER_INPUT_MAX_BYTES: 64 * 1024, // legacy name; keep equal to INPUT_MAX_BYTES
   JSON_BODY_MAX_BYTES: 128 * 1024, // 128 KiB
   TITLE_MAX_CHARS: 200,
 
@@ -42,6 +41,7 @@ export const LIMITS = {
   EVENT_RING_MAX_EVENTS: 512,
   EVENT_RING_MAX_BYTES: 1024 * 1024, // 1 MiB UTF-8
   SSE_HEARTBEAT_INTERVAL_MS: 15_000,
+  SSE_TERMINAL_REPLAY_RETENTION_MS: 60_000,
 
   // Upstream timeouts
   UPSTREAM_READ_TIMEOUT_MS: 10_000,
@@ -59,18 +59,4 @@ export const LIMITS = {
   SIDEBAR_WIDTH_MIN: 240,
   SIDEBAR_WIDTH_MAX: 520,
   SIDEBAR_WIDTH_DEFAULT: 320,
-
-  // Legacy names still used by a few service/client modules.
-  SIDEBAR_MIN_WIDTH: 240,
-  SIDEBAR_MAX_WIDTH: 520,
-  MAX_PENDING_QUEUE_ITEMS_PER_CONVERSATION: 100,
 } as const;
-
-// Compatibility aliases used by the first server/client implementation.
-// Keep one source of truth above so changing the contract does not silently
-// leave a stale limit in a legacy call site.
-export const USER_INPUT_MAX_BYTES = LIMITS.USER_INPUT_MAX_BYTES;
-export const MAX_PENDING_QUEUE_ITEMS_PER_CONVERSATION =
-  LIMITS.MAX_PENDING_QUEUE_ITEMS_PER_CONVERSATION;
-export const SIDEBAR_MIN_WIDTH = LIMITS.SIDEBAR_MIN_WIDTH;
-export const SIDEBAR_MAX_WIDTH = LIMITS.SIDEBAR_MAX_WIDTH;

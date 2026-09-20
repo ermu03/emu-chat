@@ -1,5 +1,4 @@
 import type Database from "better-sqlite3";
-import { randomUUID } from "node:crypto";
 import type { CoordinatorLeaseEntity } from "../schema-types.js";
 
 export class LeaseRepository {
@@ -21,6 +20,7 @@ export class LeaseRepository {
     scopeType: CoordinatorLeaseEntity["scope_type"],
     scopeId: string,
     ownerId: string,
+    leaseToken: string,
     ttlMs: number,
   ): boolean;
   acquire(
@@ -28,33 +28,10 @@ export class LeaseRepository {
     scopeId: string,
     ownerId: string,
     leaseToken: string,
-    ttlMs: number | string,
-  ): boolean;
-  acquire(
-    scopeType: CoordinatorLeaseEntity["scope_type"],
-    scopeId: string,
-    ownerId: string,
-    leaseTokenOrTtl: string | number,
-    ttlMsOrExpiresAt?: number | string,
+    ttlMs: number,
   ): boolean {
     const now = new Date();
-    let leaseToken: string;
-    let expiresAt: string;
-    if (typeof leaseTokenOrTtl === "number") {
-      leaseToken = `${ownerId}_${randomUUID()}`;
-      expiresAt = new Date(now.getTime() + leaseTokenOrTtl).toISOString();
-    } else {
-      leaseToken = leaseTokenOrTtl;
-      if (typeof ttlMsOrExpiresAt === "number") {
-        expiresAt = new Date(now.getTime() + ttlMsOrExpiresAt).toISOString();
-      } else if (typeof ttlMsOrExpiresAt === "string") {
-        // Accept an absolute ISO expiry for compatibility with the original
-        // coordinator implementation; new code should pass a numeric TTL.
-        expiresAt = ttlMsOrExpiresAt;
-      } else {
-        throw new TypeError("Lease TTL or expiry is required");
-      }
-    }
+    const expiresAt = new Date(now.getTime() + ttlMs).toISOString();
     const nowIso = now.toISOString();
 
     const res = this.db

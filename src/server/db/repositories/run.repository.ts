@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 import type { RunEntity } from "../schema-types.js";
-import { NotFoundError } from "../../domain/errors.js";
+import { LocalNotFoundError } from "../../domain/errors.js";
 
 export class RunRepository {
   constructor(private db: Database.Database) {}
@@ -44,6 +44,12 @@ export class RunRepository {
          WHERE local_state IN ('submitting', 'accepted', 'reconciling')`,
       )
       .all() as RunEntity[];
+  }
+
+  listByConversation(conversationId: string): RunEntity[] {
+    return this.db
+      .prepare("SELECT * FROM runs WHERE conversation_id = ?")
+      .all(conversationId) as RunEntity[];
   }
 
   insert(
@@ -133,13 +139,11 @@ export class RunRepository {
       reconciliation_started_at?: string | null;
       terminal_at?: string | null;
       reconciled_at?: string | null;
-      /** Legacy callers used this flag instead of supplying terminal_at. */
-      terminal?: boolean;
     },
   ): RunEntity {
     const current = this.findById(id);
     if (!current) {
-      throw new NotFoundError("Run not found");
+      throw new LocalNotFoundError("Run not found");
     }
 
     const now = new Date().toISOString();
@@ -180,11 +184,7 @@ export class RunRepository {
         ? patch.reconciliation_started_at
         : current.reconciliation_started_at;
     const terminalAt =
-      patch.terminal_at !== undefined
-        ? patch.terminal_at
-        : patch.terminal
-          ? now
-          : current.terminal_at;
+      patch.terminal_at !== undefined ? patch.terminal_at : current.terminal_at;
     const reconciledAt =
       patch.reconciled_at !== undefined
         ? patch.reconciled_at
@@ -218,7 +218,7 @@ export class RunRepository {
       );
 
     if (res.changes === 0) {
-      throw new NotFoundError("Run not found");
+      throw new LocalNotFoundError("Run not found");
     }
 
     return this.findById(id)!;
@@ -234,7 +234,7 @@ export class RunRepository {
          WHERE id = ?`,
       )
       .run(eventName, now, id);
-    if (result.changes !== 1) throw new NotFoundError("Run not found");
+    if (result.changes !== 1) throw new LocalNotFoundError("Run not found");
     return this.findById(id)!;
   }
 }

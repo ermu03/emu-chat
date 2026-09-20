@@ -1,50 +1,29 @@
 import React, { useState } from "react";
 import type { QueueItemResponse } from "../../../shared/api-schemas.js";
 
-type LegacyQueueStatus =
-  "queued" | "running" | "completed" | "failed" | "cancelled";
-
-/**
- * The optional legacy fields keep this presentational component usable by the
- * existing component tests while the application passes QueueItemResponse.
- */
-export interface QueueDrawerItem {
-  id: string;
-  content: string | null;
-  created_at: string;
-  fifo_seq?: number;
-  sequence_number?: number;
-  state?: QueueItemResponse["state"];
-  status?: LegacyQueueStatus;
-  revision?: number;
-  payload_available?: boolean;
-  recovery_expires_at?: string | null;
-  last_error_code?: string | null;
-}
-
 interface QueueDrawerProps {
   isOpen: boolean;
   onClose: () => void;
-  items: QueueDrawerItem[];
-  paused?: boolean;
-  pauseReason?: string | null;
-  onCancelItem: (itemId: string, expectedRevision?: number) => Promise<void>;
-  onEditItem?: (
+  items: QueueItemResponse[];
+  paused: boolean;
+  pauseReason: string | null;
+  onCancelItem: (itemId: string, expectedRevision: number) => Promise<void>;
+  onEditItem: (
     itemId: string,
     content: string,
     expectedRevision: number,
   ) => Promise<void>;
-  onResume?: () => Promise<void>;
-  onCopyToDraft?: (itemId: string) => Promise<void>;
-  onDiscardRecovery?: (itemId: string) => Promise<void>;
+  onResume: () => Promise<void>;
+  onCopyToDraft: (itemId: string) => Promise<void>;
+  onDiscardRecovery: (itemId: string) => Promise<void>;
 }
 
 export const QueueDrawer: React.FC<QueueDrawerProps> = ({
   isOpen,
   onClose,
   items,
-  paused = false,
-  pauseReason = null,
+  paused,
+  pauseReason,
   onCancelItem,
   onEditItem,
   onResume,
@@ -57,7 +36,7 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
 
   if (!isOpen) return null;
 
-  const beginEdit = (item: QueueDrawerItem) => {
+  const beginEdit = (item: QueueItemResponse) => {
     setEditingItemId(item.id);
     setEditedContent(item.content ?? "");
     setActionError(null);
@@ -128,14 +107,12 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
           <div style={{ color: "#ffcc66", fontSize: 13 }}>
             队列已暂停{pauseReason ? `: ${pauseReason}` : ""}
           </div>
-          {onResume && (
-            <button
-              onClick={() => void runAction(onResume)}
-              style={secondaryButtonStyle}
-            >
-              继续后续队列
-            </button>
-          )}
+          <button
+            onClick={() => void runAction(onResume)}
+            style={secondaryButtonStyle}
+          >
+            继续后续队列
+          </button>
         </div>
       )}
 
@@ -155,12 +132,12 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
           </div>
         ) : (
           items.map((item) => {
-            const state = item.state ?? item.status ?? "queued";
+            const state = item.state;
             const queued = state === "queued";
             const recovery = ["paused", "review_required", "rejected"].includes(
               state,
             );
-            const sequence = item.fifo_seq ?? item.sequence_number ?? 0;
+            const sequence = item.fifo_seq;
             const editing = editingItemId === item.id;
 
             return (
@@ -213,14 +190,13 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
                         取消
                       </button>
                       <button
-                        disabled={!editedContent.trim() || !onEditItem}
+                        disabled={!editedContent.trim()}
                         onClick={() => {
-                          if (!onEditItem) return;
                           void runAction(async () => {
                             await onEditItem(
                               item.id,
                               editedContent,
-                              item.revision ?? 0,
+                              item.revision,
                             );
                             setEditingItemId(null);
                           });
@@ -255,14 +231,12 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
                       gap: 8,
                     }}
                   >
-                    {onEditItem && (
-                      <button
-                        onClick={() => beginEdit(item)}
-                        style={secondaryButtonStyle}
-                      >
-                        编辑
-                      </button>
-                    )}
+                    <button
+                      onClick={() => beginEdit(item)}
+                      style={secondaryButtonStyle}
+                    >
+                      编辑
+                    </button>
                     <button
                       onClick={() =>
                         void runAction(() =>
@@ -285,7 +259,7 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
                       gap: 8,
                     }}
                   >
-                    {item.payload_available !== false && onCopyToDraft && (
+                    {item.payload_available && (
                       <button
                         onClick={() =>
                           void runAction(() => onCopyToDraft(item.id))
@@ -295,16 +269,14 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
                         复制为新草稿
                       </button>
                     )}
-                    {onDiscardRecovery && (
-                      <button
-                        onClick={() =>
-                          void runAction(() => onDiscardRecovery(item.id))
-                        }
-                        style={dangerButtonStyle}
-                      >
-                        丢弃恢复副本
-                      </button>
-                    )}
+                    <button
+                      onClick={() =>
+                        void runAction(() => onDiscardRecovery(item.id))
+                      }
+                      style={dangerButtonStyle}
+                    >
+                      丢弃恢复副本
+                    </button>
                   </div>
                 )}
               </div>
@@ -327,24 +299,15 @@ function getStateLabel(state: string): string {
     review_required: "需要人工复核",
     rejected: "提交被拒绝",
     cancelled: "已取消",
-    running: "运行中",
-    completed: "已完成",
-    failed: "失败",
   };
   return labels[state] ?? state;
 }
 
 function getStateColor(state: string): string {
   if (state === "queued") return "#73d0ff";
-  if (state === "dispatching" || state === "accepted" || state === "running")
-    return "#ffb454";
-  if (state === "done" || state === "completed") return "#7fd962";
-  if (
-    state === "paused" ||
-    state === "review_required" ||
-    state === "rejected" ||
-    state === "failed"
-  )
+  if (state === "dispatching" || state === "accepted") return "#ffb454";
+  if (state === "done") return "#7fd962";
+  if (state === "paused" || state === "review_required" || state === "rejected")
     return "#ff9999";
   return "#cbccc6";
 }

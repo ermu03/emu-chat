@@ -184,20 +184,6 @@ export function buildServer(
   const statusService =
     dependencies.statusService ?? new StatusService(hermesAdapter);
 
-  const conversationService =
-    dependencies.conversationService ??
-    new ConversationService(
-      hermesAdapter,
-      convRepo,
-      draftRepo,
-      queueRepo,
-      runRepo,
-    );
-
-  const draftPreferencesService =
-    dependencies.draftPreferencesService ??
-    new DraftPreferencesService(draftRepo, new PreferencesRepository(db));
-
   const sseHub = new SSEHub();
   const leaseRepo = new LeaseRepository(db);
   sseHub.setRunSequenceResolver(
@@ -208,6 +194,22 @@ export function buildServer(
     if (run && !run.events_truncated)
       runRepo.update(localRunId, { events_truncated: 1 });
   });
+
+  const conversationService =
+    dependencies.conversationService ??
+    new ConversationService(
+      hermesAdapter,
+      convRepo,
+      draftRepo,
+      queueRepo,
+      runRepo,
+      sseHub,
+    );
+
+  const draftPreferencesService =
+    dependencies.draftPreferencesService ??
+    new DraftPreferencesService(draftRepo, new PreferencesRepository(db));
+
   const coordinator = new AdmissionCoordinator(
     queueRepo,
     runRepo,

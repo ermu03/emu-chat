@@ -1,12 +1,14 @@
 import { afterEach, describe, it, expect, beforeEach } from "vitest";
 import Database from "better-sqlite3";
 import {
+  ConversationRepository,
   DraftRepository,
   PreferencesRepository,
 } from "../../src/server/db/repositories/conversation.repository.js";
+import { runMigrations } from "../../src/server/db/migrate.js";
 import { DraftPreferencesService } from "../../src/server/services/draft-preferences-service.js";
 import {
-  ConflictError,
+  LocalConflictError,
   DraftConflictError,
   InvalidRequestError,
   PayloadTooLargeError,
@@ -18,27 +20,16 @@ describe("Phase 3: Draft and Preferences Service", () => {
   let draftRepo: DraftRepository;
   let preferencesRepo: PreferencesRepository;
   let service: DraftPreferencesService;
+  const conversationId = "cv_01956789-0000-7000-8000-000000000301";
 
   beforeEach(() => {
     db = new Database(":memory:");
-    db.exec(`
-      CREATE TABLE drafts (
-        conversation_id TEXT PRIMARY KEY,
-        content TEXT NOT NULL DEFAULT '',
-        revision INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-      CREATE TABLE ui_preferences (
-        id INTEGER PRIMARY KEY CHECK (id = 1),
-        theme TEXT NOT NULL DEFAULT 'system',
-        sidebar_width INTEGER NOT NULL DEFAULT 320,
-        send_shortcut TEXT NOT NULL DEFAULT 'enter',
-        revision INTEGER NOT NULL DEFAULT 0,
-        updated_at TEXT NOT NULL
-      );
-    `);
-
+    runMigrations(db);
+    new ConversationRepository(db).insert({
+      id: conversationId,
+      hermes_profile: "default",
+      hermes_session_id: "ses_draft_preferences_test",
+    });
     draftRepo = new DraftRepository(db);
     preferencesRepo = new PreferencesRepository(db);
     service = new DraftPreferencesService(draftRepo, preferencesRepo);
@@ -50,32 +41,32 @@ describe("Phase 3: Draft and Preferences Service", () => {
 
   describe("Draft Management", () => {
     it("should return empty draft with revision 0 if none exists", () => {
-      const draft = service.getDraft("conv_test_1");
+      const draft = service.getDraft(conversationId);
       expect(draft.content).toBe("");
       expect(draft.revision).toBe(0);
-      expect(draft.conversation_id).toBe("conv_test_1");
+      expect(draft.conversation_id).toBe(conversationId);
       expect(draft.object).toBe("emu_chat.draft");
     });
 
     it("should save and update draft with optimistic locking (revision)", () => {
-      const draft1 = service.putDraft("conv_test_1", "hello world", 0);
+      const draft1 = service.putDraft(conversationId, "hello world", 0);
       expect(draft1.content).toBe("hello world");
       expect(draft1.revision).toBe(0);
 
-      const draft2 = service.putDraft("conv_test_1", "updated text", 0);
+      const draft2 = service.putDraft(conversationId, "updated text", 0);
       expect(draft2.content).toBe("updated text");
       expect(draft2.revision).toBe(1);
 
       // Conflict when revision is wrong
       expect(() => {
-        service.putDraft("conv_test_1", "conflict attempt", 0);
+        service.putDraft(conversationId, "conflict attempt", 0);
       }).toThrow(DraftConflictError);
     });
 
     it("should reject draft exceeding max input byte size", () => {
       const largeContent = "a".repeat(LIMITS.INPUT_MAX_BYTES + 1);
       expect(() => {
-        service.putDraft("conv_test_1", largeContent, 0);
+        service.putDraft(conversationId, largeContent, 0);
       }).toThrow(PayloadTooLargeError);
     });
   });
@@ -110,7 +101,7 @@ describe("Phase 3: Draft and Preferences Service", () => {
           send_shortcut: "enter",
           expected_revision: 0,
         });
-      }).toThrow(ConflictError);
+      }).toThrow(LocalConflictError);
     });
 
     it("should reject invalid sidebar width or theme", () => {

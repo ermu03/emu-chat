@@ -1,16 +1,21 @@
 import {
+  HermesCapabilitiesSchema,
+  HermesDetailedHealthSchema,
   HermesHealthDetailedResponseSchema,
   type HermesHealthDetailedResponse,
-  HermesSessionListResponseSchema,
-  type HermesSessionListResponse,
   HermesSessionDetailResponseSchema,
   type HermesSessionDetailResponse,
+  HermesSessionEnvelopeSchema,
+  type HermesSessionWire,
   HermesMessageListResponseSchema,
   type HermesMessageListResponse,
+  type HermesMessageItem,
   HermesRunAdmissionResponseSchema,
+  type HermesRunAdmissionResponse,
   HermesRunStatusResponseSchema,
   type HermesRunStatusResponse,
 } from "../../shared/hermes-schemas.js";
+import { LIMITS } from "../../shared/limits.js";
 import { HermesProtocolError, HermesNotReadyError } from "../domain/errors.js";
 import type { HermesClient, HermesSseEvent } from "./client.js";
 import { evaluateHermesCapabilities } from "./capabilities.js";
@@ -21,17 +26,9 @@ export interface HermesRunEvent {
   id?: string;
 }
 
-export interface NormalizedSessionList {
-  sessions: HermesSessionDetailResponse[];
-  total: number;
-  limit: number;
-  offset: number;
-  has_more: boolean;
-}
-
 export interface NormalizedMessageList {
   session_id: string;
-  messages: HermesMessageListResponse["messages"];
+  messages: HermesMessageItem[];
   total: number;
   limit: number;
   offset: number;
@@ -52,15 +49,49 @@ export class HermesAdapter {
     const raw = await this.client.request({
       method: "GET",
       path: "/health/detailed",
-      timeoutMs: 5000,
+      timeoutMs: LIMITS.UPSTREAM_READ_TIMEOUT_MS,
     });
-    const parsed = HermesHealthDetailedResponseSchema.safeParse(raw);
-    if (!parsed.success)
+    const health = HermesDetailedHealthSchema.safeParse(raw);
+    if (!health.success)
       throw new HermesProtocolError(
-        `Hermes health schema validation failed: ${parsed.error.message}`,
+        `Hermes health schema validation failed: ${health.error.message}`,
       );
-    this.lastHealth = parsed.data;
-    return parsed.data;
+
+    const capabilitiesRaw = await this.client.request({
+      method: "GET",
+      path: "/v1/capabilities",
+      timeoutMs: LIMITS.UPSTREAM_READ_TIMEOUT_MS,
+    });
+    const capabilities = HermesCapabilitiesSchema.safeParse(capabilitiesRaw);
+    if (!capabilities.success)
+      throw new HermesProtocolError(
+        `Hermes capabilities schema validation failed: ${capabilities.error.message}`,
+      );
+
+    const idempotency = capabilities.data.features.runs_idempotency;
+    if (
+      idempotency.durable === undefined ||
+      idempotency.retention_seconds === undefined
+    ) {
+      throw new HermesProtocolError(
+        "Hermes capabilities omit idempotency durability metadata",
+      );
+    }
+    const endpoints = Object.values(capabilities.data.endpoints);
+    const normalized = HermesHealthDetailedResponseSchema.safeParse({
+      ...health.data,
+      runtime: capabilities.data.runtime,
+      durable: idempotency.durable,
+      retention_seconds: idempotency.retention_seconds,
+      features: capabilities.data.features,
+      endpoints,
+    });
+    if (!normalized.success)
+      throw new HermesProtocolError(
+        `Hermes readiness normalization failed: ${normalized.error.message}`,
+      );
+    this.lastHealth = normalized.data;
+    return normalized.data;
   }
 
   async assertReady(): Promise<void> {
@@ -72,51 +103,12 @@ export class HermesAdapter {
       );
   }
 
-  async listSessions(
-    params: { limit?: number; offset?: number; search?: string } = {},
-  ): Promise<NormalizedSessionList> {
-    const query: Record<string, string | number> = {
-      source: "api_server",
-      limit: params.limit ?? 50,
-      offset: params.offset ?? 0,
-    };
-    if (params.search) query.title = params.search;
-    const raw = await this.client.request({
-      method: "GET",
-      path: "/api/sessions",
-      query,
-    });
-    const parsed = HermesSessionListResponseSchema.safeParse(raw);
-    if (!parsed.success)
-      throw new HermesProtocolError(
-        `Hermes session list schema validation failed: ${parsed.error.message}`,
-      );
-    const value = parsed.data as HermesSessionListResponse & {
-      data?: HermesSessionDetailResponse[];
-      sessions?: HermesSessionDetailResponse[];
-      total?: number;
-    };
-    const sessions = value.sessions ?? value.data ?? [];
-    return {
-      sessions,
-      total: value.total ?? sessions.length,
-      limit: value.limit ?? (query.limit as number),
-      offset: value.offset ?? (query.offset as number),
-      has_more: value.has_more ?? false,
-    };
-  }
-
   async getSession(sessionId: string): Promise<HermesSessionDetailResponse> {
     const raw = await this.client.request({
       method: "GET",
       path: `/api/sessions/${encodeURIComponent(sessionId)}`,
     });
-    const parsed = HermesSessionDetailResponseSchema.safeParse(raw);
-    if (!parsed.success)
-      throw new HermesProtocolError(
-        `Hermes session schema validation failed: ${parsed.error.message}`,
-      );
-    return parsed.data;
+    return this.parseSessionResponse(raw, "Hermes session", sessionId);
   }
 
   async getSessionMessages(
@@ -142,20 +134,17 @@ export class HermesAdapter {
       throw new HermesProtocolError(
         `Hermes message list schema validation failed: ${parsed.error.message}`,
       );
-    const value = parsed.data as HermesMessageListResponse & {
-      data?: HermesMessageListResponse["messages"];
-      messages?: HermesMessageListResponse["messages"];
-      effective_session_id?: string;
-    };
-    const messages = value.messages ?? value.data ?? [];
+    const value = parsed.data as HermesMessageListResponse;
+    const messages = value.data;
+    const pagination = value.pagination;
     return {
-      session_id: value.effective_session_id ?? value.session_id ?? sessionId,
+      session_id: value.session_id,
       messages,
-      total: value.total ?? messages.length,
-      limit: value.limit ?? query.limit,
-      offset: value.offset ?? query.offset,
-      order: value.order ?? query.order,
-      has_more: value.has_more ?? false,
+      total: messages.length,
+      limit: pagination?.limit ?? query.limit,
+      offset: pagination?.offset ?? query.offset,
+      order: pagination?.order ?? query.order,
+      has_more: false,
     };
   }
 
@@ -167,12 +156,7 @@ export class HermesAdapter {
       path: "/api/sessions",
       ...(Object.keys(data).length ? { body: data } : {}),
     });
-    const parsed = HermesSessionDetailResponseSchema.safeParse(raw);
-    if (!parsed.success)
-      throw new HermesProtocolError(
-        `Hermes create session schema validation failed: ${parsed.error.message}`,
-      );
-    return parsed.data;
+    return this.parseSessionResponse(raw, "Hermes create session");
   }
 
   async updateSession(
@@ -184,12 +168,7 @@ export class HermesAdapter {
       path: `/api/sessions/${encodeURIComponent(sessionId)}`,
       body: data,
     });
-    const parsed = HermesSessionDetailResponseSchema.safeParse(raw);
-    if (!parsed.success)
-      throw new HermesProtocolError(
-        `Hermes update session schema validation failed: ${parsed.error.message}`,
-      );
-    return parsed.data;
+    return this.parseSessionResponse(raw, "Hermes update session", sessionId);
   }
 
   async forkSession(
@@ -201,12 +180,7 @@ export class HermesAdapter {
       path: `/api/sessions/${encodeURIComponent(sessionId)}/fork`,
       body: data,
     });
-    const parsed = HermesSessionDetailResponseSchema.safeParse(raw);
-    if (!parsed.success)
-      throw new HermesProtocolError(
-        `Hermes fork session schema validation failed: ${parsed.error.message}`,
-      );
-    return parsed.data;
+    return this.parseSessionResponse(raw, "Hermes fork session");
   }
 
   async deleteSession(sessionId: string): Promise<void> {
@@ -219,7 +193,7 @@ export class HermesAdapter {
   async startRun(
     sessionId: string,
     data: { prompt: string; idempotency_key?: string },
-  ): Promise<{ run_id: string; status: "started"; replayed: boolean }> {
+  ): Promise<HermesRunAdmissionResponse> {
     const headers = data.idempotency_key
       ? { "Idempotency-Key": data.idempotency_key }
       : undefined;
@@ -228,7 +202,7 @@ export class HermesAdapter {
       path: "/v1/runs",
       ...(headers === undefined ? {} : { headers }),
       body: { session_id: sessionId, input: data.prompt },
-      timeoutMs: 30_000,
+      timeoutMs: LIMITS.UPSTREAM_RUN_SUBMIT_TIMEOUT_MS,
     });
     const parsed = HermesRunAdmissionResponseSchema.safeParse(raw);
     if (!parsed.success)
@@ -248,6 +222,11 @@ export class HermesAdapter {
       throw new HermesProtocolError(
         `Hermes run status schema validation failed: ${parsed.error.message}`,
       );
+    if (parsed.data.run_id !== runId) {
+      throw new HermesProtocolError(
+        "Hermes run status response does not match the requested run",
+      );
+    }
     return parsed.data;
   }
 
@@ -259,26 +238,16 @@ export class HermesAdapter {
     });
   }
 
-  async cancelRun(runId: string): Promise<void> {
-    return this.stopRun(runId);
-  }
-
   async submitApproval(
     runId: string,
-    choice: "once" | "deny" | "approve" | "reject" | "cancel",
+    choice: "once" | "deny",
     requestId?: string,
   ): Promise<void> {
-    const normalized =
-      choice === "approve"
-        ? "once"
-        : choice === "reject" || choice === "cancel"
-          ? "deny"
-          : choice;
     await this.client.request({
       method: "POST",
       path: `/v1/runs/${encodeURIComponent(runId)}/approval`,
       body: {
-        choice: normalized,
+        choice,
         ...(requestId ? { request_id: requestId } : {}),
       },
     });
@@ -291,12 +260,15 @@ export class HermesAdapter {
     for await (const event of this.client.stream(
       `/v1/runs/${encodeURIComponent(runId)}/events`,
     )) {
-      const parsed = this.parseSseEvent(event);
+      const parsed = this.parseSseEvent(event, runId);
       if (parsed) yield parsed;
     }
   }
 
-  private parseSseEvent(event: HermesSseEvent): HermesRunEvent | null {
+  private parseSseEvent(
+    event: HermesSseEvent,
+    expectedRunId: string,
+  ): HermesRunEvent | null {
     if (!event.data.trim()) return null;
     let data: unknown;
     try {
@@ -309,15 +281,94 @@ export class HermesAdapter {
         "Hermes SSE event payload must be an object",
       );
     const record = data as Record<string, unknown>;
-    const type = typeof record.type === "string" ? record.type : event.event;
-    const payload =
-      record.data && typeof record.data === "object"
-        ? (record.data as Record<string, unknown>)
-        : record;
+    if (typeof record.event !== "string" || record.event.length === 0)
+      throw new HermesProtocolError(
+        "Hermes SSE event is missing an event name",
+      );
+    if (typeof record.run_id !== "string" || record.run_id !== expectedRunId) {
+      throw new HermesProtocolError(
+        "Hermes SSE event does not match the requested run",
+      );
+    }
+    if (
+      typeof record.timestamp !== "number" ||
+      !Number.isFinite(record.timestamp) ||
+      record.timestamp < 0
+    ) {
+      throw new HermesProtocolError(
+        "Hermes SSE event has an invalid timestamp",
+      );
+    }
     return {
-      type,
-      data: payload,
+      type: record.event,
+      data: this.flatEventPayload(record),
       ...(event.id === undefined ? {} : { id: event.id }),
     };
+  }
+
+  private parseSessionResponse(
+    raw: unknown,
+    context: string,
+    expectedSessionId?: string,
+  ): HermesSessionDetailResponse {
+    const envelope = HermesSessionEnvelopeSchema.safeParse(raw);
+    if (!envelope.success)
+      throw new HermesProtocolError(
+        `${context} schema validation failed: ${envelope.error.message}`,
+      );
+    const session = this.normalizeSession(envelope.data.session);
+    if (expectedSessionId !== undefined && session.id !== expectedSessionId) {
+      throw new HermesProtocolError(
+        `${context} does not match the requested session`,
+      );
+    }
+    return session;
+  }
+
+  private normalizeSession(
+    session: HermesSessionWire,
+  ): HermesSessionDetailResponse {
+    const createdSource = session.started_at;
+    const lastActiveSource = session.last_active ?? createdSource;
+    const normalized: HermesSessionDetailResponse = {
+      id: session.id,
+      title: session.title,
+      pinned: session.pinned,
+      created_at: this.toIsoTimestamp(createdSource, "created_at"),
+      updated_at: this.toIsoTimestamp(lastActiveSource, "updated_at"),
+      last_active_at: this.toIsoTimestamp(lastActiveSource, "last_active_at"),
+      message_count: session.message_count,
+      preview: session.preview ?? "",
+      parent_session_id: session.parent_session_id,
+      ...(session.model === undefined || session.model === null
+        ? {}
+        : { model: session.model }),
+      source: session.source,
+      archived: session.archived,
+      hidden: session.hidden,
+    };
+    const parsed = HermesSessionDetailResponseSchema.safeParse(normalized);
+    if (!parsed.success)
+      throw new HermesProtocolError(
+        `Hermes session normalization failed: ${parsed.error.message}`,
+      );
+    return parsed.data;
+  }
+
+  private toIsoTimestamp(value: number, field: string): string {
+    const milliseconds = value * 1000;
+    if (!Number.isFinite(milliseconds))
+      throw new HermesProtocolError(`Hermes session has invalid ${field}`);
+    return new Date(milliseconds).toISOString();
+  }
+
+  private flatEventPayload(
+    record: Record<string, unknown>,
+  ): Record<string, unknown> {
+    const payload = { ...record };
+    delete payload.event;
+    delete payload.run_id;
+    delete payload.timestamp;
+    return payload;
   }
 }

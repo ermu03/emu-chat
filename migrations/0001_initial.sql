@@ -1,5 +1,5 @@
 -- 0001_initial.sql
--- 严格基于 dev-docs/11-Gemini编码交接基线.md 第 7 节 精确 DDL
+-- Initial emu-chat local control schema.
 
 CREATE TABLE IF NOT EXISTS schema_migrations (
   version INTEGER PRIMARY KEY,

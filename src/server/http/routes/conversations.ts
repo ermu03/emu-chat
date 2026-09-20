@@ -9,7 +9,7 @@ import {
   PatchLocalMetadataRequestSchema,
   ResetConversationRequestSchema,
 } from "../../../shared/api-schemas.js";
-import { ValidationError } from "../../domain/errors.js";
+import { InvalidRequestError } from "../../domain/errors.js";
 import type { ConversationService } from "../../services/conversation-service.js";
 
 export interface ConversationRoutesOptions {
@@ -24,7 +24,7 @@ export const conversationRoutes: FastifyPluginAsync<
   fastify.get("/conversations", async (req, reply) => {
     const parseResult = GetConversationsQuerySchema.safeParse(req.query);
     if (!parseResult.success) {
-      throw new ValidationError(
+      throw new InvalidRequestError(
         `Invalid conversations query: ${parseResult.error.message}`,
       );
     }
@@ -37,7 +37,7 @@ export const conversationRoutes: FastifyPluginAsync<
       req.body ?? {},
     );
     if (!parseResult.success) {
-      throw new ValidationError(
+      throw new InvalidRequestError(
         `Invalid create conversation payload: ${parseResult.error.message}`,
       );
     }
@@ -55,7 +55,7 @@ export const conversationRoutes: FastifyPluginAsync<
     const { conversationId } = req.params as { conversationId: string };
     const parseResult = GetMessagesQuerySchema.safeParse(req.query);
     if (!parseResult.success) {
-      throw new ValidationError(
+      throw new InvalidRequestError(
         `Invalid messages query: ${parseResult.error.message}`,
       );
     }
@@ -72,7 +72,7 @@ export const conversationRoutes: FastifyPluginAsync<
       const { conversationId } = req.params as { conversationId: string };
       const parseResult = PatchHermesMetadataRequestSchema.safeParse(req.body);
       if (!parseResult.success) {
-        throw new ValidationError(
+        throw new InvalidRequestError(
           `Invalid hermes-metadata payload: ${parseResult.error.message}`,
         );
       }
@@ -90,7 +90,7 @@ export const conversationRoutes: FastifyPluginAsync<
       const { conversationId } = req.params as { conversationId: string };
       const parseResult = PatchLocalMetadataRequestSchema.safeParse(req.body);
       if (!parseResult.success) {
-        throw new ValidationError(
+        throw new InvalidRequestError(
           `Invalid local-metadata payload: ${parseResult.error.message}`,
         );
       }
@@ -106,7 +106,7 @@ export const conversationRoutes: FastifyPluginAsync<
     const { conversationId } = req.params as { conversationId: string };
     const parseResult = ForkConversationRequestSchema.safeParse(req.body ?? {});
     if (!parseResult.success) {
-      throw new ValidationError(
+      throw new InvalidRequestError(
         `Invalid fork conversation payload: ${parseResult.error.message}`,
       );
     }
@@ -123,7 +123,7 @@ export const conversationRoutes: FastifyPluginAsync<
       req.body ?? {},
     );
     if (!parseResult.success) {
-      throw new ValidationError(
+      throw new InvalidRequestError(
         `Invalid reset conversation payload: ${parseResult.error.message}`,
       );
     }
@@ -138,7 +138,7 @@ export const conversationRoutes: FastifyPluginAsync<
     const { conversationId } = req.params as { conversationId: string };
     const parseResult = DeleteConversationRequestSchema.safeParse(req.body);
     if (!parseResult.success) {
-      throw new ValidationError(
+      throw new InvalidRequestError(
         `Invalid delete conversation payload: ${parseResult.error.message}`,
       );
     }

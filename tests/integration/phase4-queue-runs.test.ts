@@ -27,6 +27,7 @@ type QueueView = {
 
 type RunView = {
   id: string;
+  hermes_run_id: string | null;
   local_state: string;
   upstream_status: string | null;
   approval: { request_id: string; choices: string[] } | null;
@@ -81,15 +82,13 @@ describe("Phase 4: Queue and runs HTTP integration", () => {
 
   async function createMappedConversation(): Promise<string> {
     const response = await app!.inject({
-      method: "GET",
-      url: "/api/v1/conversations?session_id=ses_test_1",
+      method: "POST",
+      url: "/api/v1/conversations",
+      payload: { title: "Queue test" },
     });
-    expect(response.statusCode).toBe(200);
-    const body = response.json() as {
-      items: Array<{ conversation_id: string }>;
-    };
-    expect(body.items).toHaveLength(1);
-    return body.items[0]!.conversation_id;
+    expect(response.statusCode).toBe(201);
+    const body = response.json() as { conversation_id: string };
+    return body.conversation_id;
   }
 
   async function putDraft(
@@ -229,6 +228,17 @@ describe("Phase 4: Queue and runs HTTP integration", () => {
 
   it("dispatches a draft through Hermes and reconciles the local run to done", async () => {
     const conversationId = await createMappedConversation();
+    const sourceConversation = await app!.inject({
+      method: "GET",
+      url: `/api/v1/conversations/${conversationId}`,
+    });
+    const sourceSessionId = (
+      sourceConversation.json() as { hermes_session_id: string }
+    ).hermes_session_id;
+    const rotated = fakeHermes.createSession({
+      title: "Effective session after run",
+    });
+    fakeHermes.setEffectiveSessionIdForMessages(sourceSessionId, rotated.id);
     await putDraft(conversationId, "Run this through Fake Hermes", 0);
 
     const sent = await app!.inject({
@@ -265,8 +275,36 @@ describe("Phase 4: Queue and runs HTTP integration", () => {
       upstream_status: "completed",
     });
     expect(
-      fakeHermes.getMessages("ses_test_1")?.map((message) => message.content),
+      fakeHermes
+        .getMessages(sourceSessionId)
+        ?.map((message) => message.content),
     ).toContain("Run this through Fake Hermes");
+
+    const conversation = await app!.inject({
+      method: "GET",
+      url: `/api/v1/conversations/${conversationId}`,
+    });
+    expect(conversation.statusCode).toBe(200);
+    expect(conversation.json()).toMatchObject({
+      hermes_session_id: rotated.id,
+      effective_hermes_session_id: rotated.id,
+    });
+
+    const registered = await app!.inject({
+      method: "GET",
+      url: "/api/v1/conversations",
+    });
+    expect(registered.statusCode).toBe(200);
+    const registeredItems = (
+      registered.json() as {
+        items: Array<{ conversation_id: string; hermes_session_id: string }>;
+      }
+    ).items;
+    expect(registeredItems).toHaveLength(1);
+    expect(registeredItems[0]).toMatchObject({
+      conversation_id: conversationId,
+      hermes_session_id: rotated.id,
+    });
 
     const incompatibleCursors = await app!.inject({
       method: "GET",
@@ -323,6 +361,8 @@ describe("Phase 4: Queue and runs HTTP integration", () => {
       payload: { choice: "once", request_id: waitingRun.approval!.request_id },
     });
     expect(approval.statusCode).toBe(202);
+    expect(waitingRun.hermes_run_id).not.toBeNull();
+    fakeHermes.completeApprovalRun(waitingRun.hermes_run_id!);
 
     const reconciled = await waitFor(async () => {
       const response = await app!.inject({

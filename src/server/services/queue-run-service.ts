@@ -98,12 +98,7 @@ export class QueueRunService {
       const concurrent = this.queueRepo.findByClientRequestId(clientRequestId);
       if (concurrent) return { item: concurrent, replayed: true };
 
-      const conversation = this.requireConversation(conversationId);
-      if (conversation.delete_state !== "none") {
-        throw new StateConflictError("Conversation is pending deletion", {
-          current_state: conversation.delete_state,
-        });
-      }
+      this.requireMutableConversation(conversationId);
 
       const draft = this.draftRepo.findByConversationId(conversationId);
       const currentRevision = draft?.revision ?? 0;
@@ -243,6 +238,7 @@ export class QueueRunService {
 
     const item = withImmediateTransaction(this.db, () => {
       const current = this.requireQueueItem(queueItemId);
+      this.requireMutableConversation(current.conversation_id);
       if (current.state !== "queued") {
         throw new StateConflictError(`Queue item is ${current.state}`, {
           current_state: current.state,
@@ -283,6 +279,7 @@ export class QueueRunService {
   ): QueueItemResponse {
     const item = withImmediateTransaction(this.db, () => {
       const current = this.requireQueueItem(queueItemId);
+      this.requireMutableConversation(current.conversation_id);
       if (current.state !== "queued") {
         throw new StateConflictError(`Queue item is ${current.state}`, {
           current_state: current.state,
@@ -312,12 +309,7 @@ export class QueueRunService {
   async resumeQueue(conversationId: string): Promise<QueueListResponse> {
     await this.assertHermesReady();
     const conversation = withImmediateTransaction(this.db, () => {
-      const current = this.requireConversation(conversationId);
-      if (current.delete_state !== "none") {
-        throw new StateConflictError("Conversation is pending deletion", {
-          current_state: current.delete_state,
-        });
-      }
+      const current = this.requireMutableConversation(conversationId);
       if (!current.queue_paused) {
         throw new StateConflictError("Conversation queue is not paused", {
           current_state: "not_paused",
@@ -339,6 +331,7 @@ export class QueueRunService {
   async copyToDraft(queueItemId: string, input: CopyToDraftRequest) {
     const draft = withImmediateTransaction(this.db, () => {
       const item = this.requireQueueItem(queueItemId);
+      this.requireMutableConversation(item.conversation_id);
       if (!["paused", "review_required", "rejected"].includes(item.state)) {
         throw new StateConflictError(`Queue item is ${item.state}`, {
           current_state: item.state,
@@ -402,6 +395,7 @@ export class QueueRunService {
   discardRecovery(queueItemId: string): QueueItemResponse {
     const item = withImmediateTransaction(this.db, () => {
       const current = this.requireQueueItem(queueItemId);
+      this.requireMutableConversation(current.conversation_id);
       if (!["paused", "review_required", "rejected"].includes(current.state)) {
         throw new StateConflictError(`Queue item is ${current.state}`, {
           current_state: current.state,
@@ -441,6 +435,7 @@ export class QueueRunService {
     const stop = withImmediateTransaction(this.db, () => {
       const run = this.requireRun(localRunId);
       const item = this.requireQueueItem(run.queue_item_id);
+      this.requireMutableConversation(run.conversation_id);
       if (
         run.local_state === "reconciling" ||
         run.local_state === "reconciled"
@@ -484,6 +479,7 @@ export class QueueRunService {
     input: ApprovalRequest,
   ): Promise<RunResponse> {
     const run = this.requireRun(localRunId);
+    this.requireMutableConversation(run.conversation_id);
     if (!run.hermes_run_id || run.upstream_status !== "waiting_for_approval") {
       throw new ApprovalNotPendingError(
         `Run ${localRunId} is not waiting for approval`,
@@ -511,12 +507,25 @@ export class QueueRunService {
     ) {
       throw new ApprovalNotPendingError("Approval request has expired");
     }
+    this.requireMutableConversation(run.conversation_id);
     await this.hermesAdapter.submitApproval(
       run.hermes_run_id,
       input.choice,
       approval.request_id,
     );
-    this.runRepo.update(run.id, { upstream_status: "running" });
+    withImmediateTransaction(this.db, () => {
+      const current = this.requireRun(run.id);
+      this.requireMutableConversation(current.conversation_id);
+      if (
+        current.hermes_run_id !== run.hermes_run_id ||
+        current.upstream_status !== "waiting_for_approval"
+      ) {
+        throw new ApprovalNotPendingError(
+          `Run ${localRunId} is not waiting for approval`,
+        );
+      }
+      this.runRepo.update(current.id, { upstream_status: "running" });
+    });
     // An approval can make the upstream run terminal before its paused SSE
     // consumer receives another event. Reconcile instead of assuming a later
     // stream callback will advance local state.
@@ -527,7 +536,7 @@ export class QueueRunService {
   async reconcile(localRunId: string): Promise<ReconcileResponse> {
     const run = this.requireRun(localRunId);
     const item = this.requireQueueItem(run.queue_item_id);
-    const conversation = this.requireConversation(run.conversation_id);
+    const conversation = this.requireMutableConversation(run.conversation_id);
     if (run.local_state === "reconciling") {
       await this.reconcileCoordinator(localRunId);
     } else if (run.local_state === "review_required") {
@@ -600,6 +609,19 @@ export class QueueRunService {
     const conversation = this.conversationRepo.findById(conversationId);
     if (!conversation)
       throw new LocalNotFoundError(`Conversation ${conversationId} not found`);
+    return conversation;
+  }
+
+  private requireMutableConversation(
+    conversationId: string,
+  ): ConversationEntity {
+    const conversation = this.requireConversation(conversationId);
+    if (conversation.delete_state !== "none") {
+      throw new StateConflictError(
+        "Conversation is unavailable while deletion is pending or failed",
+        { current_state: conversation.delete_state },
+      );
+    }
     return conversation;
   }
 

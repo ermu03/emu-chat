@@ -3,15 +3,6 @@ import { LIMITS } from "../../shared/limits.js";
 import type { StreamGapReason } from "../../shared/domain-enums.js";
 import { StateConflictError } from "../domain/errors.js";
 
-/** Compatibility view used by older unit helpers. Browser frames use RunEventEnvelope. */
-export interface SSEEnvelope {
-  event_id: string;
-  seq: number;
-  timestamp: string;
-  type: string;
-  data: Record<string, unknown>;
-}
-
 export interface RunEventEnvelope {
   local_run_id: string;
   local_seq: number;
@@ -20,15 +11,8 @@ export interface RunEventEnvelope {
   received_at: string;
 }
 
-type BroadcastEnvelope = Omit<SSEEnvelope, "event_id" | "timestamp"> &
-  Partial<Pick<SSEEnvelope, "event_id" | "timestamp">>;
-
-interface BufferedRunEvent extends RunEventEnvelope {
-  legacy_event_id: string;
-}
-
 interface RunStream {
-  events: BufferedRunEvent[];
+  events: RunEventEnvelope[];
   latest_seq: number;
   dropped_before: number;
   latest_gap?: StreamGapReason;
@@ -49,6 +33,7 @@ export class SSEHub {
   private sequenceResolver: SequenceResolver | null = null;
   private evictionHandler: EvictionHandler | null = null;
   private heartbeatTimer: NodeJS.Timeout | null = null;
+  private readonly cleanupTimers = new Map<string, NodeJS.Timeout>();
   private closed = false;
 
   constructor() {
@@ -68,11 +53,7 @@ export class SSEHub {
   }
 
   /** Subscribe to a run stream using its persisted local sequence as cursor. */
-  subscribe(
-    localRunId: string,
-    reply: FastifyReply,
-    after?: string | number,
-  ): void {
+  subscribe(localRunId: string, reply: FastifyReply, after?: number): void {
     if (this.closed) {
       reply.raw.end();
       return;
@@ -101,7 +82,7 @@ export class SSEHub {
     reply.raw.setHeader("X-Accel-Buffering", "no");
     reply.raw.flushHeaders();
 
-    const cursor = this.resolveCursor(localRunId, after);
+    const cursor = this.resolveCursor(after);
     const stream = this.streams.get(localRunId);
     const latestSeq = this.latestSequence(localRunId, stream);
     const earliestSeq = stream?.events[0]?.local_seq ?? latestSeq + 1;
@@ -155,17 +136,17 @@ export class SSEHub {
         received_at: receivedAt,
       };
     }
+    this.cancelScheduledCleanup(localRunId);
     const event = this.storeRunEvent(
       localRunId,
       localSeq,
       type,
       payload,
       receivedAt,
-      String(localSeq),
     );
     for (const reply of this.clients.get(localRunId) ?? [])
       this.writeRunEvent(reply, event);
-    return this.toRunEnvelope(event);
+    return event;
   }
 
   /** Notify current and reconnecting clients that the stream cannot be replayed exactly. */
@@ -186,79 +167,6 @@ export class SSEHub {
       this.writeControl(reply, "stream.gap", data);
   }
 
-  /**
-   * Legacy helper retained for repository-level tests. New coordinator code
-   * must call publishRunEvent with a durable sequence instead.
-   */
-  broadcast(
-    key: string,
-    typeOrEnvelope: string | BroadcastEnvelope,
-    data?: Record<string, unknown>,
-  ): SSEEnvelope {
-    if (this.closed) {
-      const seq = typeof typeOrEnvelope === "string" ? 1 : typeOrEnvelope.seq;
-      const type =
-        typeof typeOrEnvelope === "string"
-          ? typeOrEnvelope
-          : typeOrEnvelope.type;
-      const payload =
-        typeof typeOrEnvelope === "string"
-          ? (data ?? {})
-          : (typeOrEnvelope.data ?? {});
-      const timestamp =
-        typeof typeOrEnvelope === "string"
-          ? new Date().toISOString()
-          : (typeOrEnvelope.timestamp ?? new Date().toISOString());
-      return { event_id: String(seq), seq, timestamp, type, data: payload };
-    }
-    const stream = this.getStream(key);
-    const sequence =
-      typeof typeOrEnvelope === "string"
-        ? Math.max(this.latestSequence(key, stream), stream.latest_seq) + 1
-        : typeOrEnvelope.seq;
-    const type =
-      typeof typeOrEnvelope === "string" ? typeOrEnvelope : typeOrEnvelope.type;
-    const payload =
-      typeof typeOrEnvelope === "string"
-        ? (data ?? {})
-        : (typeOrEnvelope.data ?? {});
-    const timestamp =
-      typeof typeOrEnvelope === "string"
-        ? new Date().toISOString()
-        : (typeOrEnvelope.timestamp ?? new Date().toISOString());
-    const eventId =
-      typeof typeOrEnvelope === "string"
-        ? String(sequence)
-        : (typeOrEnvelope.event_id ?? String(sequence));
-    const event = this.storeRunEvent(
-      key,
-      sequence,
-      type,
-      payload,
-      timestamp,
-      eventId,
-    );
-    for (const reply of this.clients.get(key) ?? [])
-      this.writeRunEvent(reply, event);
-    return this.toLegacyEnvelope(event);
-  }
-
-  getEventHistory(key: string): SSEEnvelope[] {
-    return (this.streams.get(key)?.events ?? []).map((event) =>
-      this.toLegacyEnvelope(event),
-    );
-  }
-
-  getMissedEvents(key: string, lastEventId: string | number): SSEEnvelope[] {
-    const events = this.streams.get(key)?.events ?? [];
-    const cursor = this.resolveCursor(key, lastEventId);
-    if (cursor === undefined)
-      return [...events].map((event) => this.toLegacyEnvelope(event));
-    return events
-      .filter((event) => event.local_seq > cursor)
-      .map((event) => this.toLegacyEnvelope(event));
-  }
-
   sendHeartbeat(): void {
     for (const [localRunId, subscribers] of this.clients) {
       for (const reply of subscribers)
@@ -268,6 +176,7 @@ export class SSEHub {
 
   /** End one run's subscribers and discard its in-memory replay window. */
   cleanup(localRunId: string): void {
+    this.cancelScheduledCleanup(localRunId);
     for (const reply of this.clients.get(localRunId) ?? []) {
       try {
         reply.raw.end();
@@ -279,13 +188,32 @@ export class SSEHub {
     this.streams.delete(localRunId);
   }
 
+  /** Keep a terminal run replayable briefly before releasing its ring buffer. */
+  scheduleCleanup(
+    localRunId: string,
+    delayMs = LIMITS.SSE_TERMINAL_REPLAY_RETENTION_MS,
+  ): void {
+    if (this.closed) return;
+    this.cancelScheduledCleanup(localRunId);
+    const timer = setTimeout(() => {
+      this.cleanupTimers.delete(localRunId);
+      this.cleanup(localRunId);
+    }, delayMs);
+    timer.unref();
+    this.cleanupTimers.set(localRunId, timer);
+  }
+
   /** Release all browser streams and timers during application shutdown. */
   close(): void {
     if (this.closed) return;
     this.closed = true;
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     this.heartbeatTimer = null;
-    const keys = new Set([...this.clients.keys(), ...this.streams.keys()]);
+    const keys = new Set([
+      ...this.clients.keys(),
+      ...this.streams.keys(),
+      ...this.cleanupTimers.keys(),
+    ]);
     for (const key of keys) this.cleanup(key);
   }
 
@@ -295,8 +223,7 @@ export class SSEHub {
     type: string,
     payload: Record<string, unknown>,
     receivedAt: string,
-    legacyEventId: string,
-  ): BufferedRunEvent {
+  ): RunEventEnvelope {
     if (!Number.isInteger(localSeq) || localSeq <= 0) {
       throw new TypeError("Run event sequence must be a positive integer");
     }
@@ -313,19 +240,17 @@ export class SSEHub {
         type,
         payload,
         received_at: receivedAt,
-        legacy_event_id: legacyEventId,
       };
     }
     if (stream.latest_seq > 0 && localSeq > stream.latest_seq + 1) {
       stream.latest_gap = "process_restarted";
     }
-    const event: BufferedRunEvent = {
+    const event: RunEventEnvelope = {
       local_run_id: localRunId,
       local_seq: localSeq,
       type,
       payload,
       received_at: receivedAt,
-      legacy_event_id: legacyEventId,
     };
     stream.events.push(event);
     stream.latest_seq = localSeq;
@@ -390,19 +315,9 @@ export class SSEHub {
     };
   }
 
-  private resolveCursor(
-    localRunId: string,
-    cursor?: string | number,
-  ): number | undefined {
+  private resolveCursor(cursor?: number): number | undefined {
     if (cursor === undefined) return undefined;
-    if (typeof cursor === "number")
-      return Number.isInteger(cursor) && cursor >= 0 ? cursor : undefined;
-    const numeric = Number(cursor);
-    if (Number.isInteger(numeric) && numeric >= 0) return numeric;
-    const event = this.streams
-      .get(localRunId)
-      ?.events.find((entry) => entry.legacy_event_id === cursor);
-    return event?.local_seq;
+    return Number.isInteger(cursor) && cursor >= 0 ? cursor : undefined;
   }
 
   private latestSequence(localRunId: string, stream?: RunStream): number {
@@ -419,31 +334,18 @@ export class SSEHub {
     return stream;
   }
 
-  private toRunEnvelope(event: BufferedRunEvent): RunEventEnvelope {
-    return {
-      local_run_id: event.local_run_id,
-      local_seq: event.local_seq,
-      type: event.type,
-      payload: event.payload,
-      received_at: event.received_at,
-    };
+  private cancelScheduledCleanup(localRunId: string): void {
+    const timer = this.cleanupTimers.get(localRunId);
+    if (!timer) return;
+    clearTimeout(timer);
+    this.cleanupTimers.delete(localRunId);
   }
 
-  private toLegacyEnvelope(event: BufferedRunEvent): SSEEnvelope {
-    return {
-      event_id: event.legacy_event_id,
-      seq: event.local_seq,
-      timestamp: event.received_at,
-      type: event.type,
-      data: event.payload,
-    };
-  }
-
-  private writeRunEvent(reply: FastifyReply, event: BufferedRunEvent): void {
+  private writeRunEvent(reply: FastifyReply, event: RunEventEnvelope): void {
     this.writeRaw(
       event.local_run_id,
       reply,
-      `id: ${event.local_seq}\nevent: run.event\ndata: ${JSON.stringify(this.toRunEnvelope(event))}\n\n`,
+      `id: ${event.local_seq}\nevent: run.event\ndata: ${JSON.stringify(event)}\n\n`,
     );
   }
 
@@ -483,11 +385,10 @@ export class SSEHub {
     return count;
   }
 
-  private bufferBytes(events: BufferedRunEvent[]): number {
+  private bufferBytes(events: RunEventEnvelope[]): number {
     return events.reduce(
       (total, event) =>
-        total +
-        Buffer.byteLength(JSON.stringify(this.toRunEnvelope(event)), "utf8"),
+        total + Buffer.byteLength(JSON.stringify(event), "utf8"),
       0,
     );
   }

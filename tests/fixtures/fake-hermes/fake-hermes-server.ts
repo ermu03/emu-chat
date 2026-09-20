@@ -1,9 +1,5 @@
 import Fastify, { type FastifyInstance } from "fastify";
-import type {
-  HermesHealthDetailedResponse,
-  HermesMessageItem,
-  HermesSessionDetailResponse,
-} from "../../../src/shared/hermes-schemas.js";
+import type { HermesMessageItem } from "../../../src/shared/hermes-schemas.js";
 
 type UpstreamRunStatus =
   | "queued"
@@ -25,6 +21,24 @@ interface FakeSession {
   messages: HermesMessageItem[];
 }
 
+interface FakeSessionResponse {
+  id: string;
+  source: string;
+  model: null;
+  title: string;
+  started_at: number;
+  ended_at: null;
+  message_count: number;
+  parent_session_id: string | null;
+  pinned: boolean;
+  archived: boolean;
+  hidden: boolean;
+  has_system_prompt: boolean;
+  has_model_config: boolean;
+  last_active?: number;
+  preview?: string;
+}
+
 interface FakeRun {
   id: string;
   sessionId: string;
@@ -37,6 +51,7 @@ interface FakeRun {
     description: string;
     choices: string[];
   } | null;
+  approvalDecision: "once" | "deny" | null;
   events: Array<{ type: string; data: Record<string, unknown> }>;
 }
 
@@ -94,14 +109,28 @@ export class FakeHermesServer {
     this.baseUrl = null;
   }
 
-  getHealth(): HermesHealthDetailedResponse {
+  getHealth() {
     return {
-      status: "healthy",
+      status: "ok",
       version: "0.21.3-test",
-      runtime: { mode: "server_agent", tool_execution: "server" },
-      durable: true,
-      retention_seconds: 86_400,
+      readiness: { status: "ok", checks: {} },
+      platform: "hermes-agent",
+      gateway_state: "running",
+      platforms: {},
       active_agents: this.activeAgents,
+      gateway_busy: this.activeAgents > 0,
+      gateway_drainable: this.activeAgents === 0,
+      exit_reason: null,
+      updated_at: new Date().toISOString(),
+      pid: 1,
+    };
+  }
+
+  getCapabilities() {
+    return {
+      object: "hermes.api_server.capabilities",
+      platform: "hermes-agent",
+      runtime: { mode: "server_agent", tool_execution: "server" },
       features: {
         run_submission: true,
         run_status: true,
@@ -119,21 +148,35 @@ export class FakeHermesServer {
           header: "Idempotency-Key",
         },
       },
-      endpoints: [
-        { method: "GET", path: "/health/detailed" },
-        { method: "GET", path: "/api/sessions" },
-        { method: "POST", path: "/api/sessions" },
-        { method: "GET", path: "/api/sessions/{session_id}" },
-        { method: "PATCH", path: "/api/sessions/{session_id}" },
-        { method: "DELETE", path: "/api/sessions/{session_id}" },
-        { method: "GET", path: "/api/sessions/{session_id}/messages" },
-        { method: "POST", path: "/api/sessions/{session_id}/fork" },
-        { method: "POST", path: "/v1/runs" },
-        { method: "GET", path: "/v1/runs/{run_id}" },
-        { method: "GET", path: "/v1/runs/{run_id}/events" },
-        { method: "POST", path: "/v1/runs/{run_id}/approval" },
-        { method: "POST", path: "/v1/runs/{run_id}/stop" },
-      ],
+      endpoints: {
+        health_detailed: { method: "GET", path: "/health/detailed" },
+        session_create: { method: "POST", path: "/api/sessions" },
+        session: { method: "GET", path: "/api/sessions/{session_id}" },
+        session_update: {
+          method: "PATCH",
+          path: "/api/sessions/{session_id}",
+        },
+        session_delete: {
+          method: "DELETE",
+          path: "/api/sessions/{session_id}",
+        },
+        session_messages: {
+          method: "GET",
+          path: "/api/sessions/{session_id}/messages",
+        },
+        session_fork: {
+          method: "POST",
+          path: "/api/sessions/{session_id}/fork",
+        },
+        runs: { method: "POST", path: "/v1/runs" },
+        run_status: { method: "GET", path: "/v1/runs/{run_id}" },
+        run_events: { method: "GET", path: "/v1/runs/{run_id}/events" },
+        run_approval: {
+          method: "POST",
+          path: "/v1/runs/{run_id}/approval",
+        },
+        run_stop: { method: "POST", path: "/v1/runs/{run_id}/stop" },
+      },
     };
   }
 
@@ -166,15 +209,9 @@ export class FakeHermesServer {
     return session;
   }
 
-  listSessions(): HermesSessionDetailResponse[] {
-    return [...this.sessions.values()].map((session) =>
-      this.toSessionDetail(session),
-    );
-  }
-
-  getSession(id: string): HermesSessionDetailResponse | null {
+  getSession(id: string): FakeSessionResponse | null {
     const session = this.sessions.get(id);
-    return session ? this.toSessionDetail(session) : null;
+    return session ? this.toSessionResponse(session) : null;
   }
 
   getMessages(sessionId: string): HermesMessageItem[] | null {
@@ -197,87 +234,29 @@ export class FakeHermesServer {
     this.fault = null;
   }
 
-  startRun(
-    sessionId: string,
-    input: string,
-  ): {
-    run_id: string;
-    session_id: string;
-    status: "running" | "paused";
-    pause_reason?: string;
-    pause_metadata?: { tool: string; command: string };
-  } {
-    const result = this.createRun(sessionId, input);
-    if (result.kind === "error") throw new Error(result.message);
-    const paused = result.run.status === "waiting_for_approval";
-    return {
-      run_id: result.run.id,
-      session_id: sessionId,
-      status: paused ? "paused" : "running",
-      ...(paused
-        ? {
-            pause_reason: "tool_approval",
-            pause_metadata: { tool: "shell_exec", command: "echo test" },
-          }
-        : {}),
-    };
-  }
-
-  submitApproval(
-    runId: string,
-    decision: string,
-  ): { run_id: string; status: UpstreamRunStatus } {
+  completeApprovalRun(runId: string): void {
     const run = this.requireRun(runId);
-    if (decision === "approve" || decision === "once") {
+    if (run.status !== "running" || !run.approvalDecision) {
+      throw new Error("Approval run is not awaiting completion");
+    }
+    if (run.approvalDecision === "once") {
       run.status = "completed";
-      run.approval = null;
       run.events = [{ type: "run.completed", data: { run_id: run.id } }];
       this.appendAssistantResult(run, "Tool approval completed.");
     } else {
       run.status = "cancelled";
-      run.approval = null;
       run.events = [{ type: "run.cancelled", data: { run_id: run.id } }];
     }
-    return { run_id: run.id, status: run.status };
+    run.approvalDecision = null;
   }
 
-  handleGetSessions(): {
-    sessions: HermesSessionDetailResponse[];
-    total: number;
-  } {
-    const sessions = this.listSessions();
-    return { sessions, total: sessions.length };
-  }
-
-  handleStartRun(
-    sessionId: string,
-    body: { prompt: string; idempotency_key?: string },
-  ): { status: number; run?: { id: string }; error?: string } {
-    const result = this.createRun(sessionId, body.prompt, body.idempotency_key);
-    if (result.kind === "error")
-      return { status: result.status, error: result.message };
-    return { status: result.replayed ? 200 : 202, run: { id: result.run.id } };
-  }
-
-  handleSubmitApproval(
-    _sessionId: string,
-    runId: string,
-    body: { decision?: string; choice?: string },
-  ): { status: number } {
-    this.submitApproval(runId, body.choice ?? body.decision ?? "deny");
-    return { status: 200 };
-  }
-
-  handleCancelRun(_sessionId: string, runId: string): { status: number } {
+  completeStoppedRun(runId: string): void {
     const run = this.requireRun(runId);
+    if (run.status !== "stopping") {
+      throw new Error("Stopped run is not awaiting completion");
+    }
     run.status = "cancelled";
     run.events = [{ type: "run.cancelled", data: { run_id: run.id } }];
-    return { status: 200 };
-  }
-
-  handleDeleteSession(sessionId: string): { status: number } {
-    if (!this.sessions.delete(sessionId)) return { status: 404 };
-    return { status: 200 };
   }
 
   private registerRoutes(app: FastifyInstance): void {
@@ -289,34 +268,26 @@ export class FakeHermesServer {
     });
 
     app.get("/health/detailed", async () => this.getHealth());
-
-    app.get("/api/sessions", async (request) => {
-      const query = request.query as { limit?: string; offset?: string };
-      const limit = Math.max(1, Number(query.limit ?? 50));
-      const offset = Math.max(0, Number(query.offset ?? 0));
-      const sessions = this.listSessions();
-      return {
-        object: "list",
-        data: sessions.slice(offset, offset + limit),
-        total: sessions.length,
-        limit,
-        offset,
-        has_more: offset + limit < sessions.length,
-      };
-    });
+    app.get("/v1/capabilities", async () => this.getCapabilities());
 
     app.post("/api/sessions", async (request, reply) => {
       const body = (request.body ?? {}) as { title?: string };
       const session = this.createSession({ title: body.title });
-      return reply.code(201).send(this.toSessionDetail(session));
+      return reply.code(201).send({
+        object: "hermes.session",
+        session: this.toSessionResponse(session),
+      });
     });
 
     app.get("/api/sessions/:sessionId", async (request, reply) => {
-      const session = this.getSession(
+      const session = this.sessions.get(
         (request.params as { sessionId: string }).sessionId,
       );
       if (!session) return reply.code(404).send({ error: "not found" });
-      return session;
+      return {
+        object: "hermes.session",
+        session: this.toSessionResponse(session),
+      };
     });
 
     app.patch("/api/sessions/:sessionId", async (request, reply) => {
@@ -328,7 +299,10 @@ export class FakeHermesServer {
       if (body.title !== undefined) session.title = body.title;
       if (body.pinned !== undefined) session.pinned = body.pinned;
       session.updatedAt = new Date().toISOString();
-      return this.toSessionDetail(session);
+      return {
+        object: "hermes.session",
+        session: this.toSessionResponse(session),
+      };
     });
 
     app.post("/api/sessions/:sessionId/fork", async (request, reply) => {
@@ -341,14 +315,17 @@ export class FakeHermesServer {
         title: body.title ?? `${parent.title} fork`,
         parentSessionId: parent.id,
       });
-      return reply.code(201).send(this.toSessionDetail(child));
+      return reply.code(201).send({
+        object: "hermes.session",
+        session: this.toSessionResponse(child),
+      });
     });
 
     app.delete("/api/sessions/:sessionId", async (request, reply) => {
-      const result = this.handleDeleteSession(
-        (request.params as { sessionId: string }).sessionId,
-      );
-      return reply.code(result.status).send();
+      const sessionId = (request.params as { sessionId: string }).sessionId;
+      if (!this.sessions.delete(sessionId))
+        return reply.code(404).send({ error: "not found" });
+      return { object: "hermes.session.deleted", id: sessionId, deleted: true };
     });
 
     app.get("/api/sessions/:sessionId/messages", async (request, reply) => {
@@ -390,7 +367,7 @@ export class FakeHermesServer {
         return reply.code(result.status).send({ error: result.message });
       return reply.code(result.replayed ? 200 : 202).send({
         run_id: result.run.id,
-        status: "started",
+        status: result.replayed ? result.run.status : "started",
         replayed: result.replayed,
       });
     });
@@ -403,7 +380,6 @@ export class FakeHermesServer {
         status: run.status,
         partial: run.partial,
         turn_exit_reason: null,
-        pending_steer: false,
         approval: run.approval,
       };
     });
@@ -414,9 +390,9 @@ export class FakeHermesServer {
       reply.hijack();
       reply.raw.setHeader("Content-Type", "text/event-stream; charset=utf-8");
       reply.raw.setHeader("Cache-Control", "no-cache");
-      for (const [index, event] of run.events.entries()) {
+      for (const event of run.events) {
         reply.raw.write(
-          `id: ${index + 1}\nevent: ${event.type}\ndata: ${JSON.stringify({ type: event.type, data: event.data })}\n\n`,
+          `data: ${JSON.stringify({ event: event.type, run_id: run.id, timestamp: Math.floor(Date.now() / 1000), ...event.data })}\n\n`,
         );
       }
       reply.raw.end();
@@ -424,18 +400,25 @@ export class FakeHermesServer {
 
     app.post("/v1/runs/:runId/approval", async (request, reply) => {
       const runId = (request.params as { runId: string }).runId;
-      if (!this.runs.has(runId))
-        return reply.code(404).send({ error: "not found" });
-      const body = (request.body ?? {}) as { choice?: string };
-      this.submitApproval(runId, body.choice ?? "deny");
+      const run = this.runs.get(runId);
+      if (!run) return reply.code(404).send({ error: "not found" });
+      const body = (request.body ?? {}) as { choice?: unknown };
+      if (body.choice !== "once" && body.choice !== "deny")
+        return reply.code(400).send({ error: "invalid approval choice" });
+      if (run.status !== "waiting_for_approval")
+        return reply.code(409).send({ error: "approval is not pending" });
+      run.status = "running";
+      run.approval = null;
+      run.approvalDecision = body.choice;
+      run.events = [];
       return reply.code(204).send();
     });
 
     app.post("/v1/runs/:runId/stop", async (request, reply) => {
       const run = this.runs.get((request.params as { runId: string }).runId);
       if (!run) return reply.code(404).send({ error: "not found" });
-      run.status = "cancelled";
-      run.events = [{ type: "run.cancelled", data: { run_id: run.id } }];
+      run.status = "stopping";
+      run.events = [];
       return reply.code(204).send();
     });
   }
@@ -492,6 +475,7 @@ export class FakeHermesServer {
             choices: ["once", "deny"],
           }
         : null,
+      approvalDecision: null,
       events: waitingForApproval
         ? [
             {
@@ -535,7 +519,7 @@ export class FakeHermesServer {
       session_id: sessionId,
       role,
       content,
-      timestamp: Date.now(),
+      timestamp: Math.floor(Date.now() / 1000),
       tool_call_id: null,
       tool_name: null,
       token_count: 1,
@@ -545,20 +529,30 @@ export class FakeHermesServer {
     };
   }
 
-  private toSessionDetail(session: FakeSession): HermesSessionDetailResponse {
+  private toSessionResponse(
+    session: FakeSession,
+    includeListFields = false,
+  ): FakeSessionResponse {
     return {
       id: session.id,
-      title: session.title,
-      pinned: session.pinned,
-      created_at: session.createdAt,
-      updated_at: session.updatedAt,
-      last_active_at: session.updatedAt,
-      message_count: session.messages.length,
-      preview: session.messages.at(-1)?.content ?? "",
-      parent_session_id: session.parentSessionId,
       source: "api_server",
+      model: null,
+      title: session.title,
+      started_at: Math.floor(Date.parse(session.createdAt) / 1000),
+      ended_at: null,
+      message_count: session.messages.length,
+      parent_session_id: session.parentSessionId,
+      pinned: session.pinned,
       archived: false,
       hidden: false,
+      has_system_prompt: false,
+      has_model_config: false,
+      ...(includeListFields
+        ? {
+            last_active: Math.floor(Date.parse(session.updatedAt) / 1000),
+            preview: session.messages.at(-1)?.content ?? "",
+          }
+        : {}),
     };
   }
 }

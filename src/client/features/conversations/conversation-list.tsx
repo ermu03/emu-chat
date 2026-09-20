@@ -7,7 +7,7 @@ export interface ConversationListProps {
   onSelect: (id: string) => void;
   onCreate: () => void;
   onFork: (id: string) => void;
-  onDelete: (id: string, hermesSessionId: string) => void;
+  onDelete: (id: string, hermesSessionId: string, confirmed: boolean) => void;
   onUpdateMetadata: (id: string, title: string, pinned: boolean) => void;
   searchQuery: string;
   onSearchChange: (query: string) => void;
@@ -35,6 +35,17 @@ export const ConversationList: React.FC<ConversationListProps> = ({
   const [deleteTarget, setDeleteTarget] = useState<ConversationSummary | null>(
     null,
   );
+  const [deleteConfirmed, setDeleteConfirmed] = useState(false);
+
+  const openDeleteConfirmation = (conversation: ConversationSummary) => {
+    setDeleteConfirmed(false);
+    setDeleteTarget(conversation);
+  };
+
+  const closeDeleteConfirmation = () => {
+    setDeleteConfirmed(false);
+    setDeleteTarget(null);
+  };
 
   // Exact ID / Title filter
   const filtered = conversations.filter((c) => {
@@ -108,7 +119,7 @@ export const ConversationList: React.FC<ConversationListProps> = ({
                       onMobileClose?.();
                     }}
                     onFork={() => onFork(item.conversation_id)}
-                    onDelete={() => setDeleteTarget(item)}
+                    onDelete={() => openDeleteConfirmation(item)}
                     onTogglePin={() =>
                       onUpdateMetadata(
                         item.conversation_id,
@@ -137,7 +148,7 @@ export const ConversationList: React.FC<ConversationListProps> = ({
                     onMobileClose?.();
                   }}
                   onFork={() => onFork(item.conversation_id)}
-                  onDelete={() => setDeleteTarget(item)}
+                  onDelete={() => openDeleteConfirmation(item)}
                   onTogglePin={() =>
                     onUpdateMetadata(
                       item.conversation_id,
@@ -155,20 +166,58 @@ export const ConversationList: React.FC<ConversationListProps> = ({
       {/* Delete Confirmation Modal */}
       {deleteTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
-          <div className="bg-white dark:bg-neutral-800 rounded-lg max-w-sm w-full p-5 shadow-xl border border-neutral-200 dark:border-neutral-700">
-            <h3 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
-              确认删除会话？
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-conversation-heading"
+            className="bg-white dark:bg-neutral-800 rounded-lg max-w-lg w-full p-5 shadow-xl border border-neutral-200 dark:border-neutral-700"
+          >
+            <h3
+              id="delete-conversation-heading"
+              className="text-sm font-semibold text-neutral-900 dark:text-neutral-100"
+            >
+              删除当前 Hermes 会话段
             </h3>
-            <p className="mt-2 text-xs text-neutral-600 dark:text-neutral-300">
-              删除将同步请求 Hermes 删除 upstream 会话（ID:{" "}
-              <code className="font-mono text-rose-500">
-                {deleteTarget.hermes_session_id}
-              </code>
-              ）。该操作不可逆，本地草稿与状态将被清空。
-            </p>
+            <dl className="mt-3 space-y-2 text-xs text-neutral-600 dark:text-neutral-300">
+              <div>
+                <dt className="font-medium text-neutral-800 dark:text-neutral-100">
+                  目标 Hermes session ID
+                </dt>
+                <dd>
+                  <code className="font-mono text-rose-600 dark:text-rose-400 break-all">
+                    {deleteTarget.hermes_session_id}
+                  </code>
+                </dd>
+              </div>
+              <div>
+                <dt className="font-medium text-neutral-800 dark:text-neutral-100">
+                  会话标题（仅用于辅助确认）
+                </dt>
+                <dd>{deleteTarget.title || "未命名会话"}</dd>
+              </div>
+            </dl>
+            <ul className="mt-4 space-y-2 text-xs text-neutral-600 dark:text-neutral-300 list-disc pl-4">
+              <li>目标段及 Hermes 定义的 delegate children 将被删除。</li>
+              <li>
+                branch/compression children 不会级联删除，可能成为 orphan。
+              </li>
+              <li>
+                长期记忆、附件、artifact、工具生成文件和日志不会随之删除。
+              </li>
+              <li>Hermes 不提供原子 lineage/subtree 删除范围。</li>
+            </ul>
+            <label className="mt-4 flex items-start gap-2 text-xs text-neutral-800 dark:text-neutral-100 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={deleteConfirmed}
+                onChange={(event) => setDeleteConfirmed(event.target.checked)}
+                className="mt-0.5 h-4 w-4 accent-rose-600"
+              />
+              <span>我已了解以上影响，并确认此操作不可逆。</span>
+            </label>
             <div className="mt-4 flex items-center justify-end space-x-2">
               <button
-                onClick={() => setDeleteTarget(null)}
+                onClick={closeDeleteConfirmation}
                 className="px-3 py-1.5 text-xs text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded transition-colors"
               >
                 取消
@@ -178,12 +227,14 @@ export const ConversationList: React.FC<ConversationListProps> = ({
                   onDelete(
                     deleteTarget.conversation_id,
                     deleteTarget.hermes_session_id,
+                    deleteConfirmed,
                   );
-                  setDeleteTarget(null);
+                  closeDeleteConfirmation();
                 }}
-                className="px-3 py-1.5 text-xs font-medium bg-rose-600 hover:bg-rose-700 text-white rounded transition-colors"
+                disabled={!deleteConfirmed}
+                className="px-3 py-1.5 text-xs font-medium bg-rose-600 hover:bg-rose-700 text-white rounded transition-colors disabled:cursor-not-allowed disabled:opacity-50"
               >
-                确认删除
+                删除当前 Hermes 会话段
               </button>
             </div>
           </div>
@@ -245,7 +296,7 @@ const ConversationItemRow: React.FC<ConversationItemRowProps> = ({
             ⌥
           </button>
           <button
-            title="删除会话"
+            title="删除当前 Hermes 会话段"
             onClick={(e) => {
               e.stopPropagation();
               onDelete();

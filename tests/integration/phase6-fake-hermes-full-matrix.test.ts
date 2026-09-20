@@ -45,12 +45,8 @@ describe("Phase 6: Fake Hermes HTTP compatibility matrix", () => {
     await fakeHermes.close();
   });
 
-  it("normalizes session list/detail/message responses and follows an effective session rotation", async () => {
+  it("normalizes session detail/message responses and follows an effective session rotation", async () => {
     const created = await adapter.createSession({ title: "Matrix session" });
-    const sessions = await adapter.listSessions({ limit: 10, offset: 0 });
-    expect(sessions.sessions.map((session) => session.id)).toContain(
-      created.id,
-    );
 
     const detail = await adapter.getSession(created.id);
     expect(detail).toMatchObject({
@@ -70,6 +66,11 @@ describe("Phase 6: Fake Hermes HTTP compatibility matrix", () => {
       "Hello Hermes",
       "Hello from Fake Hermes.",
     ]);
+    expect(
+      initialMessages.messages.every(
+        (message) => message.timestamp < 10_000_000_000,
+      ),
+    ).toBe(true);
 
     fakeHermes.setEffectiveSessionIdForMessages("ses_test_1", created.id);
     const rotated = await adapter.getSessionMessages("ses_test_1");
@@ -96,7 +97,7 @@ describe("Phase 6: Fake Hermes HTTP compatibility matrix", () => {
     });
     expect(replay).toEqual({
       run_id: first.run_id,
-      status: "started",
+      status: "completed",
       replayed: true,
     });
 
@@ -120,6 +121,10 @@ describe("Phase 6: Fake Hermes HTTP compatibility matrix", () => {
     );
     await adapter.submitApproval(approved.run_id, "once");
     expect((await adapter.getRunStatus(approved.run_id)).status).toBe(
+      "running",
+    );
+    fakeHermes.completeApprovalRun(approved.run_id);
+    expect((await adapter.getRunStatus(approved.run_id)).status).toBe(
       "completed",
     );
 
@@ -128,6 +133,8 @@ describe("Phase 6: Fake Hermes HTTP compatibility matrix", () => {
       prompt: "Needs denial",
     });
     await adapter.submitApproval(denied.run_id, "deny");
+    expect((await adapter.getRunStatus(denied.run_id)).status).toBe("running");
+    fakeHermes.completeApprovalRun(denied.run_id);
     expect((await adapter.getRunStatus(denied.run_id)).status).toBe(
       "cancelled",
     );
@@ -137,6 +144,10 @@ describe("Phase 6: Fake Hermes HTTP compatibility matrix", () => {
       prompt: "Needs stop",
     });
     await adapter.stopRun(stopped.run_id);
+    expect((await adapter.getRunStatus(stopped.run_id)).status).toBe(
+      "stopping",
+    );
+    fakeHermes.completeStoppedRun(stopped.run_id);
     expect((await adapter.getRunStatus(stopped.run_id)).status).toBe(
       "cancelled",
     );
@@ -164,7 +175,7 @@ describe("Phase 6: Fake Hermes HTTP compatibility matrix", () => {
       errorType: "network_error",
       message: "Hermes offline",
     });
-    await expect(adapter.listSessions()).rejects.toBeInstanceOf(
+    await expect(adapter.getSession("ses_test_1")).rejects.toBeInstanceOf(
       HermesUnavailableError,
     );
     expect(draftRepo.findByConversationId(localConversationId)?.content).toBe(

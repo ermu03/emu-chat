@@ -9,8 +9,9 @@ import {
 import { QueueRepository } from "../../src/server/db/repositories/queue.repository.js";
 import { LeaseRepository } from "../../src/server/db/repositories/lease.repository.js";
 import {
-  ConflictError,
+  LocalConflictError,
   QueueFullError,
+  StateConflictError,
 } from "../../src/server/domain/errors.js";
 import { LIMITS } from "../../src/shared/limits.js";
 
@@ -74,7 +75,7 @@ describe("Phase 1 Repositories & State Integration (In-Memory SQLite)", () => {
 
       expect(() => {
         convRepo.updateMetadata(conv.id, 0, { custom_order: 2 });
-      }).toThrow(ConflictError);
+      }).toThrow(LocalConflictError);
     });
 
     it("manages queue pause state and delete state", () => {
@@ -98,6 +99,49 @@ describe("Phase 1 Repositories & State Integration (In-Memory SQLite)", () => {
       const deleting = convRepo.setDeleteState(conv.id, "pending");
       expect(deleting.delete_state).toBe("pending");
     });
+
+    it("adopts an empty effective-session projection without replacing local state", () => {
+      const sourceId = "cv_01956789-0000-7000-8000-000000000006";
+      const emptyTipId = "cv_01956789-0000-7000-8000-000000000007";
+      addConversation(sourceId, "session-before-rollover");
+      addConversation(emptyTipId, "session-effective-tip");
+      draftRepo.saveDraft(sourceId, "");
+      draftRepo.saveDraft(emptyTipId, "");
+
+      const adopted = convRepo.adoptEffectiveHermesSessionId(
+        sourceId,
+        "session-effective-tip",
+      );
+      expect(adopted).toMatchObject({
+        id: sourceId,
+        hermes_session_id: "session-effective-tip",
+      });
+      expect(convRepo.findById(emptyTipId)).toBeNull();
+      expect(draftRepo.findByConversationId(emptyTipId)).toBeNull();
+      expect(convRepo.findBySessionId("session-effective-tip")?.id).toBe(
+        sourceId,
+      );
+
+      const blockedSourceId = "cv_01956789-0000-7000-8000-000000000008";
+      const materialTipId = "cv_01956789-0000-7000-8000-000000000009";
+      addConversation(blockedSourceId, "session-before-material-tip");
+      addConversation(materialTipId, "session-material-tip");
+      draftRepo.saveDraft(blockedSourceId, "");
+      draftRepo.saveDraft(materialTipId, "Do not discard this draft");
+
+      expect(() => {
+        convRepo.adoptEffectiveHermesSessionId(
+          blockedSourceId,
+          "session-material-tip",
+        );
+      }).toThrow(LocalConflictError);
+      expect(convRepo.findById(blockedSourceId)?.hermes_session_id).toBe(
+        "session-before-material-tip",
+      );
+      expect(draftRepo.findByConversationId(materialTipId)?.content).toBe(
+        "Do not discard this draft",
+      );
+    });
   });
 
   describe("DraftRepository", () => {
@@ -114,7 +158,25 @@ describe("Phase 1 Repositories & State Integration (In-Memory SQLite)", () => {
 
       expect(() => {
         draftRepo.saveDraft(cvId, "conflict draft", 0);
-      }).toThrow(ConflictError);
+      }).toThrow(LocalConflictError);
+    });
+
+    it("rejects writes after a conversation is pending or failed deletion", () => {
+      const cvId = "cv_01956789-0000-7000-8000-000000000005";
+      addConversation(cvId);
+
+      for (const deleteState of ["pending", "failed"] as const) {
+        convRepo.setDeleteState(
+          cvId,
+          deleteState,
+          deleteState === "failed" ? "HERMES_UNAVAILABLE" : null,
+        );
+
+        expect(() => {
+          draftRepo.saveDraft(cvId, "must not persist", 0);
+        }).toThrow(StateConflictError);
+        expect(draftRepo.findByConversationId(cvId)).toBeNull();
+      }
     });
   });
 
@@ -130,7 +192,7 @@ describe("Phase 1 Repositories & State Integration (In-Memory SQLite)", () => {
 
       expect(() => {
         prefRepo.update(0, { theme: "light" });
-      }).toThrow(ConflictError);
+      }).toThrow(LocalConflictError);
     });
   });
 

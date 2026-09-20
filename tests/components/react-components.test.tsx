@@ -14,6 +14,7 @@ import { QueueDrawer } from "../../src/client/features/queue/queue-drawer";
 import { ApprovalDialog } from "../../src/client/features/approval/approval-dialog";
 import { StatusBar } from "../../src/client/features/status/status-bar";
 import { ToolCallCard } from "../../src/client/features/tools/tool-call-card";
+import { ConversationList } from "../../src/client/features/conversations/conversation-list";
 
 afterEach(() => {
   cleanup();
@@ -22,6 +23,69 @@ afterEach(() => {
 });
 
 describe("React Components Static Tests", () => {
+  describe("ConversationList deletion", () => {
+    it("requires an irreversible confirmation and describes the Hermes deletion scope", () => {
+      const onDelete = vi.fn();
+      render(
+        <ConversationList
+          conversations={[
+            {
+              conversation_id: "cv_test",
+              hermes_session_id: "ses_test_1",
+              effective_hermes_session_id: "ses_test_1",
+              title: "Project setup",
+              pinned: false,
+              tags: [],
+              custom_order: null,
+              last_active: 0,
+              message_count: 0,
+              preview: "",
+              has_active_run: false,
+              queue_size: 0,
+              queue_paused: false,
+              has_recovery: false,
+              delete_state: "none",
+              local_revision: 0,
+            },
+          ]}
+          activeConversationId="cv_test"
+          onSelect={vi.fn()}
+          onCreate={vi.fn()}
+          onFork={vi.fn()}
+          onDelete={onDelete}
+          onUpdateMetadata={vi.fn()}
+          searchQuery=""
+          onSearchChange={vi.fn()}
+          loading={false}
+        />,
+      );
+
+      fireEvent.click(screen.getByTitle("删除当前 Hermes 会话段"));
+
+      expect(
+        screen.getByRole("dialog", { name: "删除当前 Hermes 会话段" }),
+      ).toBeDefined();
+      expect(screen.getByText("ses_test_1")).toBeDefined();
+      expect(screen.getByText(/delegate children/)).toBeDefined();
+      expect(screen.getByText(/可能成为 orphan/)).toBeDefined();
+      expect(screen.getByText(/artifact.*不会随之删除/)).toBeDefined();
+
+      const deleteButton = screen.getByRole("button", {
+        name: "删除当前 Hermes 会话段",
+      }) as HTMLButtonElement;
+      expect(deleteButton.disabled).toBe(true);
+      fireEvent.click(deleteButton);
+      expect(onDelete).not.toHaveBeenCalled();
+
+      fireEvent.click(
+        screen.getByRole("checkbox", { name: /我已了解以上影响/ }),
+      );
+      expect(deleteButton.disabled).toBe(false);
+      fireEvent.click(deleteButton);
+      expect(onDelete).toHaveBeenCalledWith("cv_test", "ses_test_1", true);
+    });
+  });
+
   describe("DraftComposer", () => {
     it("renders textarea with placeholder and character count", () => {
       const onSaveDraft = vi.fn().mockResolvedValue({ revision: 1 });
@@ -221,7 +285,13 @@ describe("React Components Static Tests", () => {
           isOpen={true}
           onClose={vi.fn()}
           items={[]}
+          paused={false}
+          pauseReason={null}
           onCancelItem={vi.fn().mockResolvedValue(undefined)}
+          onEditItem={vi.fn().mockResolvedValue(undefined)}
+          onResume={vi.fn().mockResolvedValue(undefined)}
+          onCopyToDraft={vi.fn().mockResolvedValue(undefined)}
+          onDiscardRecovery={vi.fn().mockResolvedValue(undefined)}
         />,
       );
 
@@ -233,10 +303,21 @@ describe("React Components Static Tests", () => {
       const items = [
         {
           id: "qi_001",
-          sequence_number: 1,
-          status: "queued" as const,
+          object: "emu_chat.queue_item" as const,
+          conversation_id: "cv_001",
+          operation_id: "op_001",
+          fifo_seq: 1,
+          state: "queued" as const,
           created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
           content: "Hello Hermes",
+          payload_bytes: 12,
+          payload_available: true,
+          recovery_expires_at: null,
+          payload_expired_at: null,
+          local_run_id: null,
+          revision: 0,
+          last_error_code: null,
         },
       ];
 
@@ -245,16 +326,24 @@ describe("React Components Static Tests", () => {
           isOpen={true}
           onClose={vi.fn()}
           items={items}
+          paused={false}
+          pauseReason={null}
           onCancelItem={vi
             .fn()
-            .mockImplementation(async (id: string) => onCancelItem(id))}
+            .mockImplementation(async (id: string, revision: number) =>
+              onCancelItem(id, revision),
+            )}
+          onEditItem={vi.fn().mockResolvedValue(undefined)}
+          onResume={vi.fn().mockResolvedValue(undefined)}
+          onCopyToDraft={vi.fn().mockResolvedValue(undefined)}
+          onDiscardRecovery={vi.fn().mockResolvedValue(undefined)}
         />,
       );
 
       expect(screen.getByText(/Hello Hermes/)).toBeDefined();
       const cancelBtn = screen.getByText(/取消排队/i);
       fireEvent.click(cancelBtn);
-      expect(onCancelItem).toHaveBeenCalledWith("qi_001");
+      expect(onCancelItem).toHaveBeenCalledWith("qi_001", 0);
     });
   });
 

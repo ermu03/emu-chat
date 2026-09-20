@@ -1,8 +1,8 @@
 import { FastifyPluginAsync } from "fastify";
 import { DraftPreferencesService } from "../../services/draft-preferences-service.js";
 import {
-  putDraftRequestSchema,
-  putPreferencesRequestSchema,
+  PutDraftRequestSchema,
+  PutPreferencesRequestSchema,
 } from "../../../shared/api-schemas.js";
 
 export interface DraftPreferencesRouteOptions {
@@ -29,7 +29,7 @@ export const draftPreferencesRoutes: FastifyPluginAsync<
     "/conversations/:id/draft",
     async (request, reply) => {
       const { id } = request.params;
-      const body = putDraftRequestSchema.parse(request.body);
+      const body = PutDraftRequestSchema.parse(request.body);
       const draft = draftPreferencesService.putDraft(
         id,
         body.content,
@@ -47,7 +47,7 @@ export const draftPreferencesRoutes: FastifyPluginAsync<
 
   // PUT /api/v1/preferences
   fastify.put("/preferences", async (request, reply) => {
-    const body = putPreferencesRequestSchema.parse(request.body);
+    const body = PutPreferencesRequestSchema.parse(request.body);
     const preferences = draftPreferencesService.putPreferences(body);
     return reply.status(200).send(preferences);
   });

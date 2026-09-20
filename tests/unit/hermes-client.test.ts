@@ -127,4 +127,35 @@ describe("HermesClient", () => {
     );
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it("aborts a silently open SSE connection after the liveness timeout", async () => {
+    globalThis.fetch = vi
+      .fn()
+      .mockImplementation(async (_url: string, init?: RequestInit) => {
+        const signal = init?.signal;
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            signal?.addEventListener(
+              "abort",
+              () => controller.error(new DOMException("aborted", "AbortError")),
+              { once: true },
+            );
+          },
+        });
+        return new Response(body, {
+          status: 200,
+          headers: { "Content-Type": "text/event-stream" },
+        });
+      }) as typeof fetch;
+    const client = new HermesClient({
+      baseUrl: "http://127.0.0.1:8642",
+      token: "test-token",
+    });
+
+    await expect(
+      client
+        .stream("/v1/runs/run_silent/events", { livenessTimeoutMs: 20 })
+        .next(),
+    ).rejects.toBeInstanceOf(HermesUnavailableError);
+  });
 });

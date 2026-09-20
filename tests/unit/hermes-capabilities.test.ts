@@ -5,6 +5,7 @@ import {
   incompatibleMissingEndpointsHealthResponse,
   incompatibleDisabledFeatureHealthResponse,
   incompatibleShortRetentionHealthResponse,
+  incompatibleOperationalHealthResponse,
 } from "../fixtures/hermes/health.fixture.js";
 
 describe("Hermes Capabilities Evaluator", () => {
@@ -43,5 +44,13 @@ describe("Hermes Capabilities Evaluator", () => {
     expect(
       result.missingCapabilities.some((r) => r.includes("retention_seconds")),
     ).toBe(true);
+  });
+
+  it("marks a non-ok operational health response incompatible", () => {
+    const result = evaluateHermesCapabilities(
+      incompatibleOperationalHealthResponse,
+    );
+    expect(result.status).toBe("incompatible");
+    expect(result.healthy).toBe(false);
   });
 });

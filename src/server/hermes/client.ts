@@ -6,13 +6,12 @@ import {
   HermesTemporaryFailureError,
   HermesUnavailableError,
 } from "../domain/errors.js";
+import { LIMITS } from "../../shared/limits.js";
 
 export interface HermesClientOptions {
   baseUrl: string;
   token?: string;
   defaultTimeoutMs?: number;
-  /** Legacy constructor alias. */
-  timeoutMs?: number;
   maxBodySizeBytes?: number;
 }
 
@@ -42,8 +41,9 @@ export class HermesClient {
     this.baseUrl = options.baseUrl.replace(/\/+$/, "");
     this.token = options.token?.trim() || undefined;
     this.defaultTimeoutMs =
-      options.defaultTimeoutMs ?? options.timeoutMs ?? 10_000;
-    this.maxBodySizeBytes = options.maxBodySizeBytes ?? 4 * 1024 * 1024;
+      options.defaultTimeoutMs ?? LIMITS.UPSTREAM_READ_TIMEOUT_MS;
+    this.maxBodySizeBytes =
+      options.maxBodySizeBytes ?? LIMITS.UPSTREAM_MAX_RESPONSE_BYTES;
   }
 
   isConfigured(): boolean {
@@ -104,10 +104,17 @@ export class HermesClient {
   /** Parse one upstream SSE response. The caller owns the single consumer. */
   async *stream(
     path: string,
-    options: { timeoutMs?: number; headers?: Record<string, string> } = {},
+    options: {
+      timeoutMs?: number;
+      livenessTimeoutMs?: number;
+      headers?: Record<string, string>;
+    } = {},
   ): AsyncGenerator<HermesSseEvent> {
     this.assertConfigured();
-    const timeoutMs = options.timeoutMs ?? 10_000;
+    const timeoutMs =
+      options.timeoutMs ?? LIMITS.UPSTREAM_SSE_HANDSHAKE_TIMEOUT_MS;
+    const livenessTimeoutMs =
+      options.livenessTimeoutMs ?? LIMITS.UPSTREAM_SSE_LIVENESS_TIMEOUT_MS;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -146,10 +153,17 @@ export class HermesClient {
         return event;
       };
       while (true) {
-        const { done, value } = await reader.read();
+        const { done, value } = await this.readSseChunk(
+          reader,
+          controller,
+          livenessTimeoutMs,
+        );
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
-        if (Buffer.byteLength(buffer, "utf8") > 256 * 1024)
+        if (
+          Buffer.byteLength(buffer, "utf8") >
+          LIMITS.UPSTREAM_MAX_SSE_FRAME_BYTES
+        )
           throw new HermesProtocolError("Hermes SSE frame exceeds limit");
         const lines = buffer.split(/\r?\n/);
         buffer = lines.pop() ?? "";
@@ -202,6 +216,26 @@ export class HermesClient {
       for (const [key, value] of Object.entries(query))
         if (value !== undefined) url.searchParams.set(key, String(value));
     return url.toString();
+  }
+
+  private async readSseChunk(
+    reader: ReadableStreamDefaultReader<Uint8Array>,
+    controller: AbortController,
+    timeoutMs: number,
+  ) {
+    let timer: NodeJS.Timeout | undefined;
+    const read = reader.read();
+    const livenessTimeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        reject(new HermesUnavailableError("Hermes SSE stream became idle"));
+      }, timeoutMs);
+    });
+    try {
+      return await Promise.race([read, livenessTimeout]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   private assertConfigured(): void {

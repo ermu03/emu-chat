@@ -22,12 +22,16 @@ import type {
 import type { QueueRepository } from "../db/repositories/queue.repository.js";
 import type { RunRepository } from "../db/repositories/run.repository.js";
 import {
-  ConflictError,
   DeleteUnconfirmedError,
+  HermesBusyGlobalError,
+  HermesNotFoundError,
   LocalNotFoundError,
-  ValidationError,
+  InvalidRequestError,
+  LocalConflictError,
+  StateConflictError,
 } from "../domain/errors.js";
 import type { HermesAdapter } from "../hermes/adapter.js";
+import type { SSEHub } from "../sse/sse-hub.js";
 import type {
   HermesMessageItem,
   HermesSessionDetailResponse,
@@ -36,7 +40,6 @@ import type {
 export interface ListConversationsParams {
   limit?: number | undefined;
   offset?: number | undefined;
-  session_id?: string | undefined;
   title?: string | undefined;
 }
 
@@ -48,6 +51,7 @@ export class ConversationService {
     private readonly draftRepo: DraftRepository,
     private readonly queueRepo: QueueRepository,
     private readonly runRepo: RunRepository,
+    private readonly sseHub: SSEHub,
   ) {}
 
   async listConversations(
@@ -56,36 +60,37 @@ export class ConversationService {
     const limit = Math.min(Math.max(params.limit ?? 50, 1), 100);
     const offset = Math.max(params.offset ?? 0, 0);
 
-    if (params.session_id) {
-      const remote = await this.hermesAdapter.getSession(
-        params.session_id.trim(),
-      );
-      const conversation = this.ensureConversation(remote);
-      return {
-        items: [this.toSummary(conversation, remote)],
-        limit,
-        offset: 0,
-        has_more: false,
-      };
+    // The local registry is the ownership boundary. Never discover or adopt
+    // sessions created by another Hermes client.
+    const registered: Array<{
+      conversation: ConversationEntity;
+      remote: HermesSessionDetailResponse;
+    }> = [];
+    for (const conversation of this.conversationRepo.list()) {
+      try {
+        const remote = await this.hermesAdapter.getSession(
+          conversation.hermes_session_id,
+        );
+        if (params.title && remote.title !== params.title) continue;
+        this.conversationRepo.updateLastSeen(
+          conversation.id,
+          remote.updated_at,
+        );
+        registered.push({ conversation, remote });
+      } catch (error) {
+        if (!(error instanceof HermesNotFoundError)) throw error;
+        this.removeMissingLocalConversation(conversation);
+      }
     }
 
-    const upstream = await this.hermesAdapter.listSessions({
+    const page = registered.slice(offset, offset + limit);
+    return {
+      items: page.map(({ conversation, remote }) =>
+        this.toSummary(conversation, remote),
+      ),
       limit,
       offset,
-      ...(params.title ? { search: params.title } : {}),
-    });
-    const sessions = params.title
-      ? upstream.sessions.filter((session) => session.title === params.title)
-      : upstream.sessions;
-
-    return {
-      items: sessions.map((session) => {
-        const conversation = this.ensureConversation(session);
-        return this.toSummary(conversation, session);
-      }),
-      limit: upstream.limit,
-      offset: upstream.offset,
-      has_more: params.title ? false : upstream.has_more,
+      has_more: offset + page.length < registered.length,
     };
   }
 
@@ -117,13 +122,13 @@ export class ConversationService {
     );
 
     if (upstream.session_id !== conversation.hermes_session_id) {
-      this.conversationRepo.updateHermesSessionId(
+      this.conversationRepo.adoptEffectiveHermesSessionId(
         conversation.id,
         upstream.session_id,
       );
     }
 
-    const items = (upstream.messages ?? []).map((message) =>
+    const items = upstream.messages.map((message) =>
       this.toMessageItem(message),
     );
     return {
@@ -150,16 +155,26 @@ export class ConversationService {
     conversationId: string,
     request: PatchHermesMetadataRequest,
   ): Promise<ConversationDetailResponse> {
-    const conversation = this.requireConversation(conversationId);
-    const remote = await this.hermesAdapter.updateSession(
+    const conversation = this.requireMutableConversation(conversationId);
+    await this.hermesAdapter.updateSession(
       conversation.hermes_session_id,
       request.field === "title"
         ? { title: request.value }
         : { pinned: request.value },
     );
-    this.conversationRepo.updateLastSeen(conversation.id, remote.updated_at);
-    const refreshed =
-      this.conversationRepo.findById(conversation.id) ?? conversation;
+    const afterPatch = this.requireMutableConversation(
+      conversation.id,
+      conversation.hermes_session_id,
+    );
+    // Hermes PATCH is not the authoritative detail representation.
+    const remote = await this.hermesAdapter.getSession(
+      afterPatch.hermes_session_id,
+    );
+    const refreshed = this.requireMutableConversation(
+      conversation.id,
+      conversation.hermes_session_id,
+    );
+    this.conversationRepo.updateLastSeen(refreshed.id, remote.updated_at);
     return this.toDetail(refreshed, remote);
   }
 
@@ -167,13 +182,20 @@ export class ConversationService {
     conversationId: string,
     request: PatchLocalMetadataRequest,
   ): Promise<ConversationDetailResponse> {
-    const conversation = this.requireConversation(conversationId);
+    const conversation = this.requireMutableConversation(conversationId);
     if (request.tags === undefined && request.custom_order === undefined) {
-      throw new ValidationError(
+      throw new InvalidRequestError(
         "At least one local metadata field is required",
       );
     }
 
+    const remote = await this.hermesAdapter.getSession(
+      conversation.hermes_session_id,
+    );
+    this.requireMutableConversation(
+      conversation.id,
+      conversation.hermes_session_id,
+    );
     const updated = this.conversationRepo.updateMetadata(
       conversation.id,
       request.expected_revision,
@@ -186,23 +208,28 @@ export class ConversationService {
           : { custom_order: request.custom_order }),
       },
     );
-    const remote = await this.hermesAdapter.getSession(
-      updated.hermes_session_id,
+    const refreshed = this.requireMutableConversation(
+      updated.id,
+      conversation.hermes_session_id,
     );
-    return this.toDetail(updated, remote);
+    return this.toDetail(refreshed, remote);
   }
 
   async forkConversation(
     conversationId: string,
     data: { title?: string | undefined } = {},
   ): Promise<ConversationDetailResponse> {
-    const conversation = this.requireConversation(conversationId);
+    const conversation = this.requireMutableConversation(conversationId);
     this.ensureNoActiveRun(conversation);
     const remote = await this.hermesAdapter.forkSession(
       conversation.hermes_session_id,
       data.title === undefined ? {} : { title: data.title },
     );
-    const fork = this.ensureConversation(remote, conversation.tags_json);
+    await this.ensureSourceStillMutableAfterCreatingSession(
+      conversation,
+      remote.id,
+    );
+    const fork = this.ensureConversation(remote);
     return this.toDetail(fork, remote);
   }
 
@@ -210,10 +237,14 @@ export class ConversationService {
     conversationId: string,
     data: { title?: string | undefined } = {},
   ): Promise<ConversationDetailResponse> {
-    const conversation = this.requireConversation(conversationId);
+    const conversation = this.requireMutableConversation(conversationId);
     this.ensureNoActiveRun(conversation);
     const remote = await this.hermesAdapter.createSession(
       data.title === undefined ? {} : { title: data.title },
+    );
+    await this.ensureSourceStillMutableAfterCreatingSession(
+      conversation,
+      remote.id,
     );
     const reset = this.ensureConversation(remote);
     return this.toDetail(reset, remote);
@@ -230,41 +261,117 @@ export class ConversationService {
       );
     }
     if (conversation.hermes_session_id !== request.expected_hermes_session_id) {
-      throw new ConflictError(
+      throw new LocalConflictError(
         "expected_hermes_session_id does not match the current mapping",
       );
     }
     this.ensureNoActiveRun(conversation);
     if (this.queueRepo.findActiveByConversation(conversation.id)) {
-      throw new ConflictError(
+      throw new LocalConflictError(
         "Cannot delete a conversation with an active queue item",
       );
     }
 
-    const health = await this.hermesAdapter.getDetailedHealth();
+    // Mark synchronously before any upstream await. The coordinator already
+    // excludes pending deletions, so queued work cannot race into dispatch.
+    const deletingConversation = this.conversationRepo.beginDeletion(
+      conversation.id,
+      request.expected_hermes_session_id,
+    );
+    try {
+      await this.hermesAdapter.getSession(
+        deletingConversation.hermes_session_id,
+      );
+    } catch (error) {
+      if (error instanceof HermesNotFoundError)
+        return this.completeLocalDeletion(deletingConversation);
+      this.markDeleteFailure(deletingConversation.id, error);
+      throw error;
+    }
+
+    let health;
+    try {
+      health = await this.hermesAdapter.getDetailedHealth();
+    } catch (error) {
+      this.conversationRepo.setDeleteState(deletingConversation.id, "none");
+      throw error;
+    }
     if (health.active_agents !== 0) {
-      throw new ConflictError(
+      this.conversationRepo.setDeleteState(deletingConversation.id, "none");
+      throw new HermesBusyGlobalError(
         "Cannot delete while Hermes reports active agents",
       );
     }
 
-    this.conversationRepo.setDeleteState(conversation.id, "pending");
     try {
-      await this.hermesAdapter.deleteSession(conversation.hermes_session_id);
-      this.conversationRepo.delete(conversation.id);
-      return {
-        conversation_id: conversation.id,
-        hermes_deleted: true,
-        local_cleaned: true,
-      };
-    } catch (error) {
-      this.conversationRepo.setDeleteState(
-        conversation.id,
-        "failed",
-        error instanceof Error ? error.name : "HERMES_DELETE_FAILED",
+      await this.hermesAdapter.deleteSession(
+        deletingConversation.hermes_session_id,
       );
+    } catch (error) {
+      if (error instanceof HermesNotFoundError) {
+        try {
+          await this.hermesAdapter.getSession(
+            deletingConversation.hermes_session_id,
+          );
+        } catch (confirmError) {
+          if (confirmError instanceof HermesNotFoundError)
+            return this.completeLocalDeletion(deletingConversation);
+          this.markDeleteFailure(deletingConversation.id, confirmError);
+          throw confirmError;
+        }
+      }
+      this.markDeleteFailure(deletingConversation.id, error);
       throw error;
     }
+
+    return this.completeLocalDeletion(deletingConversation);
+  }
+
+  private completeLocalDeletion(
+    conversation: ConversationEntity,
+  ): DeleteConversationResponse {
+    const runIds = this.runRepo
+      .listByConversation(conversation.id)
+      .map((run) => run.id);
+    try {
+      if (!this.conversationRepo.delete(conversation.id))
+        throw new LocalNotFoundError(
+          "Conversation was already removed locally",
+        );
+    } catch (error) {
+      if (this.conversationRepo.findById(conversation.id))
+        this.markDeleteFailure(conversation.id, error);
+      throw error;
+    }
+    for (const runId of runIds) this.sseHub.cleanup(runId);
+    return {
+      conversation_id: conversation.id,
+      hermes_deleted: true,
+      local_cleaned: true,
+    };
+  }
+
+  private removeMissingLocalConversation(
+    conversation: ConversationEntity,
+  ): void {
+    const runIds = this.runRepo
+      .listByConversation(conversation.id)
+      .map((run) => run.id);
+    if (!this.conversationRepo.delete(conversation.id)) return;
+    for (const runId of runIds) this.sseHub.cleanup(runId);
+  }
+
+  private markDeleteFailure(conversationId: string, error: unknown): void {
+    const code =
+      error &&
+      typeof error === "object" &&
+      "code" in error &&
+      typeof (error as { code: unknown }).code === "string"
+        ? (error as { code: string }).code
+        : error instanceof Error
+          ? error.name
+          : "HERMES_DELETE_FAILED";
+    this.conversationRepo.setDeleteState(conversationId, "failed", code);
   }
 
   private ensureConversation(
@@ -301,9 +408,50 @@ export class ConversationService {
     return conversation;
   }
 
+  private requireMutableConversation(
+    conversationId: string,
+    expectedHermesSessionId?: string,
+  ): ConversationEntity {
+    const conversation = this.requireConversation(conversationId);
+    if (conversation.delete_state !== "none") {
+      throw new StateConflictError(
+        "Conversation is unavailable while deletion is pending or failed",
+        { current_state: conversation.delete_state },
+      );
+    }
+    if (
+      expectedHermesSessionId !== undefined &&
+      conversation.hermes_session_id !== expectedHermesSessionId
+    ) {
+      throw new LocalConflictError(
+        "Hermes session mapping changed while the request was in progress",
+      );
+    }
+    return conversation;
+  }
+
+  private async ensureSourceStillMutableAfterCreatingSession(
+    source: ConversationEntity,
+    createdSessionId: string,
+  ): Promise<void> {
+    try {
+      this.requireMutableConversation(source.id, source.hermes_session_id);
+    } catch (error) {
+      try {
+        await this.hermesAdapter.deleteSession(createdSessionId);
+      } catch {
+        throw new LocalConflictError(
+          "Conversation changed while creating a session; manual Hermes cleanup is required",
+          { hermes_session_id: createdSessionId },
+        );
+      }
+      throw error;
+    }
+  }
+
   private ensureNoActiveRun(conversation: ConversationEntity): void {
     if (this.runRepo.findActiveByConversation(conversation.id)) {
-      throw new ConflictError("Conversation has an active run");
+      throw new LocalConflictError("Conversation has an active run");
     }
   }
 

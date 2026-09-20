@@ -156,6 +156,3 @@ export class SafeLogger {
 export const logger = new SafeLogger(
   (process.env["LOG_LEVEL"] as LogLevel) || "info",
 );
-
-// Compatibility alias for services written before SafeLogger was finalized.
-export const sanitizedLogger = logger;

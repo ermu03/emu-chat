@@ -10,7 +10,6 @@ export default tseslint.config(
       "tests/**/*.{ts,tsx}",
       "vite.config.ts",
       "vitest.config.ts",
-      "playwright.config.ts",
     ],
     extends: [tseslint.configs.recommended],
     rules: {

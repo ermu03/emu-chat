@@ -1,7 +1,7 @@
 import type { HermesHealthDetailedResponse } from "../../../src/shared/hermes-schemas.js";
 
 export const validCapabilitiesHealthResponse: HermesHealthDetailedResponse = {
-  status: "healthy",
+  status: "ok",
   version: "0.9.5",
   runtime: {
     mode: "server_agent",
@@ -28,7 +28,6 @@ export const validCapabilitiesHealthResponse: HermesHealthDetailedResponse = {
     },
   },
   endpoints: [
-    { method: "GET", path: "/api/sessions" },
     { method: "POST", path: "/api/sessions" },
     { method: "GET", path: "/api/sessions/{session_id}" },
     { method: "PATCH", path: "/api/sessions/{session_id}" },
@@ -47,7 +46,7 @@ export const validCapabilitiesHealthResponse: HermesHealthDetailedResponse = {
 export const incompatibleMissingEndpointsHealthResponse: HermesHealthDetailedResponse =
   {
     ...validCapabilitiesHealthResponse,
-    endpoints: [{ method: "GET", path: "/api/sessions" }],
+    endpoints: [{ method: "POST", path: "/api/sessions" }],
   };
 
 export const incompatibleDisabledFeatureHealthResponse: HermesHealthDetailedResponse =
@@ -63,4 +62,10 @@ export const incompatibleShortRetentionHealthResponse: HermesHealthDetailedRespo
   {
     ...validCapabilitiesHealthResponse,
     retention_seconds: 3600, // less than 86400
+  };
+
+export const incompatibleOperationalHealthResponse: HermesHealthDetailedResponse =
+  {
+    ...validCapabilitiesHealthResponse,
+    status: "degraded",
   };

@@ -65,14 +65,6 @@ export class InvalidRequestError extends AppError {
   }
 }
 
-/** Backwards-compatible name used by route/service validation code. */
-export class ValidationError extends InvalidRequestError {
-  constructor(message: string, details?: Record<string, unknown>) {
-    super(message, details);
-    this.name = "ValidationError";
-  }
-}
-
 export class PayloadTooLargeError extends AppError {
   constructor(message: string, details?: Record<string, unknown>) {
     super({
@@ -343,33 +335,10 @@ export class InternalError extends AppError {
   }
 }
 
-// Aliases for domain operations and repository compatibility
-export class NotFoundError extends LocalNotFoundError {}
-export class ConflictError extends LocalConflictError {}
 export class QueueFullError extends StateConflictError {
   constructor(
     message: string = "Queue depth limit exceeded (maximum 100 active items per conversation)",
   ) {
-    super(message);
-  }
-}
-export class QueueItemNotFoundError extends LocalNotFoundError {
-  constructor(message: string = "Queue item not found") {
-    super(message);
-  }
-}
-export class RunNotFoundError extends LocalNotFoundError {
-  constructor(message: string = "Run not found") {
-    super(message);
-  }
-}
-export class InvalidStateTransitionError extends StateConflictError {
-  constructor(message: string = "Invalid state transition") {
-    super(message);
-  }
-}
-export class ApprovalPayloadInvalidError extends InvalidRequestError {
-  constructor(message: string = "Invalid approval payload") {
     super(message);
   }
 }

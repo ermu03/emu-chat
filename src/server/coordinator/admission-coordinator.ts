@@ -10,7 +10,7 @@ import { HermesAdapter, type HermesRunEvent } from "../hermes/adapter.js";
 import { SSEHub } from "../sse/sse-hub.js";
 import {
   ApprovalNotPendingError,
-  ConflictError,
+  LocalConflictError,
   HermesNotReadyError,
   HermesProtocolError,
   LocalNotFoundError,
@@ -89,6 +89,12 @@ export class AdmissionCoordinator {
       throw new LocalNotFoundError(
         `Conversation ${input.conversation_id} not found`,
       );
+    if (conversation.delete_state !== "none") {
+      throw new StateConflictError(
+        "Conversation is unavailable while deletion is pending or failed",
+        { current_state: conversation.delete_state },
+      );
+    }
     if (!input.text || input.text.trim().length === 0)
       throw new StateConflictError("Message content cannot be empty");
     const payloadBytes = Buffer.byteLength(input.text, "utf8");
@@ -102,7 +108,7 @@ export class AdmissionCoordinator {
     );
     if (existing) {
       if (existing.conversation_id !== input.conversation_id)
-        throw new ConflictError(
+        throw new LocalConflictError(
           "client_request_id is already used by another conversation",
         );
       return {
@@ -163,6 +169,15 @@ export class AdmissionCoordinator {
       throw new StateConflictError(
         `Cannot cancel queue item in state ${item.state}`,
       );
+    const conversation = this.conversationRepo.findById(conversationId);
+    if (!conversation)
+      throw new LocalNotFoundError(`Conversation ${conversationId} not found`);
+    if (conversation.delete_state !== "none") {
+      throw new StateConflictError(
+        "Conversation is unavailable while deletion is pending or failed",
+        { current_state: conversation.delete_state },
+      );
+    }
     const updated = this.queueRepo.updateState(queueItemId, item.revision, {
       state: "cancelled",
       payload_text: null,
@@ -206,16 +221,12 @@ export class AdmissionCoordinator {
   async submitApproval(
     conversationId: string,
     runId: string,
-    decision: "once" | "deny" | "reject" | "always",
+    decision: "once" | "deny",
   ): Promise<RunEntity> {
     const run = await this.getRun(conversationId, runId);
     if (run.upstream_status !== "waiting_for_approval" || !run.hermes_run_id)
       throw new ApprovalNotPendingError(
         `Run ${runId} is not waiting for approval`,
-      );
-    if (decision === "always" || decision === "reject")
-      throw new StateConflictError(
-        "Only once or deny approval decisions are supported",
       );
     await this.hermesAdapter.submitApproval(run.hermes_run_id, decision);
     const updated = this.runRepo.update(run.id, { upstream_status: "running" });
@@ -231,8 +242,10 @@ export class AdmissionCoordinator {
       const active = this.queueRepo.findActiveGlobal();
       if (active) {
         const run = this.runRepo.findByQueueItemId(active.id);
-        if (run && run.hermes_run_id && !this.leases.has(run.id))
-          await this.recoverRun(active, run);
+        // SSE can close before an upstream run becomes terminal. Poll the
+        // authoritative run status while an item is active so a closed stream
+        // cannot strand the local queue behind a retained lease.
+        if (run && run.hermes_run_id) await this.recoverRun(active, run);
         return;
       }
       const candidate = this.queueRepo.findNextGlobalQueued();
@@ -284,7 +297,13 @@ export class AdmissionCoordinator {
     const pair = { global: globalToken, conversation: conversationToken };
     try {
       const current = this.queueRepo.findById(item.id);
-      if (!current || current.state !== "queued") {
+      const conversation = this.conversationRepo.findById(item.conversation_id);
+      if (
+        !current ||
+        current.state !== "queued" ||
+        !conversation ||
+        conversation.delete_state !== "none"
+      ) {
         this.leaseRepo.release(
           "conversation",
           item.conversation_id,
@@ -393,6 +412,7 @@ export class AdmissionCoordinator {
           "submission_rejected",
         );
         this.emitRunEvent(run.id, "run.failed", { code });
+        this.sseHub.scheduleCleanup(run.id);
         this.releaseLeases(run.id);
       } else {
         this.sseHub.publishGap(run.id, "upstream_disconnected");
@@ -480,16 +500,26 @@ export class AdmissionCoordinator {
     let messagesOk = Boolean(conversation?.hermes_session_id);
     if (conversation?.hermes_session_id) {
       try {
-        await this.hermesAdapter.getSessionMessages(
+        const messages = await this.hermesAdapter.getSessionMessages(
           conversation.hermes_session_id,
           { limit: 1, offset: 0, order: "latest" },
         );
+        if (messages.session_id !== conversation.hermes_session_id)
+          this.conversationRepo.adoptEffectiveHermesSessionId(
+            conversation.id,
+            messages.session_id,
+          );
       } catch {
         messagesOk = false;
       }
     }
     if (this.stopped || (requireOwnedLease && !this.leases.has(localRunId)))
       return;
+    const latestConversation = this.conversationRepo.findById(conversationId);
+    if (!latestConversation || latestConversation.delete_state !== "none") {
+      this.releaseLeases(run.id);
+      return;
+    }
     const item = this.queueRepo.findById(current.queue_item_id);
     if (!item) return;
     if (messagesOk && status.status === "completed" && !status.partial) {
@@ -546,6 +576,7 @@ export class AdmissionCoordinator {
         "reconciliation_failed",
       );
     }
+    this.sseHub.scheduleCleanup(run.id);
     this.releaseLeases(run.id);
   }
 

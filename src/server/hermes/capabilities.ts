@@ -12,6 +12,8 @@ export function evaluateHermesCapabilities(
 ): CapabilitiesCheckResult {
   const missing: string[] = [];
 
+  if (health.status !== "ok") missing.push("health.status=ok");
+
   const f = health.features;
   if (!f.run_submission) missing.push("features.run_submission");
   if (!f.run_status) missing.push("features.run_status");
@@ -41,7 +43,6 @@ export function evaluateHermesCapabilities(
   const ep = health.endpoints;
   const requiredEndpoints: Array<{ method: string; path: string }> = [
     { method: "GET", path: "/health/detailed" },
-    { method: "GET", path: "/api/sessions" },
     { method: "POST", path: "/api/sessions" },
     { method: "GET", path: "/api/sessions/{session_id}" },
     { method: "PATCH", path: "/api/sessions/{session_id}" },

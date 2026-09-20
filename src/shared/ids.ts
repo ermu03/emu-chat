@@ -8,21 +8,13 @@ export const ID_PREFIXES = {
 } as const;
 
 export type IdPrefix = (typeof ID_PREFIXES)[keyof typeof ID_PREFIXES];
-export type IdKind = keyof typeof ID_PREFIXES;
 
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/**
- * Generate a UUID-backed identifier.  Callers may pass either the concrete
- * prefix (for example `cv_`) or the semantic key (`conversation`).
- * Supporting both forms keeps the shared helper usable from older server
- * call sites while keeping the generated wire format canonical.
- */
-export function generateId(prefix: IdPrefix | IdKind): string {
-  const concretePrefix =
-    prefix in ID_PREFIXES ? ID_PREFIXES[prefix as IdKind] : prefix;
-  return `${concretePrefix}${crypto.randomUUID()}`;
+/** Generate a UUID-backed identifier using one of the declared wire prefixes. */
+export function generateId(prefix: IdPrefix): string {
+  return `${prefix}${crypto.randomUUID()}`;
 }
 
 export function generateConversationId(): string {

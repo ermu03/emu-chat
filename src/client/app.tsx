@@ -364,11 +364,12 @@ export function AppShell() {
   const handleDelete = async (
     conversationId: string,
     hermesSessionId: string,
+    confirmed: boolean,
   ) => {
     try {
       await apiClient.deleteConversation(conversationId, {
         expected_hermes_session_id: hermesSessionId,
-        confirmed: true,
+        confirmed,
       });
       if (activeConversationId === conversationId) {
         setActiveConversationId(null);
@@ -466,7 +467,7 @@ export function AppShell() {
 
   const handleCancelQueueItem = async (
     queueItemId: string,
-    expectedRevision = 0,
+    expectedRevision: number,
   ) => {
     const item = await apiClient.cancelQueueItem(queueItemId, {
       expected_revision: expectedRevision,
@@ -598,8 +599,8 @@ export function AppShell() {
           onSelect={selectConversation}
           onCreate={() => void handleCreateConversation()}
           onFork={(conversationId) => void handleFork(conversationId)}
-          onDelete={(conversationId, hermesSessionId) =>
-            void handleDelete(conversationId, hermesSessionId)
+          onDelete={(conversationId, hermesSessionId, confirmed) =>
+            void handleDelete(conversationId, hermesSessionId, confirmed)
           }
           onUpdateMetadata={(conversationId, title, pinned) =>
             void handleUpdateMetadata(conversationId, title, pinned)

@@ -5,7 +5,7 @@ import {
 } from "../db/repositories/conversation.repository.js";
 import {
   DraftConflictError,
-  ConflictError,
+  LocalConflictError,
   InvalidRequestError,
   PayloadTooLargeError,
 } from "../domain/errors.js";
@@ -59,11 +59,11 @@ export class DraftPreferencesService {
     }
 
     const byteLength = Buffer.byteLength(content, "utf8");
-    if (byteLength > LIMITS.USER_INPUT_MAX_BYTES) {
+    if (byteLength > LIMITS.INPUT_MAX_BYTES) {
       throw new PayloadTooLargeError(
-        `Draft content exceeds max limit of ${LIMITS.USER_INPUT_MAX_BYTES} bytes`,
+        `Draft content exceeds max limit of ${LIMITS.INPUT_MAX_BYTES} bytes`,
         {
-          limit_bytes: LIMITS.USER_INPUT_MAX_BYTES,
+          limit_bytes: LIMITS.INPUT_MAX_BYTES,
         },
       );
     }
@@ -86,7 +86,7 @@ export class DraftPreferencesService {
       );
       return this.toDraftView(updated);
     } catch (err) {
-      if (err instanceof ConflictError) {
+      if (err instanceof LocalConflictError) {
         const current = this.draftRepo.findByConversationId(conversationId);
         throw new DraftConflictError("Draft revision conflict", {
           conversation_id: conversationId,
@@ -117,12 +117,12 @@ export class DraftPreferencesService {
 
     if (
       typeof sidebar_width !== "number" ||
-      sidebar_width < LIMITS.SIDEBAR_MIN_WIDTH ||
-      sidebar_width > LIMITS.SIDEBAR_MAX_WIDTH ||
+      sidebar_width < LIMITS.SIDEBAR_WIDTH_MIN ||
+      sidebar_width > LIMITS.SIDEBAR_WIDTH_MAX ||
       !Number.isFinite(sidebar_width)
     ) {
       throw new InvalidRequestError(
-        `sidebar_width must be between ${LIMITS.SIDEBAR_MIN_WIDTH} and ${LIMITS.SIDEBAR_MAX_WIDTH}`,
+        `sidebar_width must be between ${LIMITS.SIDEBAR_WIDTH_MIN} and ${LIMITS.SIDEBAR_WIDTH_MAX}`,
       );
     }
 

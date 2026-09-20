@@ -5,6 +5,10 @@ export function withImmediateTransaction<T>(
   db: Database.Database,
   operation: () => T,
 ): T {
+  // Repository methods can be composed by a caller that already owns the
+  // immediate transaction. SQLite cannot nest BEGIN statements.
+  if (db.inTransaction) return operation();
+
   let began = false;
   let committed = false;
   try {

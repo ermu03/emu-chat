@@ -2,11 +2,11 @@ import type Database from "better-sqlite3";
 import { createHash } from "node:crypto";
 import type { QueueItemEntity } from "../schema-types.js";
 import {
-  ConflictError,
-  NotFoundError,
+  LocalConflictError,
+  LocalNotFoundError,
   QueueFullError,
 } from "../../domain/errors.js";
-import { MAX_PENDING_QUEUE_ITEMS_PER_CONVERSATION } from "../../../shared/limits.js";
+import { LIMITS } from "../../../shared/limits.js";
 
 export class QueueRepository {
   constructor(private db: Database.Database) {}
@@ -52,11 +52,6 @@ export class QueueRepository {
          ORDER BY fifo_seq ASC`,
       )
       .all(conversationId, ...states) as QueueItemEntity[];
-  }
-
-  /** Alias retained for service code that predates listByConversation. */
-  findByConversationId(conversationId: string): QueueItemEntity[] {
-    return this.listByConversation(conversationId);
   }
 
   findActiveGlobal(): QueueItemEntity | null {
@@ -147,7 +142,7 @@ export class QueueRepository {
         )
         .get(item.conversation_id) as { count: number };
 
-      if (countRow.count >= MAX_PENDING_QUEUE_ITEMS_PER_CONVERSATION) {
+      if (countRow.count >= LIMITS.QUEUE_ACTIVE_MAX_COUNT) {
         throw new QueueFullError("Queue depth limit exceeded for conversation");
       }
 
@@ -229,16 +224,14 @@ export class QueueRepository {
       payload_expired_at?: string | null;
       payload_discarded_at?: string | null;
       last_error_code?: string | null;
-      /** Legacy callers used this flag instead of deriving it from state. */
-      terminal?: boolean;
     },
   ): QueueItemEntity {
     const current = this.findById(id);
     if (!current) {
-      throw new NotFoundError("Queue item not found");
+      throw new LocalNotFoundError("Queue item not found");
     }
     if (current.revision !== expectedRevision) {
-      throw new ConflictError("Queue item revision conflict");
+      throw new LocalConflictError("Queue item revision conflict");
     }
 
     const nextRevision = expectedRevision + 1;
@@ -267,9 +260,7 @@ export class QueueRepository {
     const payloadText =
       patch.payload_text !== undefined
         ? patch.payload_text
-        : patch.terminal ||
-            patch.state === "done" ||
-            patch.state === "cancelled"
+        : patch.state === "done" || patch.state === "cancelled"
           ? null
           : current.payload_text;
     const payloadExpiredAt =
@@ -312,7 +303,7 @@ export class QueueRepository {
       );
 
     if (res.changes === 0) {
-      throw new ConflictError("Queue item revision conflict");
+      throw new LocalConflictError("Queue item revision conflict");
     }
 
     return this.findById(id)!;
