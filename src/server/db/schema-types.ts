@@ -1,13 +1,13 @@
 export interface ConversationEntity {
   id: string; // cv_*
-  hermes_profile: 'default';
+  hermes_profile: "default";
   hermes_session_id: string;
   tags_json: string; // stringified JSON array
   custom_order: number | null;
   metadata_revision: number;
   queue_paused: 0 | 1;
   pause_reason: string | null;
-  delete_state: 'none' | 'pending' | 'failed';
+  delete_state: "none" | "pending" | "failed";
   delete_error_code: string | null;
   last_seen_upstream_at: string | null;
   created_at: string;
@@ -29,15 +29,15 @@ export interface QueueItemEntity {
   client_request_id: string;
   fifo_seq: number;
   state:
-    | 'queued'
-    | 'dispatching'
-    | 'accepted'
-    | 'reconciling'
-    | 'done'
-    | 'paused'
-    | 'review_required'
-    | 'rejected'
-    | 'cancelled';
+    | "queued"
+    | "dispatching"
+    | "accepted"
+    | "reconciling"
+    | "done"
+    | "paused"
+    | "review_required"
+    | "rejected"
+    | "cancelled";
   payload_text: string | null;
   payload_sha256: string;
   payload_bytes: number;
@@ -61,21 +61,21 @@ export interface RunEntity {
   conversation_id: string;
   hermes_run_id: string | null;
   local_state:
-    | 'submitting'
-    | 'accepted'
-    | 'reconciling'
-    | 'reconciled'
-    | 'rejected'
-    | 'review_required';
+    | "submitting"
+    | "accepted"
+    | "reconciling"
+    | "reconciled"
+    | "rejected"
+    | "review_required";
   upstream_status:
-    | 'queued'
-    | 'running'
-    | 'waiting_for_approval'
-    | 'stopping'
-    | 'completed'
-    | 'failed'
-    | 'cancelled'
-    | 'interrupted'
+    | "queued"
+    | "running"
+    | "waiting_for_approval"
+    | "stopping"
+    | "completed"
+    | "failed"
+    | "cancelled"
+    | "interrupted"
     | null;
   partial: 0 | 1;
   last_event_seq: number;
@@ -92,7 +92,7 @@ export interface RunEntity {
 }
 
 export interface CoordinatorLeaseEntity {
-  scope_type: 'global' | 'conversation';
+  scope_type: "global" | "conversation";
   scope_id: string;
   owner_id: string;
   lease_token: string;
@@ -104,9 +104,9 @@ export interface CoordinatorLeaseEntity {
 
 export interface UiPreferencesEntity {
   id: 1;
-  theme: 'system' | 'light' | 'dark';
+  theme: "system" | "light" | "dark";
   sidebar_width: number;
-  send_shortcut: 'enter' | 'mod_enter';
+  send_shortcut: "enter" | "mod_enter";
   revision: number;
   updated_at: string;
 }

@@ -1,11 +1,11 @@
-import type { HermesHealthDetailedResponse } from '../../../src/shared/hermes-schemas.js';
+import type { HermesHealthDetailedResponse } from "../../../src/shared/hermes-schemas.js";
 
 export const validCapabilitiesHealthResponse: HermesHealthDetailedResponse = {
-  status: 'healthy',
-  version: '0.9.5',
+  status: "healthy",
+  version: "0.9.5",
   runtime: {
-    mode: 'server_agent',
-    tool_execution: 'server'
+    mode: "server_agent",
+    tool_execution: "server",
   },
   durable: true,
   retention_seconds: 86400,
@@ -22,42 +22,45 @@ export const validCapabilitiesHealthResponse: HermesHealthDetailedResponse = {
     approval_events: true,
     runs_idempotency: {
       supported: true,
-      header: 'Idempotency-Key'
-    }
+      durable: true,
+      retention_seconds: 86400,
+      header: "Idempotency-Key",
+    },
   },
   endpoints: [
-    { method: 'GET', path: '/api/sessions' },
-    { method: 'POST', path: '/api/sessions' },
-    { method: 'GET', path: '/api/sessions/{session_id}' },
-    { method: 'PATCH', path: '/api/sessions/{session_id}' },
-    { method: 'DELETE', path: '/api/sessions/{session_id}' },
-    { method: 'GET', path: '/api/sessions/{session_id}/messages' },
-    { method: 'POST', path: '/api/sessions/{session_id}/fork' },
-    { method: 'POST', path: '/api/sessions/{session_id}/runs' },
-    { method: 'GET', path: '/api/runs/{run_id}' },
-    { method: 'GET', path: '/api/runs/{run_id}/events' },
-    { method: 'POST', path: '/api/runs/{run_id}/approval' },
-    { method: 'POST', path: '/api/runs/{run_id}/stop' },
-    { method: 'GET', path: '/health/detailed' }
-  ]
+    { method: "GET", path: "/api/sessions" },
+    { method: "POST", path: "/api/sessions" },
+    { method: "GET", path: "/api/sessions/{session_id}" },
+    { method: "PATCH", path: "/api/sessions/{session_id}" },
+    { method: "DELETE", path: "/api/sessions/{session_id}" },
+    { method: "GET", path: "/api/sessions/{session_id}/messages" },
+    { method: "POST", path: "/api/sessions/{session_id}/fork" },
+    { method: "POST", path: "/v1/runs" },
+    { method: "GET", path: "/v1/runs/{run_id}" },
+    { method: "GET", path: "/v1/runs/{run_id}/events" },
+    { method: "POST", path: "/v1/runs/{run_id}/approval" },
+    { method: "POST", path: "/v1/runs/{run_id}/stop" },
+    { method: "GET", path: "/health/detailed" },
+  ],
 };
 
-export const incompatibleMissingEndpointsHealthResponse: HermesHealthDetailedResponse = {
-  ...validCapabilitiesHealthResponse,
-  endpoints: [
-    { method: 'GET', path: '/api/sessions' }
-  ]
-};
+export const incompatibleMissingEndpointsHealthResponse: HermesHealthDetailedResponse =
+  {
+    ...validCapabilitiesHealthResponse,
+    endpoints: [{ method: "GET", path: "/api/sessions" }],
+  };
 
-export const incompatibleDisabledFeatureHealthResponse: HermesHealthDetailedResponse = {
-  ...validCapabilitiesHealthResponse,
-  features: {
-    ...validCapabilitiesHealthResponse.features,
-    session_fork: false
-  }
-};
+export const incompatibleDisabledFeatureHealthResponse: HermesHealthDetailedResponse =
+  {
+    ...validCapabilitiesHealthResponse,
+    features: {
+      ...validCapabilitiesHealthResponse.features,
+      session_fork: false,
+    },
+  };
 
-export const incompatibleShortRetentionHealthResponse: HermesHealthDetailedResponse = {
-  ...validCapabilitiesHealthResponse,
-  retention_seconds: 3600 // less than 86400
-};
+export const incompatibleShortRetentionHealthResponse: HermesHealthDetailedResponse =
+  {
+    ...validCapabilitiesHealthResponse,
+    retention_seconds: 3600, // less than 86400
+  };

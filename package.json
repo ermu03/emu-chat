@@ -4,10 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "concurrently -k -n server,client \"pnpm dev:server\" \"pnpm dev:client\"",
+    "dev": "concurrently -k -n server,client \"npm run dev:server\" \"npm run dev:client\"",
     "dev:server": "tsx watch src/server/index.ts",
     "dev:client": "vite",
-    "build": "pnpm build:client && pnpm build:server",
+    "build": "npm run build:client && npm run build:server",
     "build:client": "vite build",
     "build:server": "tsc -p tsconfig.server.json",
     "start": "node dist/server/index.js",
@@ -15,7 +15,7 @@
     "lint": "eslint .",
     "format:check": "prettier --check .",
     "test": "vitest run",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test --config=playwright.config.ts"
   },
   "dependencies": {
     "@fastify/static": "^8.0.0",

@@ -11,30 +11,32 @@
 
 export const XSS_FIXTURES = [
   {
-    name: 'Script tag in message',
+    name: "Script tag in message",
     input: '<script>alert("xss")</script>',
     expectedClean: true,
   },
   {
-    name: 'Image onerror attribute',
+    name: "Image onerror attribute",
     input: '<img src="invalid" onerror="alert(1)" />',
     expectedClean: true,
   },
   {
-    name: 'Dangerous javascript: URI link',
-    input: '[Click me](javascript:alert(document.cookie))',
+    name: "Dangerous javascript: URI link",
+    input: "[Click me](javascript:alert(document.cookie))",
     expectedClean: true,
   },
   {
-    name: 'Nested SVG onload payload',
-    input: '<svg><animatetransform onbegin="alert(1)"></animatetransform></svg>',
+    name: "Nested SVG onload payload",
+    input:
+      '<svg><animatetransform onbegin="alert(1)"></animatetransform></svg>',
     expectedClean: true,
   },
 ];
 
 export const LONG_MARKDOWN_FIXTURE = {
-  title: 'Long Markdown with Code and KaTeX',
-  content: `
+  title: "Long Markdown with Code and KaTeX",
+  content:
+    `
 # Deep Research and Analysis
 
 This is a comprehensive document testing virtualized / high-volume markdown rendering.
@@ -57,62 +59,70 @@ export function computeLargeArray(len: number): number[] {
 }
 \`\`\`
 
-` + 'Long paragraph repetition for stress testing buffer and virtual scroll performance. '.repeat(200),
+` +
+    "Long paragraph repetition for stress testing buffer and virtual scroll performance. ".repeat(
+      200,
+    ),
 };
 
 export const SSE_STREAM_GAP_FIXTURES = {
   sequenceBeforeGap: [
-    { id: 'ev_1', seq: 1, type: 'message.chunk', data: { text: 'Hello ' } },
-    { id: 'ev_2', seq: 2, type: 'message.chunk', data: { text: 'world' } },
+    { id: "ev_1", seq: 1, type: "message.chunk", data: { text: "Hello " } },
+    { id: "ev_2", seq: 2, type: "message.chunk", data: { text: "world" } },
   ],
   gapEvent: {
-    id: 'ev_gap',
+    id: "ev_gap",
     seq: 5,
-    type: 'stream.gap',
-    data: { missing_from_seq: 3, up_to_seq: 4, reason: 'ring_buffer_evicted' },
+    type: "stream.gap",
+    data: { missing_from_seq: 3, up_to_seq: 4, reason: "ring_buffer_evicted" },
   },
   sequenceAfterGap: [
-    { id: 'ev_5', seq: 5, type: 'message.completed', data: { finish_reason: 'stop' } },
+    {
+      id: "ev_5",
+      seq: 5,
+      type: "message.completed",
+      data: { finish_reason: "stop" },
+    },
   ],
 };
 
 export const APPROVAL_SCENARIO_FIXTURES = {
   pendingApproval: {
-    approval_request_id: 'rq_test_approval_001',
-    tool_call_id: 'call_bash_exec_001',
-    tool_name: 'bash_exec',
+    approval_request_id: "rq_test_approval_001",
+    tool_call_id: "call_bash_exec_001",
+    tool_name: "bash_exec",
     parameters: {
-      command: 'rm -rf /tmp/scratchpad',
+      command: "rm -rf /tmp/scratchpad",
     },
-    risk_level: 'high',
+    risk_level: "high",
   },
   approveDecision: {
-    decision: 'once' as const,
-    reason: 'Verified safe temp directory cleanup',
+    decision: "once" as const,
+    reason: "Verified safe temp directory cleanup",
   },
   denyDecision: {
-    decision: 'deny' as const,
-    reason: 'Destructive command prohibited',
+    decision: "deny" as const,
+    reason: "Destructive command prohibited",
   },
 };
 
 export const SESSION_ROLLOVER_FIXTURES = {
-  originalSessionId: 'cv_original_001',
-  rolledOverSessionId: 'cv_original_001_s2',
-  reason: 'context_window_full',
+  originalSessionId: "cv_original_001",
+  rolledOverSessionId: "cv_original_001_s2",
+  reason: "context_window_full",
 };
 
 export const DELETE_GUARD_FIXTURES = {
   sessionWithActiveRuns: {
-    id: 'cv_active_001',
+    id: "cv_active_001",
     active_runs_count: 1,
     expected_status: 409,
-    expected_code: 'ACTIVE_RUN_CONFLICT',
+    expected_code: "ACTIVE_RUN_CONFLICT",
   },
   sessionNotFoundUpstream: {
-    id: 'cv_missing_001',
-    hermes_session_id: 'hermes_missing_999',
+    id: "cv_missing_001",
+    hermes_session_id: "hermes_missing_999",
     expected_status: 404,
-    expected_code: 'CONVERSATION_NOT_FOUND',
+    expected_code: "CONVERSATION_NOT_FOUND",
   },
 };

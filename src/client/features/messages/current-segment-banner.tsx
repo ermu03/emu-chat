@@ -1,11 +1,13 @@
-import React from 'react';
-import type { ConversationDetailResponse } from '../../../shared/api-schemas.js';
+import React from "react";
+import type { ConversationDetailResponse } from "../../../shared/api-schemas.js";
 
 export interface CurrentSegmentBannerProps {
   conversation: ConversationDetailResponse | null;
 }
 
-export const CurrentSegmentBanner: React.FC<CurrentSegmentBannerProps> = ({ conversation }) => {
+export const CurrentSegmentBanner: React.FC<CurrentSegmentBannerProps> = ({
+  conversation,
+}) => {
   if (!conversation) return null;
 
   return (
@@ -19,7 +21,11 @@ export const CurrentSegmentBanner: React.FC<CurrentSegmentBannerProps> = ({ conv
         </code>
         {conversation.parent_session_id && (
           <span className="text-neutral-400">
-            (分叉自: <code className="font-mono">{conversation.parent_session_id.slice(0, 12)}...</code>)
+            (分叉自:{" "}
+            <code className="font-mono">
+              {conversation.parent_session_id.slice(0, 12)}...
+            </code>
+            )
           </span>
         )}
       </div>

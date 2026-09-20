@@ -1,29 +1,40 @@
-import type { HermesMessageListResponse } from '../../../src/shared/hermes-schemas.js';
+import type { HermesMessageListResponse } from "../../../src/shared/hermes-schemas.js";
 
 export const mockHermesMessageListResponse: HermesMessageListResponse = {
-  session_id: 'ses_01j9a8b7c6d5e4f3a2b1c0d9e8',
-  messages: [
+  object: "list",
+  session_id: "ses_01j9a8b7c6d5e4f3a2b1c0d9e8",
+  data: [
     {
-      id: 'msg_01j9a8b7c6d5e4f30000000001',
-      role: 'user',
-      content: 'Hello Hermes, how are you?',
-      created_at: '2026-03-30T10:00:00.000Z',
-      meta: {}
+      id: 1,
+      session_id: "ses_01j9a8b7c6d5e4f3a2b1c0d9e8",
+      role: "user",
+      content: "Hello Hermes, how are you?",
+      timestamp: 1_774_864_000,
+      tool_call_id: null,
+      tool_name: null,
+      token_count: 5,
+      finish_reason: null,
+      reasoning: null,
+      display_kind: null,
     },
     {
-      id: 'msg_01j9a8b7c6d5e4f30000000002',
-      role: 'assistant',
-      content: 'I am doing well, ready to help you with emu-chat development!',
-      created_at: '2026-03-30T10:00:05.000Z',
-      meta: {
-        model: 'hermes-3-llama-3.1-70b',
-        finish_reason: 'stop'
-      }
-    }
+      id: 2,
+      session_id: "ses_01j9a8b7c6d5e4f3a2b1c0d9e8",
+      role: "assistant",
+      content: "I am doing well, ready to help you with emu-chat development!",
+      timestamp: 1_774_864_005,
+      tool_call_id: null,
+      tool_name: null,
+      token_count: 12,
+      finish_reason: "stop",
+      reasoning: null,
+      display_kind: null,
+    },
   ],
-  total: 2,
-  limit: 50,
-  offset: 0,
-  order: 'oldest',
-  has_more: false
+  pagination: {
+    limit: 50,
+    offset: 0,
+    order: "oldest",
+    returned: 2,
+  },
 };

@@ -1,147 +1,225 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { FakeHermesServer } from '../fixtures/fake-hermes/fake-hermes-server';
-import { HermesAdapter } from '../../src/server/hermes/adapter';
-import { HermesClient } from '../../src/server/hermes/client';
-import { AdmissionCoordinator } from '../../src/server/coordinator/admission-coordinator';
-import { SSEHub } from '../../src/server/sse/sse-hub';
-import { createDatabaseConnection } from '../../src/server/db/connection';
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import Database from "better-sqlite3";
+import { runMigrations } from "../../src/server/db/migrate.js";
 import {
   ConversationRepository,
   DraftRepository,
-} from '../../src/server/db/repositories/conversation.repository';
-import { QueueRepository } from '../../src/server/db/repositories/queue.repository';
-import { RunRepository } from '../../src/server/db/repositories/run.repository';
-import { LeaseRepository } from '../../src/server/db/repositories/lease.repository';
-import fs from 'node:fs';
-import path from 'node:path';
+} from "../../src/server/db/repositories/conversation.repository.js";
+import { LeaseRepository } from "../../src/server/db/repositories/lease.repository.js";
+import {
+  HermesConflictError,
+  HermesNotFoundError,
+  HermesUnavailableError,
+} from "../../src/server/domain/errors.js";
+import { HermesAdapter } from "../../src/server/hermes/adapter.js";
+import { HermesClient } from "../../src/server/hermes/client.js";
+import { FakeHermesServer } from "../fixtures/fake-hermes/fake-hermes-server.js";
 
-describe('Phase 6: Full Fake Hermes Integration Matrix (dev-docs/07 §4.2)', () => {
+describe("Phase 6: Fake Hermes HTTP compatibility matrix", () => {
   let fakeHermes: FakeHermesServer;
-  let db: any;
-  let sseHub: SSEHub;
-  let coordinator: AdmissionCoordinator;
-  let convRepo: ConversationRepository;
+  let db: Database.Database;
+  let conversationRepo: ConversationRepository;
   let draftRepo: DraftRepository;
-  let queueRepo: QueueRepository;
-  let runRepo: RunRepository;
   let leaseRepo: LeaseRepository;
   let adapter: HermesAdapter;
-  const dbPath = path.resolve(process.cwd(), 'tests/fixtures/test-phase6.sqlite');
 
-  beforeEach(() => {
+  beforeEach(async () => {
     fakeHermes = new FakeHermesServer();
-    if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath);
-
-    db = createDatabaseConnection(dbPath);
-    convRepo = new ConversationRepository(db);
+    const baseUrl = await fakeHermes.start();
+    db = new Database(":memory:");
+    runMigrations(db);
+    conversationRepo = new ConversationRepository(db);
     draftRepo = new DraftRepository(db);
-    queueRepo = new QueueRepository(db);
-    runRepo = new RunRepository(db);
     leaseRepo = new LeaseRepository(db);
-    sseHub = new SSEHub();
-
-    const client = new HermesClient({
-      baseUrl: 'http://mock-hermes:8000',
-      token: 'test_token',
-      timeoutMs: 3000,
-    });
-    adapter = new HermesAdapter(client);
-    coordinator = new AdmissionCoordinator(
-      queueRepo,
-      runRepo,
-      leaseRepo,
-      sseHub,
-      adapter
+    adapter = new HermesAdapter(
+      new HermesClient({
+        baseUrl,
+        token: "test-token",
+        defaultTimeoutMs: 3_000,
+      }),
     );
   });
 
-  afterEach(() => {
-    coordinator.destroy();
-    db.close();
-    if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath);
+  afterEach(async () => {
+    if (db.open) db.close();
+    await fakeHermes.close();
   });
 
-  it('Matrix 1: list/detail/messages empty and error mapping', async () => {
-    expect(fakeHermes.sessions.size).toBe(0);
-    const emptyList = await fakeHermes.handleGetSessions();
-    expect(emptyList.sessions).toEqual([]);
-  });
-
-  it('Matrix 2: effective session id rotation tracking', async () => {
-    const original = fakeHermes.createSession({ title: 'Original Session' });
-    const rollover = fakeHermes.createSession({ title: 'Segment 2' });
-    expect(original.id).not.toBe(rollover.id);
-  });
-
-  it('Matrix 3: run 202, same-key replay, and fingerprint 409 conflict', async () => {
-    const session = fakeHermes.createSession({ title: 'Run Test' });
-    const res1 = await fakeHermes.handleStartRun(session.id, {
-      prompt: 'Hello 1',
-      idempotency_key: 'idem_key_001',
-    });
-    expect(res1.status).toBe(202);
-
-    // Same key replay returns same run_id
-    const res2 = await fakeHermes.handleStartRun(session.id, {
-      prompt: 'Hello 1',
-      idempotency_key: 'idem_key_001',
-    });
-    expect(res2.status).toBe(200);
-    expect(res2.run.id).toBe(res1.run.id);
-
-    // Same key with different prompt triggers 409
-    const res3 = await fakeHermes.handleStartRun(session.id, {
-      prompt: 'Different prompt',
-      idempotency_key: 'idem_key_001',
-    });
-    expect(res3.status).toBe(409);
-  });
-
-  it('Matrix 6 & 7: stop run and approval decision handling (once / deny)', async () => {
-    const session = fakeHermes.createSession({ title: 'Approval Test' });
-    const runRes = await fakeHermes.handleStartRun(session.id, {
-      prompt: 'Execute tool',
-      idempotency_key: 'idem_appr_01',
-    });
-
-    const approvalRes = await fakeHermes.handleSubmitApproval(
-      session.id,
-      runRes.run.id,
-      {
-        approval_request_id: 'rq_001',
-        decision: 'once',
-      }
+  it("normalizes session list/detail/message responses and follows an effective session rotation", async () => {
+    const created = await adapter.createSession({ title: "Matrix session" });
+    const sessions = await adapter.listSessions({ limit: 10, offset: 0 });
+    expect(sessions.sessions.map((session) => session.id)).toContain(
+      created.id,
     );
-    expect(approvalRes.status).toBe(200);
 
-    const cancelRes = await fakeHermes.handleCancelRun(session.id, runRes.run.id);
-    expect(cancelRes.status).toBe(200);
+    const detail = await adapter.getSession(created.id);
+    expect(detail).toMatchObject({
+      id: created.id,
+      title: "Matrix session",
+      pinned: false,
+    });
+
+    const initialMessages = await adapter.getSessionMessages("ses_test_1", {
+      limit: 10,
+    });
+    expect(initialMessages).toMatchObject({
+      session_id: "ses_test_1",
+      total: 2,
+    });
+    expect(initialMessages.messages.map((message) => message.content)).toEqual([
+      "Hello Hermes",
+      "Hello from Fake Hermes.",
+    ]);
+
+    fakeHermes.setEffectiveSessionIdForMessages("ses_test_1", created.id);
+    const rotated = await adapter.getSessionMessages("ses_test_1");
+    expect(rotated).toMatchObject({ session_id: created.id, total: 0 });
   });
 
-  it('Matrix 10: delete 2xx, 404 confirmation, and active agent conflict', async () => {
-    const session = fakeHermes.createSession({ title: 'Delete Test' });
-    const delRes = await fakeHermes.handleDeleteSession(session.id);
-    expect(delRes.status).toBe(200);
+  it("supports run admission replay, streamed events, and idempotency conflicts", async () => {
+    const session = await adapter.createSession({ title: "Run matrix" });
+    const first = await adapter.startRun(session.id, {
+      prompt: "First prompt",
+      idempotency_key: "matrix-idempotency-key",
+    });
+    expect(first).toMatchObject({ status: "started", replayed: false });
 
-    // Second delete returns 404
-    const delRes2 = await fakeHermes.handleDeleteSession(session.id);
-    expect(delRes2.status).toBe(404);
+    const eventTypes: string[] = [];
+    for await (const event of adapter.streamEvents(session.id, first.run_id)) {
+      eventTypes.push(event.type);
+    }
+    expect(eventTypes).toEqual(["run.completed"]);
+
+    const replay = await adapter.startRun(session.id, {
+      prompt: "First prompt",
+      idempotency_key: "matrix-idempotency-key",
+    });
+    expect(replay).toEqual({
+      run_id: first.run_id,
+      status: "started",
+      replayed: true,
+    });
+
+    await expect(
+      adapter.startRun(session.id, {
+        prompt: "Different prompt",
+        idempotency_key: "matrix-idempotency-key",
+      }),
+    ).rejects.toBeInstanceOf(HermesConflictError);
   });
 
-  it('Matrix 11: Hermes offline rejects queue send but preserves local draft', async () => {
-    fakeHermes.simulateFault({ errorType: 'network_error', message: 'Hermes offline' });
+  it("supports approval once and deny choices plus stopping a pending run", async () => {
+    const session = await adapter.createSession({ title: "Approval matrix" });
 
-    // Draft can still be saved locally
-    draftRepo.upsertDraft('cv_local_01', 'Saved offline text', 0);
-    const draft = draftRepo.findByConversationId('cv_local_01');
-    expect(draft?.text).toBe('Saved offline text');
+    fakeHermes.pauseNextRun = true;
+    const approved = await adapter.startRun(session.id, {
+      prompt: "Needs approval once",
+    });
+    expect((await adapter.getRunStatus(approved.run_id)).status).toBe(
+      "waiting_for_approval",
+    );
+    await adapter.submitApproval(approved.run_id, "once");
+    expect((await adapter.getRunStatus(approved.run_id)).status).toBe(
+      "completed",
+    );
+
+    fakeHermes.pauseNextRun = true;
+    const denied = await adapter.startRun(session.id, {
+      prompt: "Needs denial",
+    });
+    await adapter.submitApproval(denied.run_id, "deny");
+    expect((await adapter.getRunStatus(denied.run_id)).status).toBe(
+      "cancelled",
+    );
+
+    fakeHermes.pauseNextRun = true;
+    const stopped = await adapter.startRun(session.id, {
+      prompt: "Needs stop",
+    });
+    await adapter.stopRun(stopped.run_id);
+    expect((await adapter.getRunStatus(stopped.run_id)).status).toBe(
+      "cancelled",
+    );
   });
 
-  it('Matrix 12: two concurrent dispatches strictly yield only one lease winner', async () => {
-    const acquired1 = leaseRepo.acquire('conversation', 'cv_concurrent_01', 'inst_a', 15000);
-    const acquired2 = leaseRepo.acquire('conversation', 'cv_concurrent_01', 'inst_b', 15000);
+  it("maps deletion and availability failures while local drafts remain available offline", async () => {
+    const upstream = await adapter.createSession({ title: "Delete matrix" });
+    await adapter.deleteSession(upstream.id);
+    await expect(adapter.getSession(upstream.id)).rejects.toBeInstanceOf(
+      HermesNotFoundError,
+    );
 
-    expect(acquired1).toBe(true);
-    expect(acquired2).toBe(false); // Second acquire fails due to lease fence
+    const localConversationId = "cv_01956789-0000-7000-8000-000000000601";
+    conversationRepo.insert({
+      id: localConversationId,
+      hermes_profile: "default",
+      hermes_session_id: "ses_offline_local",
+    });
+    draftRepo.saveDraft(
+      localConversationId,
+      "Retained while Hermes is unavailable",
+    );
+
+    fakeHermes.simulateFault({
+      errorType: "network_error",
+      message: "Hermes offline",
+    });
+    await expect(adapter.listSessions()).rejects.toBeInstanceOf(
+      HermesUnavailableError,
+    );
+    expect(draftRepo.findByConversationId(localConversationId)?.content).toBe(
+      "Retained while Hermes is unavailable",
+    );
+  });
+
+  it("fences global and conversation leases by token", () => {
+    expect(
+      leaseRepo.acquire(
+        "global",
+        "global",
+        "worker-a",
+        "global-token-a",
+        60_000,
+      ),
+    ).toBe(true);
+    expect(
+      leaseRepo.acquire(
+        "global",
+        "global",
+        "worker-b",
+        "global-token-b",
+        60_000,
+      ),
+    ).toBe(false);
+    expect(leaseRepo.release("global", "global", "global-token-a")).toBe(true);
+    expect(
+      leaseRepo.acquire(
+        "global",
+        "global",
+        "worker-b",
+        "global-token-b",
+        60_000,
+      ),
+    ).toBe(true);
+
+    const conversationId = "cv_01956789-0000-7000-8000-000000000602";
+    expect(
+      leaseRepo.acquire(
+        "conversation",
+        conversationId,
+        "worker-a",
+        "conversation-token-a",
+        60_000,
+      ),
+    ).toBe(true);
+    expect(
+      leaseRepo.acquire(
+        "conversation",
+        conversationId,
+        "worker-b",
+        "conversation-token-b",
+        60_000,
+      ),
+    ).toBe(false);
   });
 });

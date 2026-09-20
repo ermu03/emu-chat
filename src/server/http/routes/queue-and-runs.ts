@@ -1,110 +1,243 @@
-import type { FastifyPluginAsync } from 'fastify';
-import { z } from 'zod';
-import type { AdmissionCoordinator } from '../../coordinator/admission-coordinator.js';
-import type { SSEHub } from '../../sse/sse-hub.js';
-import { InvalidRequestError } from '../../domain/errors.js';
-import { generateClientRequestId } from '../../shared/ids.js';
+import type { FastifyPluginAsync } from "fastify";
+import { z } from "zod";
+import {
+  ApprovalRequestSchema,
+  CancelQueueItemRequestSchema,
+  CopyToDraftRequestSchema,
+  EmptyObjectRequestSchema,
+  GetQueueQuerySchema,
+  PatchQueueItemRequestSchema,
+  SendMessageRequestSchema,
+} from "../../../shared/api-schemas.js";
+import { InvalidRequestError } from "../../domain/errors.js";
+import type { QueueRunService } from "../../services/queue-run-service.js";
+import type { SSEHub } from "../../sse/sse-hub.js";
 
-const EnqueueMessageBodySchema = z.object({
-  client_request_id: z.string().optional(),
-  text: z.string().min(1).max(65536),
-});
+const AfterQuerySchema = z
+  .object({
+    after: z.coerce.number().int().nonnegative().optional(),
+  })
+  .strict();
 
-const ApprovalBodySchema = z.object({
-  decision: z.enum(['once', 'always', 'reject']),
-});
-
-export const queueAndRunsRoutes: FastifyPluginAsync<{
-  coordinator: AdmissionCoordinator;
+export interface QueueAndRunsRouteOptions {
+  queueRunService: QueueRunService;
   sseHub: SSEHub;
-}> = async (fastify, opts) => {
-  const { coordinator, sseHub } = opts;
+}
 
-  // 1. 发送/入队消息 POST /conversations/:id/messages
-  fastify.post<{
-    Params: { id: string };
-  }>('/conversations/:id/messages', async (req, reply) => {
-    const parsed = EnqueueMessageBodySchema.safeParse(req.body);
-    if (!parsed.success) {
-      throw new InvalidRequestError(parsed.error.message);
-    }
+function parse<T>(schema: z.ZodType<T>, value: unknown, message: string): T {
+  const result = schema.safeParse(value);
+  if (!result.success) {
+    throw new InvalidRequestError(message, { issues: result.error.issues });
+  }
+  return result.data;
+}
 
-    const clientRequestId = parsed.data.client_request_id || generateClientRequestId();
-    const item = await coordinator.enqueueMessage({
-      conversation_id: req.params.id,
-      client_request_id: clientRequestId,
-      text: parsed.data.text,
-    });
+export const queueAndRunsRoutes: FastifyPluginAsync<
+  QueueAndRunsRouteOptions
+> = async (fastify, opts) => {
+  const { queueRunService, sseHub } = opts;
 
-    return reply.status(202).send({
-      data: item,
-    });
-  });
+  fastify.post<{ Params: { conversation_id: string } }>(
+    "/conversations/:conversation_id/messages",
+    async (request, reply) => {
+      const body = parse(
+        SendMessageRequestSchema,
+        request.body,
+        "Invalid message submission payload",
+      );
+      const result = await queueRunService.sendMessage(
+        request.params.conversation_id,
+        body.client_request_id,
+        body.expected_draft_revision,
+      );
+      return reply.status(202).send(result);
+    },
+  );
 
-  // 2. 查看会话当前排队状态 GET /conversations/:id/queue
   fastify.get<{
-    Params: { id: string };
-  }>('/conversations/:id/queue', async (req, reply) => {
-    const queue = await coordinator.getQueue(req.params.id);
-    return reply.send({
-      data: queue,
-    });
-  });
-
-  // 3. 取消排队中的消息 DELETE /conversations/:id/queue/:itemId
-  fastify.delete<{
-    Params: { id: string; itemId: string };
-  }>('/conversations/:id/queue/:itemId', async (req, reply) => {
-    await coordinator.cancelQueueItem(req.params.id, req.params.itemId);
-    return reply.status(204).send();
-  });
-
-  // 4. 查看 Run 状态 GET /conversations/:id/runs/:runId
-  fastify.get<{
-    Params: { id: string; runId: string };
-  }>('/conversations/:id/runs/:runId', async (req, reply) => {
-    const run = await coordinator.getRun(req.params.id, req.params.runId);
-    return reply.send({
-      data: run,
-    });
-  });
-
-  // 5. 取消 Run POST /conversations/:id/runs/:runId/cancel
-  fastify.post<{
-    Params: { id: string; runId: string };
-  }>('/conversations/:id/runs/:runId/cancel', async (req, reply) => {
-    await coordinator.cancelRun(req.params.id, req.params.runId);
-    return reply.status(202).send({
-      data: { status: 'cancelling' },
-    });
-  });
-
-  // 6. 提交工具调用/交互审批 POST /conversations/:id/runs/:runId/approval
-  fastify.post<{
-    Params: { id: string; runId: string };
-  }>('/conversations/:id/runs/:runId/approval', async (req, reply) => {
-    const parsed = ApprovalBodySchema.safeParse(req.body);
-    if (!parsed.success) {
-      throw new InvalidRequestError(parsed.error.message);
-    }
-
-    await coordinator.submitApproval(
-      req.params.id,
-      req.params.runId,
-      parsed.data.decision
+    Params: { conversation_id: string };
+    Querystring: { include_terminal?: string };
+  }>("/conversations/:conversation_id/queue", async (request, reply) => {
+    const query = parse(
+      GetQueueQuerySchema,
+      request.query,
+      "Invalid queue query",
     );
-
-    return reply.send({
-      data: { status: 'submitted' },
-    });
+    return reply
+      .status(200)
+      .send(
+        queueRunService.getQueue(
+          request.params.conversation_id,
+          query.include_terminal,
+        ),
+      );
   });
 
-  // 7. 会话 SSE 事件流订阅 GET /conversations/:id/events
+  fastify.patch<{ Params: { queue_item_id: string } }>(
+    "/queue-items/:queue_item_id",
+    async (request, reply) => {
+      const body = parse(
+        PatchQueueItemRequestSchema,
+        request.body,
+        "Invalid queue item payload",
+      );
+      return reply
+        .status(200)
+        .send(
+          queueRunService.patchQueueItem(request.params.queue_item_id, body),
+        );
+    },
+  );
+
+  fastify.post<{ Params: { queue_item_id: string } }>(
+    "/queue-items/:queue_item_id/cancel",
+    async (request, reply) => {
+      const body = parse(
+        CancelQueueItemRequestSchema,
+        request.body,
+        "Invalid queue cancel payload",
+      );
+      return reply
+        .status(200)
+        .send(
+          queueRunService.cancelQueueItem(request.params.queue_item_id, body),
+        );
+    },
+  );
+
+  fastify.post<{ Params: { conversation_id: string } }>(
+    "/conversations/:conversation_id/queue/resume",
+    async (request, reply) => {
+      parse(
+        EmptyObjectRequestSchema,
+        request.body ?? {},
+        "Invalid queue resume payload",
+      );
+      return reply
+        .status(200)
+        .send(
+          await queueRunService.resumeQueue(request.params.conversation_id),
+        );
+    },
+  );
+
+  fastify.post<{ Params: { queue_item_id: string } }>(
+    "/queue-items/:queue_item_id/copy-to-draft",
+    async (request, reply) => {
+      const body = parse(
+        CopyToDraftRequestSchema,
+        request.body,
+        "Invalid recovery copy payload",
+      );
+      return reply
+        .status(200)
+        .send(
+          await queueRunService.copyToDraft(request.params.queue_item_id, body),
+        );
+    },
+  );
+
+  fastify.post<{ Params: { queue_item_id: string } }>(
+    "/queue-items/:queue_item_id/discard-recovery",
+    async (request, reply) => {
+      parse(
+        EmptyObjectRequestSchema,
+        request.body ?? {},
+        "Invalid recovery discard payload",
+      );
+      return reply
+        .status(200)
+        .send(queueRunService.discardRecovery(request.params.queue_item_id));
+    },
+  );
+
+  fastify.get<{ Params: { local_run_id: string } }>(
+    "/runs/:local_run_id",
+    async (request, reply) => {
+      return reply
+        .status(200)
+        .send(await queueRunService.getRun(request.params.local_run_id));
+    },
+  );
+
+  fastify.post<{ Params: { local_run_id: string } }>(
+    "/runs/:local_run_id/stop",
+    async (request, reply) => {
+      parse(
+        EmptyObjectRequestSchema,
+        request.body ?? {},
+        "Invalid run stop payload",
+      );
+      return reply
+        .status(202)
+        .send(await queueRunService.stopRun(request.params.local_run_id));
+    },
+  );
+
+  fastify.post<{ Params: { local_run_id: string } }>(
+    "/runs/:local_run_id/approval",
+    async (request, reply) => {
+      const body = parse(
+        ApprovalRequestSchema,
+        request.body,
+        "Invalid approval payload",
+      );
+      return reply
+        .status(202)
+        .send(
+          await queueRunService.submitApproval(
+            request.params.local_run_id,
+            body,
+          ),
+        );
+    },
+  );
+
+  fastify.post<{ Params: { local_run_id: string } }>(
+    "/runs/:local_run_id/reconcile",
+    async (request, reply) => {
+      parse(
+        EmptyObjectRequestSchema,
+        request.body ?? {},
+        "Invalid reconcile payload",
+      );
+      return reply
+        .status(202)
+        .send(await queueRunService.reconcile(request.params.local_run_id));
+    },
+  );
+
   fastify.get<{
-    Params: { id: string };
-    Headers: { 'last-event-id'?: string };
-  }>('/conversations/:id/events', async (req, reply) => {
-    const lastEventId = req.headers['last-event-id'];
-    sseHub.subscribe(req.params.id, reply, lastEventId);
+    Params: { local_run_id: string };
+    Querystring: { after?: string };
+    Headers: { "last-event-id"?: string };
+  }>("/runs/:local_run_id/events", async (request, reply) => {
+    const query = parse(
+      AfterQuerySchema,
+      request.query,
+      "Invalid event cursor",
+    );
+    const headerValue = request.headers["last-event-id"];
+    const headerCursor =
+      headerValue === undefined ? undefined : Number(headerValue);
+    if (
+      headerCursor !== undefined &&
+      (!Number.isInteger(headerCursor) || headerCursor < 0)
+    ) {
+      throw new InvalidRequestError(
+        "Last-Event-ID must be a non-negative integer",
+      );
+    }
+    if (
+      query.after !== undefined &&
+      headerCursor !== undefined &&
+      query.after !== headerCursor
+    ) {
+      throw new InvalidRequestError("after and Last-Event-ID must match");
+    }
+    const run = await queueRunService.getRun(request.params.local_run_id);
+    const cursor = query.after ?? headerCursor;
+    sseHub.subscribe(run.id, reply, cursor);
+    reply.hijack();
   });
 };

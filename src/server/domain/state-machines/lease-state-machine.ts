@@ -1,4 +1,4 @@
-export type LeaseScope = 'global' | 'conversation';
+export type LeaseScope = "global" | "conversation";
 
 export interface LeaseClaim {
   scopeType: LeaseScope;

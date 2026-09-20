@@ -1,314 +1,244 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import Database from 'better-sqlite3';
-import { runMigrations } from '../../src/server/db/migrate.js';
-import { ConversationRepository, DraftRepository } from '../../src/server/db/repositories/conversation.repository.js';
-import { QueueRepository } from '../../src/server/db/repositories/queue.repository.js';
-import { RunRepository } from '../../src/server/db/repositories/run.repository.js';
-import { HermesAdapter } from '../../src/server/hermes/adapter.js';
-import { HermesClient } from '../../src/server/hermes/client.js';
-import { ConversationService } from '../../src/server/services/conversation-service.js';
-import { StatusService } from '../../src/server/services/status-service.js';
-import { buildServer } from '../../src/server/app.js';
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { FastifyInstance } from "fastify";
+import Database from "better-sqlite3";
+import { buildServer } from "../../src/server/app.js";
+import type { AppConfig } from "../../src/server/config.js";
+import { runMigrations } from "../../src/server/db/migrate.js";
 import {
-  mockHermesSession1,
-  mockHermesSession2,
-  mockHermesSessionListResponse
-} from '../fixtures/hermes/sessions.fixture.js';
-import { mockHermesMessageListResponse } from '../fixtures/hermes/messages.fixture.js';
-import { validCapabilitiesHealthResponse } from '../fixtures/hermes/health.fixture.js';
-import type { AppConfig } from '../../src/server/config.js';
+  ConversationRepository,
+  DraftRepository,
+} from "../../src/server/db/repositories/conversation.repository.js";
+import { FakeHermesServer } from "../fixtures/fake-hermes/fake-hermes-server.js";
 
-describe('Phase 2: Hermes Adapter & Read-only Conversations Integration', () => {
-  let db: Database.Database;
-  let hermesClient: HermesClient;
-  let hermesAdapter: HermesAdapter;
+describe("Phase 2: Hermes adapter and conversations integration", () => {
+  let app: FastifyInstance | null = null;
+  let db: Database.Database | null = null;
+  let fakeHermes: FakeHermesServer;
   let conversationRepo: ConversationRepository;
   let draftRepo: DraftRepository;
-  let queueRepo: QueueRepository;
-  let runRepo: RunRepository;
-  let statusService: StatusService;
-  let conversationService: ConversationService;
-  let app: ReturnType<typeof buildServer>;
 
-  const originalFetch = globalThis.fetch;
+  beforeEach(async () => {
+    fakeHermes = new FakeHermesServer();
+    fakeHermes.createSession({ title: "Project Setup Discussion" });
+    const hermesBaseUrl = await fakeHermes.start();
 
-  beforeEach(() => {
-    db = new Database(':memory:');
-    db.pragma('foreign_keys = ON');
+    db = new Database(":memory:");
     runMigrations(db);
-
     conversationRepo = new ConversationRepository(db);
     draftRepo = new DraftRepository(db);
-    queueRepo = new QueueRepository(db);
-    runRepo = new RunRepository(db);
-
-    hermesClient = new HermesClient({
-      baseUrl: 'http://127.0.0.1:8642',
-      token: 'test-token'
-    });
-    hermesAdapter = new HermesAdapter(hermesClient);
-    statusService = new StatusService(hermesAdapter, runRepo);
-    conversationService = new ConversationService(
-      hermesAdapter,
-      conversationRepo,
-      draftRepo,
-      queueRepo,
-      runRepo
-    );
 
     const config: AppConfig = {
-      host: '127.0.0.1',
-      port: 3000,
-      dataDir: './data',
-      sqlitePath: ':memory:',
-      hermesBaseUrl: 'http://127.0.0.1:8642',
-      hermesToken: 'test-token',
-      hermesTimeoutMs: 5000,
-      isProduction: false
+      host: "127.0.0.1",
+      port: 0,
+      dataDir: "/tmp/emu-chat-test",
+      sqliteDbPath: ":memory:",
+      hermesBaseUrl,
+      hermesApiKey: "test-token",
+      logLevel: "error",
+      nodeEnv: "test",
+      isProduction: false,
     };
+    app = buildServer(config, { db });
+    await app.ready();
+  });
 
-    app = buildServer(config, {
-      db,
-      hermesClient,
-      hermesAdapter,
-      statusService,
-      conversationService
+  afterEach(async () => {
+    if (app) await app.close();
+    app = null;
+    if (db?.open) db.close();
+    db = null;
+    await fakeHermes.close();
+  });
+
+  it("reports a healthy Hermes connection through the public status API", async () => {
+    const response = await app!.inject({
+      method: "GET",
+      url: "/api/v1/status",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      status: "healthy",
+      hermes_version: "0.21.3-test",
+      missing_capabilities: [],
+      lan_http_warning: false,
+      pwa_secure_context_required: false,
     });
   });
 
-  afterEach(() => {
-    globalThis.fetch = originalFetch;
-    db.close();
-  });
-
-  it('GET /api/v1/status returns healthy connection status with capabilities', async () => {
-    globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
-      if (url.includes('/health/detailed')) {
-        return new Response(JSON.stringify(validCapabilitiesHealthResponse), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
-      return new Response('Not found', { status: 404 });
+  it("maps remote sessions to local conversations and creates only local projections", async () => {
+    const response = await app!.inject({
+      method: "GET",
+      url: "/api/v1/conversations",
     });
 
-    const res = await app.inject({
-      method: 'GET',
-      url: '/api/v1/status'
-    });
-
-    expect(res.statusCode).toBe(200);
-    const body = JSON.parse(res.body);
-    expect(body.status).toBe('healthy');
-    expect(body.hermes_version).toBe('0.9.5');
-    expect(body.capabilities.run_submission).toBe(true);
-    expect(body.capabilities.durable).toBe(true);
-  });
-
-  it('GET /api/v1/conversations lazily creates local records and returns summaries', async () => {
-    globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
-      if (url.includes('/api/sessions')) {
-        return new Response(JSON.stringify(mockHermesSessionListResponse), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
-      return new Response('Not found', { status: 404 });
-    });
-
-    const res = await app.inject({
-      method: 'GET',
-      url: '/api/v1/conversations'
-    });
-
-    expect(res.statusCode).toBe(200);
-    const body = JSON.parse(res.body);
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as {
+      items: Array<{ conversation_id: string; title: string }>;
+    };
     expect(body.items).toHaveLength(2);
-    expect(body.items[0].title).toBe('Project Setup Discussion');
-    expect(body.items[0].pinned).toBe(true);
+    expect(body.items.map((item) => item.title)).toContain(
+      "Project Setup Discussion",
+    );
 
-    // Verify local database now has 2 conversation records and 2 empty drafts
-    const localConvs = conversationRepo.list();
-    expect(localConvs).toHaveLength(2);
-    const draft = draftRepo.getDraft(localConvs[0]!.id);
-    expect(draft?.draft_text).toBe('');
-  });
+    const localConversations = conversationRepo.list();
+    expect(localConversations).toHaveLength(2);
+    expect(
+      localConversations.every(
+        (conversation) =>
+          draftRepo.findByConversationId(conversation.id)?.content === "",
+      ),
+    ).toBe(true);
 
-  it('GET /api/v1/conversations/:id/messages fetches directly from Hermes without saving messages locally', async () => {
-    globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
-      if (url.includes('/api/sessions') && url.includes('/messages')) {
-        return new Response(JSON.stringify(mockHermesMessageListResponse), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
-      if (url.includes('/api/sessions')) {
-        return new Response(JSON.stringify(mockHermesSession1), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
-      return new Response('Not found', { status: 404 });
-    });
-
-    // Create local conversation
-    const conv = conversationRepo.insert({
-      id: 'cv_01j9a8b7c6d5e4f3a2b1c00001',
-      hermes_profile: 'default',
-      hermes_session_id: mockHermesSession1.id,
-      tags_json: '[]',
-      custom_order: null,
-      queue_paused: 0,
-      pause_reason: null,
-      delete_state: 'none',
-      metadata_revision: 1,
-      last_seen_upstream_at: null
-    });
-
-    const res = await app.inject({
-      method: 'GET',
-      url: `/api/v1/conversations/${conv.id}/messages`
-    });
-
-    expect(res.statusCode).toBe(200);
-    const body = JSON.parse(res.body);
-    expect(body.messages).toHaveLength(2);
-    expect(body.messages[0].content).toBe('Hello Hermes, how are you?');
-
-    // Confirm SQLite contains ZERO transcript/message tables or records
-    const tables = db
-      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%message%'")
+    const transcriptTables = db!
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE '%message%'",
+      )
       .all();
-    expect(tables).toHaveLength(0);
+    expect(transcriptTables).toHaveLength(0);
   });
 
-  it('PATCH /api/v1/conversations/:id/local-metadata updates tags with revision CAS', async () => {
-    const conv = conversationRepo.insert({
-      id: 'cv_01j9a8b7c6d5e4f3a2b1c00002',
-      hermes_profile: 'default',
-      hermes_session_id: mockHermesSession1.id,
-      tags_json: '[]',
-      custom_order: null,
-      queue_paused: 0,
-      pause_reason: null,
-      delete_state: 'none',
-      metadata_revision: 1,
-      last_seen_upstream_at: null
+  it("returns Hermes messages without persisting them and tracks effective session rotation", async () => {
+    const listResponse = await app!.inject({
+      method: "GET",
+      url: "/api/v1/conversations",
     });
-
-    globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
-      if (url.includes(`/api/sessions/${mockHermesSession1.id}`)) {
-        return new Response(JSON.stringify(mockHermesSession1), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' }
-        });
+    const initialConversation = (
+      listResponse.json() as {
+        items: Array<{ conversation_id: string; hermes_session_id: string }>;
       }
-      return new Response('Not found', { status: 404 });
+    ).items.find((item) => item.hermes_session_id === "ses_test_1");
+    expect(initialConversation).toBeDefined();
+
+    const firstMessages = await app!.inject({
+      method: "GET",
+      url: `/api/v1/conversations/${initialConversation!.conversation_id}/messages?limit=10&order=oldest`,
+    });
+    expect(firstMessages.statusCode).toBe(200);
+    expect(firstMessages.json()).toMatchObject({
+      effective_hermes_session_id: "ses_test_1",
+      returned: 2,
+      items: [
+        { role: "user", content: "Hello Hermes" },
+        { role: "assistant", content: "Hello from Fake Hermes." },
+      ],
     });
 
-    // Valid update with expected_revision: 1
-    const res = await app.inject({
-      method: 'PATCH',
-      url: `/api/v1/conversations/${conv.id}/local-metadata`,
-      payload: {
-        tags: ['work', 'important'],
-        expected_revision: 1
-      }
+    const rollover = fakeHermes.createSession({ title: "Rotated session" });
+    fakeHermes.setEffectiveSessionIdForMessages("ses_test_1", rollover.id);
+    const rotatedMessages = await app!.inject({
+      method: "GET",
+      url: `/api/v1/conversations/${initialConversation!.conversation_id}/messages`,
     });
-
-    expect(res.statusCode).toBe(200);
-    const body = JSON.parse(res.body);
-    expect(body.tags).toEqual(['work', 'important']);
-    expect(body.metadata_revision).toBe(2);
-
-    // Stale update with old expected_revision: 1 should return 409 Conflict
-    const conflictRes = await app.inject({
-      method: 'PATCH',
-      url: `/api/v1/conversations/${conv.id}/local-metadata`,
-      payload: {
-        tags: ['stale'],
-        expected_revision: 1
-      }
+    expect(rotatedMessages.statusCode).toBe(200);
+    expect(rotatedMessages.json()).toMatchObject({
+      effective_hermes_session_id: rollover.id,
+      returned: 0,
     });
-
-    expect(conflictRes.statusCode).toBe(409);
+    expect(
+      conversationRepo.findById(initialConversation!.conversation_id)
+        ?.hermes_session_id,
+    ).toBe(rollover.id);
   });
 
-  it('POST /api/v1/conversations/:id/delete enforces expected_hermes_session_id and upstream gate', async () => {
-    const conv = conversationRepo.insert({
-      id: 'cv_01j9a8b7c6d5e4f3a2b1c00003',
-      hermes_profile: 'default',
-      hermes_session_id: mockHermesSession1.id,
-      tags_json: '[]',
-      custom_order: null,
-      queue_paused: 0,
-      pause_reason: null,
-      delete_state: 'none',
-      metadata_revision: 1,
-      last_seen_upstream_at: null
+  it("uses CAS for local metadata and proxies Hermes metadata updates", async () => {
+    const listResponse = await app!.inject({
+      method: "GET",
+      url: "/api/v1/conversations",
     });
-    draftRepo.saveDraft(conv.id, 'some draft');
+    const conversation = (
+      listResponse.json() as {
+        items: Array<{
+          conversation_id: string;
+          hermes_session_id: string;
+          local_revision: number;
+        }>;
+      }
+    ).items.find((item) => item.hermes_session_id === "ses_test_1")!;
 
-    // Mismatched expected_hermes_session_id returns 409
-    const mismatchRes = await app.inject({
-      method: 'POST',
-      url: `/api/v1/conversations/${conv.id}/delete`,
+    const localUpdate = await app!.inject({
+      method: "PATCH",
+      url: `/api/v1/conversations/${conversation.conversation_id}/local-metadata`,
       payload: {
-        expected_hermes_session_id: 'wrong-id'
-      }
+        tags: ["work", "important"],
+        expected_revision: conversation.local_revision,
+      },
     });
-    expect(mismatchRes.statusCode).toBe(409);
-
-    // When Hermes has active_agents > 0, deletion is blocked
-    globalThis.fetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
-      if (url.includes('/health/detailed')) {
-        return new Response(
-          JSON.stringify({ ...validCapabilitiesHealthResponse, active_agents: 1 }),
-          { status: 200, headers: { 'Content-Type': 'application/json' } }
-        );
-      }
-      return new Response('ok', { status: 200 });
+    expect(localUpdate.statusCode).toBe(200);
+    expect(localUpdate.json()).toMatchObject({
+      tags: ["work", "important"],
+      local_revision: 1,
     });
 
-    const blockedRes = await app.inject({
-      method: 'POST',
-      url: `/api/v1/conversations/${conv.id}/delete`,
+    const staleUpdate = await app!.inject({
+      method: "PATCH",
+      url: `/api/v1/conversations/${conversation.conversation_id}/local-metadata`,
       payload: {
-        expected_hermes_session_id: mockHermesSession1.id
-      }
+        tags: ["stale"],
+        expected_revision: conversation.local_revision,
+      },
     });
-    expect(blockedRes.statusCode).toBe(409);
-
-    // When active_agents == 0, deletion succeeds
-    globalThis.fetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
-      if (url.includes('/health/detailed')) {
-        return new Response(JSON.stringify(validCapabilitiesHealthResponse), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
-      if (init?.method === 'DELETE') {
-        return new Response(JSON.stringify({ deleted: true }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
-      return new Response('Not found', { status: 404 });
+    expect(staleUpdate.statusCode).toBe(409);
+    expect(staleUpdate.json()).toMatchObject({
+      error: { code: "LOCAL_CONFLICT" },
     });
 
-    const successRes = await app.inject({
-      method: 'POST',
-      url: `/api/v1/conversations/${conv.id}/delete`,
-      payload: {
-        expected_hermes_session_id: mockHermesSession1.id
-      }
+    const hermesUpdate = await app!.inject({
+      method: "PATCH",
+      url: `/api/v1/conversations/${conversation.conversation_id}/hermes-metadata`,
+      payload: { field: "title", value: "Renamed upstream session" },
     });
-    expect(successRes.statusCode).toBe(200);
-    const body = JSON.parse(successRes.body);
-    expect(body.deleted).toBe(true);
+    expect(hermesUpdate.statusCode).toBe(200);
+    expect(hermesUpdate.json()).toMatchObject({
+      title: "Renamed upstream session",
+    });
+    expect(fakeHermes.getSession("ses_test_1")?.title).toBe(
+      "Renamed upstream session",
+    );
+  });
 
-    // Verify local record removed
-    expect(conversationRepo.findById(conv.id)).toBeNull();
-    expect(draftRepo.getDraft(conv.id)).toBeNull();
+  it("requires confirmation, prevents deletion while Hermes is active, then cleans both sides", async () => {
+    const listResponse = await app!.inject({
+      method: "GET",
+      url: "/api/v1/conversations",
+    });
+    const conversation = (
+      listResponse.json() as {
+        items: Array<{ conversation_id: string; hermes_session_id: string }>;
+      }
+    ).items.find((item) => item.hermes_session_id === "ses_test_1")!;
+
+    const mismatch = await app!.inject({
+      method: "POST",
+      url: `/api/v1/conversations/${conversation.conversation_id}/delete`,
+      payload: { expected_hermes_session_id: "wrong-session", confirmed: true },
+    });
+    expect(mismatch.statusCode).toBe(409);
+
+    fakeHermes.activeAgents = 1;
+    const activeAgentConflict = await app!.inject({
+      method: "POST",
+      url: `/api/v1/conversations/${conversation.conversation_id}/delete`,
+      payload: { expected_hermes_session_id: "ses_test_1", confirmed: true },
+    });
+    expect(activeAgentConflict.statusCode).toBe(409);
+
+    fakeHermes.activeAgents = 0;
+    const deleted = await app!.inject({
+      method: "POST",
+      url: `/api/v1/conversations/${conversation.conversation_id}/delete`,
+      payload: { expected_hermes_session_id: "ses_test_1", confirmed: true },
+    });
+    expect(deleted.statusCode).toBe(200);
+    expect(deleted.json()).toEqual({
+      conversation_id: conversation.conversation_id,
+      hermes_deleted: true,
+      local_cleaned: true,
+    });
+    expect(conversationRepo.findById(conversation.conversation_id)).toBeNull();
+    expect(
+      draftRepo.findByConversationId(conversation.conversation_id),
+    ).toBeNull();
+    expect(fakeHermes.getSession("ses_test_1")).toBeNull();
   });
 });

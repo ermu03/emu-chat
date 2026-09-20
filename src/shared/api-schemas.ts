@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from "zod";
 import {
   ConnectionStatusHermesValues,
   PauseReasonValues,
@@ -11,19 +11,19 @@ import {
   SendShortcutPreferenceValues,
   ErrorCodeValues,
   StreamGapReasonValues,
-  MessageRoleValues
-} from './domain-enums.js';
-import { LIMITS } from './limits.js';
+  MessageRoleValues,
+} from "./domain-enums.js";
+import { LIMITS } from "./limits.js";
 
 // --- Error Envelope ---
 export const ErrorActionValues = [
-  'none',
-  'retry',
-  'recheck',
-  'refresh_status',
-  'resolve_conflict',
-  'review_required',
-  'reconnect'
+  "none",
+  "retry",
+  "recheck",
+  "refresh_status",
+  "resolve_conflict",
+  "review_required",
+  "reconnect",
 ] as const;
 export type ErrorAction = (typeof ErrorActionValues)[number];
 
@@ -34,12 +34,12 @@ export const ApiErrorPayloadSchema = z.object({
   action: z.enum(ErrorActionValues),
   request_id: z.string(),
   upstream_status: z.number().int().optional(),
-  details: z.record(z.string(), z.unknown()).optional()
+  details: z.record(z.string(), z.unknown()).optional(),
 });
 export type ApiErrorPayload = z.infer<typeof ApiErrorPayloadSchema>;
 
 export const ApiErrorEnvelopeSchema = z.object({
-  error: ApiErrorPayloadSchema
+  error: ApiErrorPayloadSchema,
 });
 export type ApiErrorEnvelope = z.infer<typeof ApiErrorEnvelopeSchema>;
 
@@ -51,9 +51,43 @@ export const ConnectionStatusResponseSchema = z.object({
   last_checked_at: z.string(),
   suggested_action: z.string(),
   lan_http_warning: z.boolean(),
-  pwa_secure_context_required: z.boolean()
+  pwa_secure_context_required: z.boolean(),
 });
-export type ConnectionStatusResponse = z.infer<typeof ConnectionStatusResponseSchema>;
+export type ConnectionStatusResponse = z.infer<
+  typeof ConnectionStatusResponseSchema
+>;
+
+export const GetConversationsQuerySchema = z
+  .object({
+    limit: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(LIMITS.SESSION_LIST_PAGE_MAX)
+      .default(LIMITS.SESSION_LIST_PAGE_DEFAULT),
+    offset: z.coerce.number().int().min(0).default(0),
+    session_id: z.string().min(1).optional(),
+    title: z.string().min(1).optional(),
+  })
+  .strict()
+  .refine((value) => !(value.session_id && value.title), {
+    message: "session_id and title are mutually exclusive",
+  });
+export type GetConversationsQuery = z.infer<typeof GetConversationsQuerySchema>;
+
+export const GetMessagesQuerySchema = z
+  .object({
+    limit: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(LIMITS.MESSAGES_PAGE_MAX)
+      .default(LIMITS.MESSAGES_PAGE_DEFAULT),
+    offset: z.coerce.number().int().min(0).default(0),
+    order: z.enum(["oldest", "latest"]).default("oldest"),
+  })
+  .strict();
+export type GetMessagesQuery = z.infer<typeof GetMessagesQuerySchema>;
 
 // --- Conversation Schemas ---
 export const ConversationSummarySchema = z.object({
@@ -72,7 +106,7 @@ export const ConversationSummarySchema = z.object({
   queue_paused: z.boolean(),
   has_recovery: z.boolean(),
   delete_state: z.enum(DeleteStateValues),
-  local_revision: z.number().int().positive()
+  local_revision: z.number().int().nonnegative(),
 });
 export type ConversationSummary = z.infer<typeof ConversationSummarySchema>;
 
@@ -80,67 +114,86 @@ export const ConversationListResponseSchema = z.object({
   items: z.array(ConversationSummarySchema),
   limit: z.number().int().positive(),
   offset: z.number().int().nonnegative(),
-  has_more: z.boolean()
+  has_more: z.boolean(),
 });
-export type ConversationListResponse = z.infer<typeof ConversationListResponseSchema>;
+export type ConversationListResponse = z.infer<
+  typeof ConversationListResponseSchema
+>;
 
-export const ConversationDetailResponseSchema = ConversationSummarySchema.extend({
-  parent_session_id: z.string().nullable(),
-  pause_reason: z.enum(PauseReasonValues).nullable(),
-  current_local_run_id: z.string().nullable(),
-  delete_failed_reason: z.string().nullable()
-});
-export type ConversationDetailResponse = z.infer<typeof ConversationDetailResponseSchema>;
+export const ConversationDetailResponseSchema =
+  ConversationSummarySchema.extend({
+    parent_session_id: z.string().nullable(),
+    pause_reason: z.enum(PauseReasonValues).nullable(),
+    current_local_run_id: z.string().nullable(),
+    delete_failed_reason: z.string().nullable(),
+  });
+export type ConversationDetailResponse = z.infer<
+  typeof ConversationDetailResponseSchema
+>;
 
 export const CreateConversationRequestSchema = z.object({
-  title: z.string().max(LIMITS.TITLE_MAX_CHARS).optional()
+  title: z.string().max(LIMITS.TITLE_MAX_CHARS).optional(),
 });
-export type CreateConversationRequest = z.infer<typeof CreateConversationRequestSchema>;
+export type CreateConversationRequest = z.infer<
+  typeof CreateConversationRequestSchema
+>;
 
 export const ResetConversationRequestSchema = z.object({
-  title: z.string().max(LIMITS.TITLE_MAX_CHARS).optional()
+  title: z.string().max(LIMITS.TITLE_MAX_CHARS).optional(),
 });
-export type ResetConversationRequest = z.infer<typeof ResetConversationRequestSchema>;
+export type ResetConversationRequest = z.infer<
+  typeof ResetConversationRequestSchema
+>;
 
 export const ForkConversationRequestSchema = z.object({
-  title: z.string().max(LIMITS.TITLE_MAX_CHARS).optional()
+  title: z.string().max(LIMITS.TITLE_MAX_CHARS).optional(),
 });
-export type ForkConversationRequest = z.infer<typeof ForkConversationRequestSchema>;
+export type ForkConversationRequest = z.infer<
+  typeof ForkConversationRequestSchema
+>;
 
-export const PatchHermesMetadataRequestSchema = z.discriminatedUnion('field', [
+export const PatchHermesMetadataRequestSchema = z.discriminatedUnion("field", [
   z.object({
-    field: z.literal('title'),
-    value: z.string().max(LIMITS.TITLE_MAX_CHARS)
+    field: z.literal("title"),
+    value: z.string().max(LIMITS.TITLE_MAX_CHARS),
   }),
   z.object({
-    field: z.literal('pinned'),
-    value: z.boolean()
-  })
+    field: z.literal("pinned"),
+    value: z.boolean(),
+  }),
 ]);
-export type PatchHermesMetadataRequest = z.infer<typeof PatchHermesMetadataRequestSchema>;
+export type PatchHermesMetadataRequest = z.infer<
+  typeof PatchHermesMetadataRequestSchema
+>;
 
 export const PatchLocalMetadataRequestSchema = z.object({
-  expected_revision: z.number().int().positive(),
+  expected_revision: z.number().int().nonnegative(),
   tags: z
     .array(z.string().max(LIMITS.TAG_MAX_CHARS))
     .max(LIMITS.TAGS_MAX_COUNT)
     .optional(),
-  custom_order: z.number().nullable().optional()
+  custom_order: z.number().nullable().optional(),
 });
-export type PatchLocalMetadataRequest = z.infer<typeof PatchLocalMetadataRequestSchema>;
+export type PatchLocalMetadataRequest = z.infer<
+  typeof PatchLocalMetadataRequestSchema
+>;
 
 export const DeleteConversationRequestSchema = z.object({
   expected_hermes_session_id: z.string(),
-  confirmed: z.boolean()
+  confirmed: z.boolean(),
 });
-export type DeleteConversationRequest = z.infer<typeof DeleteConversationRequestSchema>;
+export type DeleteConversationRequest = z.infer<
+  typeof DeleteConversationRequestSchema
+>;
 
 export const DeleteConversationResponseSchema = z.object({
   conversation_id: z.string(),
   hermes_deleted: z.boolean(),
-  local_cleaned: z.boolean()
+  local_cleaned: z.boolean(),
 });
-export type DeleteConversationResponse = z.infer<typeof DeleteConversationResponseSchema>;
+export type DeleteConversationResponse = z.infer<
+  typeof DeleteConversationResponseSchema
+>;
 
 // --- Messages ---
 export const MessageItemSchema = z.object({
@@ -154,7 +207,7 @@ export const MessageItemSchema = z.object({
   token_count: z.number().int().nonnegative().nullable(),
   finish_reason: z.string().nullable(),
   reasoning: z.string().nullable(),
-  display_kind: z.string().nullable()
+  display_kind: z.string().nullable(),
 });
 export type MessageItem = z.infer<typeof MessageItemSchema>;
 
@@ -163,140 +216,187 @@ export const MessageListResponseSchema = z.object({
   effective_hermes_session_id: z.string(),
   limit: z.number().int().positive(),
   offset: z.number().int().nonnegative(),
-  order: z.enum(['oldest', 'latest']),
-  returned: z.number().int().nonnegative()
+  order: z.enum(["oldest", "latest"]),
+  returned: z.number().int().nonnegative(),
 });
 export type MessageListResponse = z.infer<typeof MessageListResponseSchema>;
 
 // --- Draft ---
 export const DraftResponseSchema = z.object({
+  object: z.literal("emu_chat.draft"),
   conversation_id: z.string(),
   content: z.string(),
-  revision: z.number().int().positive(),
-  updated_at: z.string()
+  revision: z.number().int().nonnegative(),
+  updated_at: z.string().nullable(),
 });
 export type DraftResponse = z.infer<typeof DraftResponseSchema>;
 
-export const PutDraftRequestSchema = z.object({
-  content: z.string().max(LIMITS.INPUT_MAX_BYTES),
-  expected_revision: z.number().int().positive()
-});
+export const PutDraftRequestSchema = z
+  .object({
+    // Byte length is checked by the service. Zod's string max counts code units.
+    content: z.string(),
+    expected_revision: z.number().int().nonnegative(),
+  })
+  .strict();
 export type PutDraftRequest = z.infer<typeof PutDraftRequestSchema>;
 
+// Lowercase aliases kept for the original route implementation.
+export const putDraftRequestSchema = PutDraftRequestSchema;
+
 // --- Queue ---
-export const SendMessageRequestSchema = z.object({
-  client_request_id: z.string(),
-  expected_draft_revision: z.number().int().positive()
-});
-export type SendMessageRequest = z.infer<typeof SendMessageRequestSchema>;
-
-export const SendMessageResponseSchema = z.object({
-  queue_item_id: z.string(),
-  state: z.enum(QueueItemStateValues),
-  position: z.number().int().nonnegative()
-});
-export type SendMessageResponse = z.infer<typeof SendMessageResponseSchema>;
-
 export const QueueItemResponseSchema = z.object({
-  queue_item_id: z.string(),
+  object: z.literal("emu_chat.queue_item"),
+  id: z.string(),
   conversation_id: z.string(),
+  operation_id: z.string(),
+  fifo_seq: z.number().int().positive(),
   state: z.enum(QueueItemStateValues),
-  position: z.number().int().nonnegative(),
-  has_payload: z.boolean(),
-  payload_preview: z.string(),
-  revision: z.number().int().positive(),
+  content: z.string().nullable(),
+  payload_bytes: z.number().int().positive(),
+  payload_available: z.boolean(),
+  recovery_expires_at: z.string().nullable(),
+  payload_expired_at: z.string().nullable(),
+  local_run_id: z.string().nullable(),
+  revision: z.number().int().nonnegative(),
   created_at: z.string(),
   updated_at: z.string(),
-  current_local_run_id: z.string().nullable(),
-  pause_reason: z.enum(PauseReasonValues).nullable(),
-  review_reason: z.string().nullable(),
-  recovery_available: z.boolean(),
-  recovery_expires_at: z.string().nullable()
+  last_error_code: z.string().nullable(),
 });
 export type QueueItemResponse = z.infer<typeof QueueItemResponseSchema>;
 
 export const QueueListResponseSchema = z.object({
-  items: z.array(QueueItemResponseSchema),
-  queue_paused: z.boolean(),
-  pause_reason: z.enum(PauseReasonValues).nullable()
+  object: z.literal("emu_chat.queue"),
+  conversation_id: z.string(),
+  paused: z.boolean(),
+  pause_reason: z.enum(PauseReasonValues).nullable(),
+  data: z.array(QueueItemResponseSchema),
 });
 export type QueueListResponse = z.infer<typeof QueueListResponseSchema>;
 
-export const PatchQueueItemRequestSchema = z.object({
-  content: z.string().max(LIMITS.INPUT_MAX_BYTES),
-  expected_revision: z.number().int().positive()
+export const SendMessageRequestSchema = z
+  .object({
+    client_request_id: z.uuid(),
+    expected_draft_revision: z.number().int().nonnegative(),
+  })
+  .strict();
+export type SendMessageRequest = z.infer<typeof SendMessageRequestSchema>;
+
+export const SendMessageResponseSchema = z.object({
+  object: z.literal("emu_chat.message_submission"),
+  replayed: z.boolean(),
+  queue_item: QueueItemResponseSchema,
+  draft: DraftResponseSchema,
 });
+export type SendMessageResponse = z.infer<typeof SendMessageResponseSchema>;
+
+export const GetQueueQuerySchema = z
+  .object({
+    include_terminal: z
+      .enum(["true", "false"])
+      .optional()
+      .transform((value) => value === "true"),
+  })
+  .strict();
+export type GetQueueQuery = z.infer<typeof GetQueueQuerySchema>;
+
+export const PatchQueueItemRequestSchema = z
+  .object({
+    content: z.string(),
+    expected_revision: z.number().int().nonnegative(),
+  })
+  .strict();
 export type PatchQueueItemRequest = z.infer<typeof PatchQueueItemRequestSchema>;
 
-export const CancelQueueItemRequestSchema = z.object({
-  expected_revision: z.number().int().positive()
-});
-export type CancelQueueItemRequest = z.infer<typeof CancelQueueItemRequestSchema>;
+export const CancelQueueItemRequestSchema = z
+  .object({
+    expected_revision: z.number().int().nonnegative(),
+  })
+  .strict();
+export type CancelQueueItemRequest = z.infer<
+  typeof CancelQueueItemRequestSchema
+>;
 
-export const ResumeQueueResponseSchema = z.object({
-  queue_paused: z.boolean(),
-  resumed_count: z.number().int().nonnegative()
-});
+export const ResumeQueueRequestSchema = z.object({}).strict();
+export type ResumeQueueRequest = z.infer<typeof ResumeQueueRequestSchema>;
+
+export const ResumeQueueResponseSchema = QueueListResponseSchema;
 export type ResumeQueueResponse = z.infer<typeof ResumeQueueResponseSchema>;
 
-export const CopyToDraftRequestSchema = z.object({
-  expected_draft_revision: z.number().int().positive(),
-  overwrite_nonempty: z.boolean().optional()
-});
+export const CopyToDraftRequestSchema = z
+  .object({
+    expected_draft_revision: z.number().int().nonnegative(),
+    overwrite_nonempty: z.boolean().optional().default(false),
+  })
+  .strict();
 export type CopyToDraftRequest = z.infer<typeof CopyToDraftRequestSchema>;
 
 export const CopyToDraftResponseSchema = z.object({
-  draft_revision: z.number().int().positive()
+  object: z.literal("emu_chat.recovery_copy"),
+  draft: DraftResponseSchema,
+  duplicate_risk: z.literal(true),
 });
 export type CopyToDraftResponse = z.infer<typeof CopyToDraftResponseSchema>;
 
+export const DiscardRecoveryRequestSchema = z.object({}).strict();
+export type DiscardRecoveryRequest = z.infer<
+  typeof DiscardRecoveryRequestSchema
+>;
+
 // --- Runs ---
-export const RunWaitingApprovalSchema = z.object({
+export const RunApprovalSchema = z.object({
   request_id: z.string(),
   command: z.string().optional(),
   description: z.string().optional(),
-  choices: z.array(z.string()),
-  deadline_at: z.string().optional()
+  choices: z.array(z.enum(ApprovalChoiceValues)),
+  deadline_at: z.string().optional(),
 });
-export type RunWaitingApproval = z.infer<typeof RunWaitingApprovalSchema>;
+export type RunApproval = z.infer<typeof RunApprovalSchema>;
+export const RunWaitingApprovalSchema = RunApprovalSchema;
+export type RunWaitingApproval = RunApproval;
 
 export const RunResponseSchema = z.object({
-  local_run_id: z.string(),
+  object: z.literal("emu_chat.run"),
+  id: z.string(),
   conversation_id: z.string(),
   queue_item_id: z.string(),
   hermes_run_id: z.string().nullable(),
-  state: z.enum(RunLocalStateValues),
+  local_state: z.enum(RunLocalStateValues),
   upstream_status: z.enum(UpstreamRunStatusValues).nullable(),
-  turn_exit_reason: z.string().nullable(),
-  pending_steer: z.boolean(),
-  admission_attempts: z.number().int().nonnegative(),
-  first_attempt_at: z.string(),
-  last_attempt_at: z.string().nullable(),
-  waiting_approval: RunWaitingApprovalSchema.nullable(),
-  created_at: z.string(),
-  updated_at: z.string()
+  partial: z.boolean(),
+  last_event_seq: z.number().int().nonnegative(),
+  events_truncated: z.boolean(),
+  approval: RunApprovalSchema.nullable(),
+  last_error_code: z.string().nullable(),
+  started_at: z.string(),
+  terminal_at: z.string().nullable(),
+  updated_at: z.string(),
 });
 export type RunResponse = z.infer<typeof RunResponseSchema>;
 
-export const ApprovalRequestSchema = z.object({
-  choice: z.enum(ApprovalChoiceValues),
-  request_id: z.string().optional()
-});
+export const ApprovalRequestSchema = z
+  .object({
+    choice: z.enum(ApprovalChoiceValues),
+    request_id: z.string().optional(),
+  })
+  .strict();
 export type ApprovalRequest = z.infer<typeof ApprovalRequestSchema>;
 
 export const ReconcileResponseSchema = z.object({
-  state: z.enum(RunLocalStateValues),
-  reconciled: z.boolean()
+  object: z.literal("emu_chat.reconciliation"),
+  run: RunResponseSchema,
+  queue_item: QueueItemResponseSchema,
 });
 export type ReconcileResponse = z.infer<typeof ReconcileResponseSchema>;
+
+export const EmptyObjectRequestSchema = z.object({}).strict();
 
 // --- Preferences ---
 export const PreferencesResponseSchema = z.object({
   theme: z.enum(ThemePreferenceValues),
   sidebar_width: z.number().int(),
   send_shortcut: z.enum(SendShortcutPreferenceValues),
-  revision: z.number().int().positive(),
-  updated_at: z.string()
+  revision: z.number().int().nonnegative(),
+  updated_at: z.string(),
 });
 export type PreferencesResponse = z.infer<typeof PreferencesResponseSchema>;
 
@@ -308,38 +408,40 @@ export const PutPreferencesRequestSchema = z.object({
     .min(LIMITS.SIDEBAR_WIDTH_MIN)
     .max(LIMITS.SIDEBAR_WIDTH_MAX),
   send_shortcut: z.enum(SendShortcutPreferenceValues),
-  expected_revision: z.number().int().positive()
+  expected_revision: z.number().int().nonnegative(),
 });
 export type PutPreferencesRequest = z.infer<typeof PutPreferencesRequestSchema>;
+
+export const putPreferencesRequestSchema = PutPreferencesRequestSchema;
 
 // --- SSE Event Schemas ---
 export const SseRunDeltaPayloadSchema = z.object({
   local_run_id: z.string(),
-  text: z.string()
+  text: z.string(),
 });
 export const SseRunToolStartedPayloadSchema = z.object({
   local_run_id: z.string(),
   tool_name: z.string(),
-  tool_call_id: z.string().optional()
+  tool_call_id: z.string().optional(),
 });
 export const SseRunToolCompletedPayloadSchema = z.object({
   local_run_id: z.string(),
   tool_name: z.string(),
   tool_call_id: z.string().optional(),
-  preview: z.string().optional()
+  preview: z.string().optional(),
 });
 export const SseRunReasoningDeltaPayloadSchema = z.object({
   local_run_id: z.string(),
-  text: z.string()
+  text: z.string(),
 });
 export const SseRunSubagentStartedPayloadSchema = z.object({
   local_run_id: z.string(),
   id: z.string(),
-  name: z.string().optional()
+  name: z.string().optional(),
 });
 export const SseRunSubagentCompletedPayloadSchema = z.object({
   local_run_id: z.string(),
-  id: z.string()
+  id: z.string(),
 });
 export const SseRunApprovalRequiredPayloadSchema = z.object({
   local_run_id: z.string(),
@@ -347,24 +449,24 @@ export const SseRunApprovalRequiredPayloadSchema = z.object({
   command: z.string().optional(),
   description: z.string().optional(),
   choices: z.array(z.string()),
-  deadline_at: z.string().optional()
+  deadline_at: z.string().optional(),
 });
 export const SseRunReconciledPayloadSchema = z.object({
   local_run_id: z.string(),
   upstream_status: z.enum(UpstreamRunStatusValues),
-  effective_hermes_session_id: z.string()
+  effective_hermes_session_id: z.string(),
 });
 export const SseRunPausedPayloadSchema = z.object({
   local_run_id: z.string(),
   reason: z.enum(PauseReasonValues),
-  review_required: z.boolean()
+  review_required: z.boolean(),
 });
 export const SseStreamGapPayloadSchema = z.object({
   local_run_id: z.string(),
   reason: z.enum(StreamGapReasonValues),
-  suggested_action: z.literal('refresh_status')
+  suggested_action: z.literal("refresh_status"),
 });
 export const SseHeartbeatPayloadSchema = z.object({
   local_run_id: z.string(),
-  timestamp: z.number().nonnegative()
+  timestamp: z.number().nonnegative(),
 });

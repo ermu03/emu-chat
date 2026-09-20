@@ -1,48 +1,51 @@
-export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal';
+export type LogLevel = "trace" | "debug" | "info" | "warn" | "error" | "fatal";
 
 const SENSITIVE_KEYS = new Set([
-  'authorization',
-  'api_key',
-  'apikey',
-  'hermes_api_key',
-  'key',
-  'token',
-  'secret',
-  'password',
-  'cookie',
-  'x-hermes-session-key'
+  "authorization",
+  "api_key",
+  "apikey",
+  "hermes_api_key",
+  "key",
+  "token",
+  "secret",
+  "password",
+  "cookie",
+  "x-hermes-session-key",
 ]);
 
 const FORBIDDEN_CONTENT_KEYS = new Set([
-  'input',
-  'content',
-  'reasoning',
-  'reasoning_content',
-  'command',
-  'preview',
-  'arguments',
-  'result',
-  'delta',
-  'text',
-  'payload'
+  "input",
+  "content",
+  "reasoning",
+  "reasoning_content",
+  "command",
+  "preview",
+  "arguments",
+  "result",
+  "delta",
+  "text",
+  "payload",
 ]);
 
 export function sanitizeLogValue(key: string, val: unknown): unknown {
   const lowerKey = key.toLowerCase();
   if (SENSITIVE_KEYS.has(lowerKey)) {
-    return '[REDACTED_SECRET]';
+    return "[REDACTED_SECRET]";
   }
   if (FORBIDDEN_CONTENT_KEYS.has(lowerKey)) {
-    if (typeof val === 'string') {
+    if (typeof val === "string") {
       return `[REDACTED_CONTENT: length ${val.length}]`;
     }
-    return '[REDACTED_CONTENT]';
+    return "[REDACTED_CONTENT]";
   }
-  if (typeof val === 'string') {
+  if (typeof val === "string") {
     // Strip absolute paths
-    return val.replace(/\/(?:home|Users|var|tmp|etc|usr|opt)\/[a-zA-Z0-9_\-./]+/g, '[PATH]');
+    return val.replace(
+      /\/(?:home|Users|var|tmp|etc|usr|opt)\/[a-zA-Z0-9_\-./]+/g,
+      "[PATH]",
+    );
   }
-  if (val !== null && typeof val === 'object') {
+  if (val !== null && typeof val === "object") {
     if (Array.isArray(val)) {
       return val.map((item, idx) => sanitizeLogValue(String(idx), item));
     }
@@ -76,16 +79,20 @@ export class SafeLogger {
     info: 30,
     warn: 40,
     error: 50,
-    fatal: 60
+    fatal: 60,
   };
 
-  constructor(private currentLevel: LogLevel = 'info') {}
+  constructor(private currentLevel: LogLevel = "info") {}
 
   private shouldLog(level: LogLevel): boolean {
     return this.levelOrder[level] >= this.levelOrder[this.currentLevel];
   }
 
-  private write(level: LogLevel, message: string, meta?: Partial<StructuredLogRecord>): void {
+  private write(
+    level: LogLevel,
+    message: string,
+    meta?: Partial<StructuredLogRecord>,
+  ): void {
     if (!this.shouldLog(level)) return;
 
     const record: StructuredLogRecord = {
@@ -95,46 +102,60 @@ export class SafeLogger {
       ...(meta?.requestId ? { requestId: meta.requestId } : {}),
       ...(meta?.localRunId ? { localRunId: meta.localRunId } : {}),
       ...(meta?.conversationId ? { conversationId: meta.conversationId } : {}),
-      ...(meta?.hermesSessionId ? { hermesSessionId: meta.hermesSessionId } : {}),
+      ...(meta?.hermesSessionId
+        ? { hermesSessionId: meta.hermesSessionId }
+        : {}),
       ...(meta?.upstreamStatus ? { upstreamStatus: meta.upstreamStatus } : {}),
       ...(meta?.errorCode ? { errorCode: meta.errorCode } : {}),
-      ...(meta?.durationMs !== undefined ? { durationMs: meta.durationMs } : {}),
-      ...(meta?.details ? { details: sanitizeLogValue('details', meta.details) as Record<string, unknown> } : {})
+      ...(meta?.durationMs !== undefined
+        ? { durationMs: meta.durationMs }
+        : {}),
+      ...(meta?.details
+        ? {
+            details: sanitizeLogValue("details", meta.details) as Record<
+              string,
+              unknown
+            >,
+          }
+        : {}),
     };
 
     const serialized = JSON.stringify(record);
-    if (level === 'error' || level === 'fatal') {
-      process.stderr.write(serialized + '\n');
+    if (level === "error" || level === "fatal") {
+      process.stderr.write(serialized + "\n");
     } else {
-      process.stdout.write(serialized + '\n');
+      process.stdout.write(serialized + "\n");
     }
   }
 
   trace(message: string, meta?: Partial<StructuredLogRecord>): void {
-    this.write('trace', message, meta);
+    this.write("trace", message, meta);
   }
 
   debug(message: string, meta?: Partial<StructuredLogRecord>): void {
-    this.write('debug', message, meta);
+    this.write("debug", message, meta);
   }
 
   info(message: string, meta?: Partial<StructuredLogRecord>): void {
-    this.write('info', message, meta);
+    this.write("info", message, meta);
   }
 
   warn(message: string, meta?: Partial<StructuredLogRecord>): void {
-    this.write('warn', message, meta);
+    this.write("warn", message, meta);
   }
 
   error(message: string, meta?: Partial<StructuredLogRecord>): void {
-    this.write('error', message, meta);
+    this.write("error", message, meta);
   }
 
   fatal(message: string, meta?: Partial<StructuredLogRecord>): void {
-    this.write('fatal', message, meta);
+    this.write("fatal", message, meta);
   }
 }
 
 export const logger = new SafeLogger(
-  (process.env['LOG_LEVEL'] as LogLevel) || 'info'
+  (process.env["LOG_LEVEL"] as LogLevel) || "info",
 );
+
+// Compatibility alias for services written before SafeLogger was finalized.
+export const sanitizedLogger = logger;

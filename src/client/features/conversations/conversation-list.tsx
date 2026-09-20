@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import type { ConversationSummary } from '../../../shared/api-schemas.js';
+import React, { useState } from "react";
+import type { ConversationSummary } from "../../../shared/api-schemas.js";
 
 export interface ConversationListProps {
   conversations: ConversationSummary[];
@@ -12,6 +12,9 @@ export interface ConversationListProps {
   searchQuery: string;
   onSearchChange: (query: string) => void;
   loading: boolean;
+  style?: React.CSSProperties;
+  mobileOpen?: boolean;
+  onMobileClose?: () => void;
 }
 
 export const ConversationList: React.FC<ConversationListProps> = ({
@@ -24,22 +27,35 @@ export const ConversationList: React.FC<ConversationListProps> = ({
   onUpdateMetadata,
   searchQuery,
   onSearchChange,
-  loading
+  loading,
+  style,
+  mobileOpen = false,
+  onMobileClose,
 }) => {
-  const [deleteTarget, setDeleteTarget] = useState<ConversationSummary | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<ConversationSummary | null>(
+    null,
+  );
 
   // Exact ID / Title filter
   const filtered = conversations.filter((c) => {
     if (!searchQuery.trim()) return true;
     const q = searchQuery.trim().toLowerCase();
-    return c.hermes_session_id.toLowerCase() === q || c.title.toLowerCase().includes(q);
+    return (
+      c.hermes_session_id.toLowerCase() === q ||
+      c.title.toLowerCase().includes(q)
+    );
   });
 
   const pinned = filtered.filter((c) => c.pinned);
   const unpinned = filtered.filter((c) => !c.pinned);
 
   return (
-    <aside className="w-80 h-full flex flex-col border-r border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 select-none">
+    <aside
+      className={`conversation-sidebar w-80 h-full flex flex-col border-r border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 select-none ${
+        mobileOpen ? "is-mobile-open" : ""
+      }`}
+      style={style}
+    >
       {/* Search and New */}
       <div className="p-3 border-b border-neutral-200 dark:border-neutral-800 flex flex-col gap-2">
         <div className="flex items-center justify-between">
@@ -68,9 +84,13 @@ export const ConversationList: React.FC<ConversationListProps> = ({
       {/* List content */}
       <div className="flex-1 overflow-y-auto divide-y divide-neutral-100 dark:divide-neutral-800/50">
         {loading && conversations.length === 0 ? (
-          <div className="p-6 text-center text-xs text-neutral-400">加载会话中...</div>
+          <div className="p-6 text-center text-xs text-neutral-400">
+            加载会话中...
+          </div>
         ) : filtered.length === 0 ? (
-          <div className="p-6 text-center text-xs text-neutral-400">暂无匹配的会话</div>
+          <div className="p-6 text-center text-xs text-neutral-400">
+            暂无匹配的会话
+          </div>
         ) : (
           <>
             {pinned.length > 0 && (
@@ -80,13 +100,22 @@ export const ConversationList: React.FC<ConversationListProps> = ({
                 </div>
                 {pinned.map((item) => (
                   <ConversationItemRow
-                    key={item.id}
+                    key={item.conversation_id}
                     item={item}
-                    isActive={item.id === activeConversationId}
-                    onSelect={() => onSelect(item.id)}
-                    onFork={() => onFork(item.id)}
+                    isActive={item.conversation_id === activeConversationId}
+                    onSelect={() => {
+                      onSelect(item.conversation_id);
+                      onMobileClose?.();
+                    }}
+                    onFork={() => onFork(item.conversation_id)}
                     onDelete={() => setDeleteTarget(item)}
-                    onTogglePin={() => onUpdateMetadata(item.id, item.title, !item.pinned)}
+                    onTogglePin={() =>
+                      onUpdateMetadata(
+                        item.conversation_id,
+                        item.title,
+                        !item.pinned,
+                      )
+                    }
                   />
                 ))}
               </div>
@@ -100,13 +129,22 @@ export const ConversationList: React.FC<ConversationListProps> = ({
               )}
               {unpinned.map((item) => (
                 <ConversationItemRow
-                  key={item.id}
+                  key={item.conversation_id}
                   item={item}
-                  isActive={item.id === activeConversationId}
-                  onSelect={() => onSelect(item.id)}
-                  onFork={() => onFork(item.id)}
+                  isActive={item.conversation_id === activeConversationId}
+                  onSelect={() => {
+                    onSelect(item.conversation_id);
+                    onMobileClose?.();
+                  }}
+                  onFork={() => onFork(item.conversation_id)}
                   onDelete={() => setDeleteTarget(item)}
-                  onTogglePin={() => onUpdateMetadata(item.id, item.title, !item.pinned)}
+                  onTogglePin={() =>
+                    onUpdateMetadata(
+                      item.conversation_id,
+                      item.title,
+                      !item.pinned,
+                    )
+                  }
                 />
               ))}
             </div>
@@ -122,7 +160,11 @@ export const ConversationList: React.FC<ConversationListProps> = ({
               确认删除会话？
             </h3>
             <p className="mt-2 text-xs text-neutral-600 dark:text-neutral-300">
-              删除将同步请求 Hermes 删除 upstream 会话（ID: <code className="font-mono text-rose-500">{deleteTarget.hermes_session_id}</code>）。该操作不可逆，本地草稿与状态将被清空。
+              删除将同步请求 Hermes 删除 upstream 会话（ID:{" "}
+              <code className="font-mono text-rose-500">
+                {deleteTarget.hermes_session_id}
+              </code>
+              ）。该操作不可逆，本地草稿与状态将被清空。
             </p>
             <div className="mt-4 flex items-center justify-end space-x-2">
               <button
@@ -133,7 +175,10 @@ export const ConversationList: React.FC<ConversationListProps> = ({
               </button>
               <button
                 onClick={() => {
-                  onDelete(deleteTarget.id, deleteTarget.hermes_session_id);
+                  onDelete(
+                    deleteTarget.conversation_id,
+                    deleteTarget.hermes_session_id,
+                  );
                   setDeleteTarget(null);
                 }}
                 className="px-3 py-1.5 text-xs font-medium bg-rose-600 hover:bg-rose-700 text-white rounded transition-colors"
@@ -163,31 +208,31 @@ const ConversationItemRow: React.FC<ConversationItemRowProps> = ({
   onSelect,
   onFork,
   onDelete,
-  onTogglePin
+  onTogglePin,
 }) => {
   return (
     <div
       onClick={onSelect}
       className={`group px-3 py-2.5 cursor-pointer flex flex-col gap-1 border-l-2 transition-colors ${
         isActive
-          ? 'bg-neutral-100 dark:bg-neutral-800/80 border-neutral-900 dark:border-neutral-100'
-          : 'border-transparent hover:bg-neutral-50 dark:hover:bg-neutral-800/40'
+          ? "bg-neutral-100 dark:bg-neutral-800/80 border-neutral-900 dark:border-neutral-100"
+          : "border-transparent hover:bg-neutral-50 dark:hover:bg-neutral-800/40"
       }`}
     >
       <div className="flex items-center justify-between">
         <span className="font-medium text-xs text-neutral-900 dark:text-neutral-100 truncate flex-1">
-          {item.title || '未命名会话'}
+          {item.title || "未命名会话"}
         </span>
         <div className="flex items-center space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
           <button
-            title={item.pinned ? '取消置顶' : '置顶'}
+            title={item.pinned ? "取消置顶" : "置顶"}
             onClick={(e) => {
               e.stopPropagation();
               onTogglePin();
             }}
             className="p-1 text-neutral-400 hover:text-neutral-800 dark:hover:text-neutral-200"
           >
-            {item.pinned ? '★' : '☆'}
+            {item.pinned ? "★" : "☆"}
           </button>
           <button
             title="分叉会话 (Fork)"
@@ -216,7 +261,7 @@ const ConversationItemRow: React.FC<ConversationItemRowProps> = ({
         <span className="font-mono truncate max-w-[140px]">
           {item.hermes_session_id.slice(0, 16)}...
         </span>
-        {typeof item.message_count === 'number' && (
+        {typeof item.message_count === "number" && (
           <span>{item.message_count} 条消息</span>
         )}
       </div>

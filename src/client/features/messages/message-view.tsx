@@ -1,12 +1,27 @@
-import React from 'react';
-import type { HermesMessage } from '../../../shared/hermes-schemas.js';
+import React from "react";
+import type { MessageItem } from "../../../shared/api-schemas.js";
+
+interface ToolCall {
+  id?: string;
+  function?: {
+    name?: string;
+    arguments?: string;
+  };
+}
+
+type DisplayMessage = MessageItem & {
+  tool_calls?: unknown[];
+};
 
 export interface MessageViewProps {
-  messages: HermesMessage[];
+  messages: DisplayMessage[];
   loading: boolean;
 }
 
-export const MessageView: React.FC<MessageViewProps> = ({ messages, loading }) => {
+export const MessageView: React.FC<MessageViewProps> = ({
+  messages,
+  loading,
+}) => {
   if (loading && messages.length === 0) {
     return (
       <div className="flex-1 flex items-center justify-center p-8 text-neutral-400 text-xs">
@@ -34,18 +49,18 @@ export const MessageView: React.FC<MessageViewProps> = ({ messages, loading }) =
 };
 
 interface MessageBubbleProps {
-  message: HermesMessage;
+  message: DisplayMessage;
 }
 
 const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
-  const isUser = message.role === 'user';
-  const isSystem = message.role === 'system';
-  const isTool = message.role === 'tool';
+  const isUser = message.role === "user";
+  const isSystem = message.role === "system";
+  const isTool = message.role === "tool";
 
   return (
     <div
       className={`flex flex-col ${
-        isUser ? 'items-end' : 'items-start'
+        isUser ? "items-end" : "items-start"
       } max-w-4xl mx-auto`}
     >
       {/* Role and Time Badge */}
@@ -53,46 +68,44 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
         <span
           className={`font-semibold uppercase tracking-wider ${
             isUser
-              ? 'text-blue-600 dark:text-blue-400'
+              ? "text-blue-600 dark:text-blue-400"
               : isSystem
-              ? 'text-neutral-500'
-              : isTool
-              ? 'text-amber-600 dark:text-amber-400'
-              : 'text-emerald-600 dark:text-emerald-400'
+                ? "text-neutral-500"
+                : isTool
+                  ? "text-amber-600 dark:text-amber-400"
+                  : "text-emerald-600 dark:text-emerald-400"
           }`}
         >
           {message.role}
         </span>
-        {message.created_at && (
-          <span>• {new Date(message.created_at).toLocaleTimeString()}</span>
-        )}
+        <span>• {formatTimestamp(message.timestamp)}</span>
       </div>
 
       {/* Bubble Container */}
       <div
         className={`rounded-lg px-4 py-2.5 text-xs leading-relaxed max-w-[85%] break-words shadow-2xs ${
           isUser
-            ? 'bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900'
+            ? "bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900"
             : isSystem
-            ? 'bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300 italic border border-neutral-200 dark:border-neutral-700'
-            : isTool
-            ? 'bg-amber-500/5 text-neutral-800 dark:text-neutral-200 border border-amber-500/20'
-            : 'bg-white dark:bg-neutral-800/90 text-neutral-800 dark:text-neutral-200 border border-neutral-200 dark:border-neutral-700'
+              ? "bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300 italic border border-neutral-200 dark:border-neutral-700"
+              : isTool
+                ? "bg-amber-500/5 text-neutral-800 dark:text-neutral-200 border border-amber-500/20"
+                : "bg-white dark:bg-neutral-800/90 text-neutral-800 dark:text-neutral-200 border border-neutral-200 dark:border-neutral-700"
         }`}
       >
         {/* Tool call meta or direct content */}
-        {message.tool_calls && message.tool_calls.length > 0 && (
+        {getToolCalls(message.tool_calls).length > 0 && (
           <div className="mb-2 space-y-1.5">
-            {message.tool_calls.map((tc, idx) => (
+            {getToolCalls(message.tool_calls).map((tc, idx) => (
               <details
                 key={tc.id || idx}
                 className="bg-neutral-100 dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 rounded p-2 text-[11px]"
               >
                 <summary className="font-mono font-semibold cursor-pointer text-amber-700 dark:text-amber-400">
-                  工具调用: {tc.function.name}
+                  工具调用: {tc.function?.name ?? "未知工具"}
                 </summary>
                 <pre className="mt-1 overflow-x-auto font-mono text-[10px] text-neutral-600 dark:text-neutral-400 whitespace-pre-wrap">
-                  {tc.function.arguments}
+                  {tc.function?.arguments ?? ""}
                 </pre>
               </details>
             ))}
@@ -106,6 +119,25 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
   );
 };
 
+function getToolCalls(value: unknown[] | undefined): ToolCall[] {
+  if (!value) return [];
+  return value.filter((candidate): candidate is ToolCall => {
+    if (!candidate || typeof candidate !== "object") return false;
+    const functionValue = (candidate as { function?: unknown }).function;
+    return (
+      functionValue === undefined ||
+      (typeof functionValue === "object" && functionValue !== null)
+    );
+  });
+}
+
+function formatTimestamp(timestamp: number): string {
+  const milliseconds =
+    timestamp > 1_000_000_000_000 ? timestamp : timestamp * 1000;
+  const date = new Date(milliseconds);
+  return Number.isNaN(date.getTime()) ? "" : date.toLocaleTimeString();
+}
+
 interface SafeTextRendererProps {
   text: string;
   isUser: boolean;
@@ -115,7 +147,10 @@ interface SafeTextRendererProps {
  * Pure virtual DOM safe rendering without dangerouslySetInnerHTML.
  * Parses basic markdown blocks (code fences, paragraphs, lists, links) securely.
  */
-const SafeTextRenderer: React.FC<SafeTextRendererProps> = ({ text, isUser }) => {
+const SafeTextRenderer: React.FC<SafeTextRendererProps> = ({
+  text,
+  isUser,
+}) => {
   if (!text) return null;
 
   // Split code blocks safely
@@ -124,10 +159,11 @@ const SafeTextRenderer: React.FC<SafeTextRendererProps> = ({ text, isUser }) => 
   return (
     <div className="space-y-2">
       {parts.map((part, index) => {
-        if (part.startsWith('```') && part.endsWith('```')) {
-          const lines = part.slice(3, -3).trim().split('\n');
-          const lang = lines[0]?.trim() || '';
-          const code = (lines.length > 1 ? lines.slice(1).join('\n') : lines[0]) ?? '';
+        if (part.startsWith("```") && part.endsWith("```")) {
+          const lines = part.slice(3, -3).trim().split("\n");
+          const lang = lines[0]?.trim() || "";
+          const code =
+            (lines.length > 1 ? lines.slice(1).join("\n") : lines[0]) ?? "";
 
           return (
             <div
@@ -172,8 +208,8 @@ function renderInlineLinks(text: string, isUser: boolean): React.ReactNode[] {
           rel="noreferrer noopener"
           className={`underline underline-offset-2 ${
             isUser
-              ? 'text-neutral-100 hover:text-white'
-              : 'text-blue-600 dark:text-blue-400 hover:underline'
+              ? "text-neutral-100 hover:text-white"
+              : "text-blue-600 dark:text-blue-400 hover:underline"
           }`}
         >
           {token}

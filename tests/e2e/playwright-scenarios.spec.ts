@@ -1,117 +1,100 @@
-import { test, expect } from '@playwright/test';
+import { expect, test, type Page } from "@playwright/test";
 
-/**
- * Playwright E2E Scenario Suite for emu-chat
- * Covers scenarios defined in dev-docs/07 Section 4.4:
- * 1. Mobile LAN HTTP (320/768/1280 viewports) & PWA secure-context fallback
- * 2. Two tabs concurrent actions (draft save, message send, stop, approval)
- * 3. SSE disconnection and page reload recovery
- * 4. Dangerous link and XSS sanitization check
- * 5. Delete conversation guard with active queue / runs
- */
+const defaultSessionId = "ses_test_1";
 
-test.describe('E2E Scenarios: Responsive Layout & LAN Context', () => {
-  const viewports = [
-    { name: 'Mobile 320px', width: 320, height: 640 },
-    { name: 'Tablet 768px', width: 768, height: 1024 },
-    { name: 'Desktop 1280px', width: 1280, height: 800 },
-  ];
+test.describe("emu-chat local Fake Hermes smoke flows", () => {
+  test.describe.configure({ mode: "serial" });
 
-  for (const vp of viewports) {
-    test(`renders workbench correctly on ${vp.name}`, async ({ page }) => {
-      await page.setViewportSize({ width: vp.width, height: vp.height });
-      await page.goto('/');
+  test("loads the workbench with the Fake Hermes session and status", async ({
+    page,
+  }) => {
+    await page.goto("/");
 
-      // Status indicator and workbench root should be visible
-      const appRoot = page.locator('#root');
-      await expect(appRoot).toBeVisible();
+    await expect(page.getByText("Hermes 在线", { exact: true })).toBeVisible();
+    await expect(
+      page.getByRole("main").getByText("Test session", { exact: true }),
+    ).toBeVisible();
+    await expect(page.getByText("Hello Hermes", { exact: true })).toBeVisible();
+    await expect(page.getByPlaceholder(/输入消息/)).toBeVisible();
+  });
 
-      if (vp.width <= 768) {
-        // Mobile view should have hamburger toggle or drawer
-        const sidebarToggle = page.locator('button[aria-label="Toggle Sidebar"]');
-        if (await sidebarToggle.count() > 0) {
-          await expect(sidebarToggle).toBeVisible();
-        }
-      }
-    });
-  }
+  test("creates a conversation through the visible workbench control", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    const title = "E2E created conversation";
+    page.once("dialog", (dialog) => dialog.accept(title));
 
-  test('displays LAN HTTP non-secure warning banner when on plain HTTP without localhost', async ({ page }) => {
-    await page.goto('http://192.168.1.100:3000/');
-    const warning = page.locator('text=局域网 HTTP 非安全上下文');
-    if (await warning.count() > 0) {
-      await expect(warning).toBeVisible();
-    }
+    await page.getByRole("button", { name: /新建会话/ }).click();
+    await expect(page.getByText(title, { exact: true })).toBeVisible();
+  });
+
+  test("saves, sends, and reloads a draft through the Fake Hermes run path", async ({
+    page,
+  }) => {
+    const conversationId = await openDefaultConversation(page);
+    const payload = "E2E smoke message through Fake Hermes";
+    const composer = page.getByPlaceholder(/输入消息/);
+
+    await composer.fill(payload);
+    await page.getByRole("button", { name: "发送", exact: true }).click();
+    await expect(composer).toHaveValue("");
+
+    await expect
+      .poll(async () => {
+        const response = await page.request.get(
+          `/api/v1/conversations/${conversationId}/messages?limit=100&order=oldest`,
+        );
+        if (!response.ok()) return false;
+        const body = (await response.json()) as {
+          items: Array<{ content: string }>;
+        };
+        return body.items.some((item) => item.content === payload);
+      })
+      .toBe(true);
+
+    await page.reload();
+    await expect(page.getByText(payload, { exact: true })).toBeVisible();
+    await expect(
+      page.getByRole("main").getByText("Fake run completed.", { exact: true }),
+    ).toBeVisible();
+  });
+
+  test("keeps the active conversation controls usable at a 320px viewport", async ({
+    page,
+  }) => {
+    const conversationId = await getDefaultConversationId(page);
+    await page.setViewportSize({ width: 320, height: 640 });
+    await page.goto(`/conversations/${conversationId}`);
+
+    await expect(
+      page.getByRole("main").getByText("Test session", { exact: true }),
+    ).toBeVisible();
+    await expect(page.getByPlaceholder(/输入消息/)).toBeVisible();
+    await page.getByRole("button", { name: "打开消息队列" }).click();
+    await expect(
+      page.getByRole("dialog", { name: "会话消息队列" }),
+    ).toBeVisible();
   });
 });
 
-test.describe('E2E Scenarios: Multi-tab Concurrency', () => {
-  test('two tabs saving draft concurrently triggers revision conflict or updates cleanly', async ({ context }) => {
-    const pageA = await context.newPage();
-    const pageB = await context.newPage();
+async function openDefaultConversation(page: Page): Promise<string> {
+  const conversationId = await getDefaultConversationId(page);
+  await page.goto(`/conversations/${conversationId}`);
+  await expect(
+    page.getByRole("main").getByText("Test session", { exact: true }),
+  ).toBeVisible();
+  return conversationId;
+}
 
-    await pageA.goto('/conversations/cv_001');
-    await pageB.goto('/conversations/cv_001');
-
-    const inputA = pageA.locator('textarea[placeholder*="输入消息"]');
-    const inputB = pageB.locator('textarea[placeholder*="输入消息"]');
-
-    await inputA.fill('Draft from Tab A');
-    await pageA.waitForTimeout(1100); // Wait for debounce autosave
-
-    await inputB.fill('Draft from Tab B');
-    await pageB.waitForTimeout(1100);
-
-    // Draft conflict should either overwrite with updated revision or surface conflict warning
-    await expect(inputB).toHaveValue('Draft from Tab B');
-  });
-
-  test('queue and run status synchronization between two tabs', async ({ context }) => {
-    const pageA = await context.newPage();
-    const pageB = await context.newPage();
-
-    await pageA.goto('/conversations/cv_001');
-    await pageB.goto('/conversations/cv_001');
-
-    const inputA = pageA.locator('textarea[placeholder*="输入消息"]');
-    await inputA.fill('Run task from Tab A');
-    await pageA.keyboard.press('Control+Enter');
-
-    // Tab B should receive queue / run status via SSE
-    const queueDrawerB = pageB.locator('text=排队中');
-    if (await queueDrawerB.count() > 0) {
-      await expect(queueDrawerB).toBeVisible();
-    }
-  });
-});
-
-test.describe('E2E Scenarios: Security & XSS Protection', () => {
-  test('sanitizes script tags and javascript: URIs in upstream messages', async ({ page }) => {
-    await page.goto('/conversations/cv_security_test');
-
-    // Verify raw script tag is not executed and alert dialog does not appear
-    page.on('dialog', () => {
-      throw new Error('Unexpected dialog triggered by XSS payload!');
-    });
-
-    const maliciousLink = page.locator('a[href^="javascript:"]');
-    await expect(maliciousLink).toHaveCount(0);
-  });
-});
-
-test.describe('E2E Scenarios: Delete Guard', () => {
-  test('prevents conversation deletion when active runs exist', async ({ page }) => {
-    await page.goto('/conversations/cv_active_run');
-    const deleteBtn = page.locator('button:has-text("删除会话")');
-    if (await deleteBtn.count() > 0) {
-      await deleteBtn.click();
-      const confirmBtn = page.locator('button:has-text("确认删除")');
-      if (await confirmBtn.count() > 0) {
-        await confirmBtn.click();
-        // Should show error message indicating active run conflict
-        const errorToast = page.locator('text=ACTIVE_RUN_CONFLICT');
-        await expect(errorToast).toBeVisible();
-      }
-    }
-  });
-});
+async function getDefaultConversationId(page: Page): Promise<string> {
+  const response = await page.request.get(
+    `/api/v1/conversations?session_id=${encodeURIComponent(defaultSessionId)}`,
+  );
+  expect(response.ok()).toBe(true);
+  const body = (await response.json()) as {
+    items: Array<{ conversation_id: string }>;
+  };
+  expect(body.items).toHaveLength(1);
+  return body.items[0]!.conversation_id;
+}

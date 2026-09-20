@@ -1,50 +1,62 @@
-import type Database from 'better-sqlite3';
-import type { QueueItemEntity } from './schema-types.js';
-import { ConflictError, NotFoundError, QueueFullError } from '../domain/errors.js';
-import { MAX_PENDING_QUEUE_ITEMS_PER_CONVERSATION } from '../../shared/limits.js';
+import type Database from "better-sqlite3";
+import { createHash } from "node:crypto";
+import type { QueueItemEntity } from "../schema-types.js";
+import {
+  ConflictError,
+  NotFoundError,
+  QueueFullError,
+} from "../../domain/errors.js";
+import { MAX_PENDING_QUEUE_ITEMS_PER_CONVERSATION } from "../../../shared/limits.js";
 
 export class QueueRepository {
   constructor(private db: Database.Database) {}
 
   findById(id: string): QueueItemEntity | null {
-    const row = this.db.prepare('SELECT * FROM queue_items WHERE id = ?').get(id) as
-      | QueueItemEntity
-      | undefined;
+    const row = this.db
+      .prepare("SELECT * FROM queue_items WHERE id = ?")
+      .get(id) as QueueItemEntity | undefined;
     return row ?? null;
   }
 
   findByOperationId(operationId: string): QueueItemEntity | null {
     const row = this.db
-      .prepare('SELECT * FROM queue_items WHERE operation_id = ?')
+      .prepare("SELECT * FROM queue_items WHERE operation_id = ?")
       .get(operationId) as QueueItemEntity | undefined;
     return row ?? null;
   }
 
   findByClientRequestId(clientRequestId: string): QueueItemEntity | null {
     const row = this.db
-      .prepare('SELECT * FROM queue_items WHERE client_request_id = ?')
+      .prepare("SELECT * FROM queue_items WHERE client_request_id = ?")
       .get(clientRequestId) as QueueItemEntity | undefined;
     return row ?? null;
   }
 
   listByConversation(
     conversationId: string,
-    states?: QueueItemEntity['state'][]
+    states?: QueueItemEntity["state"][],
   ): QueueItemEntity[] {
     if (!states || states.length === 0) {
       return this.db
-        .prepare('SELECT * FROM queue_items WHERE conversation_id = ? ORDER BY fifo_seq ASC')
+        .prepare(
+          "SELECT * FROM queue_items WHERE conversation_id = ? ORDER BY fifo_seq ASC",
+        )
         .all(conversationId) as QueueItemEntity[];
     }
 
-    const placeholders = states.map(() => '?').join(',');
+    const placeholders = states.map(() => "?").join(",");
     return this.db
       .prepare(
         `SELECT * FROM queue_items
          WHERE conversation_id = ? AND state IN (${placeholders})
-         ORDER BY fifo_seq ASC`
+         ORDER BY fifo_seq ASC`,
       )
       .all(conversationId, ...states) as QueueItemEntity[];
+  }
+
+  /** Alias retained for service code that predates listByConversation. */
+  findByConversationId(conversationId: string): QueueItemEntity[] {
+    return this.listByConversation(conversationId);
   }
 
   findActiveGlobal(): QueueItemEntity | null {
@@ -52,7 +64,7 @@ export class QueueRepository {
       .prepare(
         `SELECT * FROM queue_items
          WHERE state IN ('dispatching', 'accepted', 'reconciling')
-         LIMIT 1`
+         LIMIT 1`,
       )
       .get() as QueueItemEntity | undefined;
     return row ?? null;
@@ -63,7 +75,7 @@ export class QueueRepository {
       .prepare(
         `SELECT * FROM queue_items
          WHERE conversation_id = ? AND state IN ('dispatching', 'accepted', 'reconciling')
-         LIMIT 1`
+         LIMIT 1`,
       )
       .get(conversationId) as QueueItemEntity | undefined;
     return row ?? null;
@@ -75,17 +87,50 @@ export class QueueRepository {
         `SELECT * FROM queue_items
          WHERE conversation_id = ? AND state = 'queued'
          ORDER BY fifo_seq ASC
-         LIMIT 1`
+         LIMIT 1`,
       )
       .get(conversationId) as QueueItemEntity | undefined;
     return row ?? null;
   }
 
+  /** Return the oldest queued item across conversations (global FIFO). */
+  findNextGlobalQueued(): QueueItemEntity | null {
+    const row = this.db
+      .prepare(
+        `SELECT * FROM queue_items
+         WHERE state = 'queued'
+         ORDER BY created_at ASC, fifo_seq ASC
+         LIMIT 1`,
+      )
+      .get() as QueueItemEntity | undefined;
+    return row ?? null;
+  }
+
   enqueue(
-    item: Omit<
+    item: Pick<
       QueueItemEntity,
-      'fifo_seq' | 'revision' | 'attempt_count' | 'created_at' | 'updated_at'
-    >
+      | "id"
+      | "conversation_id"
+      | "operation_id"
+      | "client_request_id"
+      | "state"
+      | "payload_text"
+    > &
+      Partial<
+        Pick<
+          QueueItemEntity,
+          | "payload_sha256"
+          | "payload_bytes"
+          | "idempotency_key"
+          | "dispatch_session_id"
+          | "first_attempt_at"
+          | "admission_deadline_at"
+          | "recovery_expires_at"
+          | "payload_expired_at"
+          | "payload_discarded_at"
+          | "last_error_code"
+        >
+      >,
   ): QueueItemEntity {
     const executeTx = this.db.transaction(() => {
       // Check idempotency key or client_request_id first
@@ -98,24 +143,39 @@ export class QueueRepository {
       const countRow = this.db
         .prepare(
           `SELECT COUNT(*) as count FROM queue_items
-           WHERE conversation_id = ? AND state IN ('queued', 'dispatching', 'accepted', 'reconciling')`
+           WHERE conversation_id = ? AND state IN ('queued', 'dispatching', 'accepted', 'reconciling')`,
         )
         .get(item.conversation_id) as { count: number };
 
       if (countRow.count >= MAX_PENDING_QUEUE_ITEMS_PER_CONVERSATION) {
-        throw new QueueFullError('Queue depth limit exceeded for conversation');
+        throw new QueueFullError("Queue depth limit exceeded for conversation");
       }
 
       // Compute next fifo_seq
       const maxSeqRow = this.db
         .prepare(
           `SELECT COALESCE(MAX(fifo_seq), 0) as max_seq FROM queue_items
-           WHERE conversation_id = ?`
+           WHERE conversation_id = ?`,
         )
         .get(item.conversation_id) as { max_seq: number };
 
       const nextSeq = maxSeqRow.max_seq + 1;
       const now = new Date().toISOString();
+      const payloadText = item.payload_text;
+      const payloadBytes =
+        item.payload_bytes ??
+        (Buffer.byteLength(payloadText ?? "", "utf8") || 1);
+      const computedSha256 = createHash("sha256")
+        .update(payloadText ?? "", "utf8")
+        .digest("hex");
+      const payloadSha256 =
+        item.payload_sha256 && /^[0-9a-f]{64}$/i.test(item.payload_sha256)
+          ? item.payload_sha256
+          : computedSha256;
+      const idempotencyKey = item.idempotency_key ?? item.client_request_id;
+      // SQLite enforces that queued rows do not carry a dispatch session.
+      const dispatchSessionId =
+        item.state === "queued" ? null : item.dispatch_session_id;
 
       this.db
         .prepare(
@@ -125,7 +185,7 @@ export class QueueRepository {
             idempotency_key, dispatch_session_id, attempt_count, first_attempt_at,
             admission_deadline_at, recovery_expires_at, payload_expired_at,
             payload_discarded_at, last_error_code, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)`
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           item.id,
@@ -134,11 +194,11 @@ export class QueueRepository {
           item.client_request_id,
           nextSeq,
           item.state,
-          item.payload_text,
-          item.payload_sha256,
-          item.payload_bytes,
-          item.idempotency_key,
-          item.dispatch_session_id,
+          payloadText,
+          payloadSha256,
+          payloadBytes,
+          idempotencyKey,
+          dispatchSessionId,
           item.first_attempt_at,
           item.admission_deadline_at,
           item.recovery_expires_at,
@@ -146,7 +206,7 @@ export class QueueRepository {
           item.payload_discarded_at,
           item.last_error_code,
           now,
-          now
+          now,
         );
 
       return this.findById(item.id)!;
@@ -159,7 +219,7 @@ export class QueueRepository {
     id: string,
     expectedRevision: number,
     patch: {
-      state: QueueItemEntity['state'];
+      state: QueueItemEntity["state"];
       dispatch_session_id?: string | null;
       attempt_count?: number;
       first_attempt_at?: string | null;
@@ -169,14 +229,16 @@ export class QueueRepository {
       payload_expired_at?: string | null;
       payload_discarded_at?: string | null;
       last_error_code?: string | null;
-    }
+      /** Legacy callers used this flag instead of deriving it from state. */
+      terminal?: boolean;
+    },
   ): QueueItemEntity {
     const current = this.findById(id);
     if (!current) {
-      throw new NotFoundError('Queue item not found');
+      throw new NotFoundError("Queue item not found");
     }
     if (current.revision !== expectedRevision) {
-      throw new ConflictError('Queue item revision conflict');
+      throw new ConflictError("Queue item revision conflict");
     }
 
     const nextRevision = expectedRevision + 1;
@@ -187,9 +249,13 @@ export class QueueRepository {
         ? patch.dispatch_session_id
         : current.dispatch_session_id;
     const attemptCount =
-      patch.attempt_count !== undefined ? patch.attempt_count : current.attempt_count;
+      patch.attempt_count !== undefined
+        ? patch.attempt_count
+        : current.attempt_count;
     const firstAttemptAt =
-      patch.first_attempt_at !== undefined ? patch.first_attempt_at : current.first_attempt_at;
+      patch.first_attempt_at !== undefined
+        ? patch.first_attempt_at
+        : current.first_attempt_at;
     const admissionDeadlineAt =
       patch.admission_deadline_at !== undefined
         ? patch.admission_deadline_at
@@ -199,7 +265,13 @@ export class QueueRepository {
         ? patch.recovery_expires_at
         : current.recovery_expires_at;
     const payloadText =
-      patch.payload_text !== undefined ? patch.payload_text : current.payload_text;
+      patch.payload_text !== undefined
+        ? patch.payload_text
+        : patch.terminal ||
+            patch.state === "done" ||
+            patch.state === "cancelled"
+          ? null
+          : current.payload_text;
     const payloadExpiredAt =
       patch.payload_expired_at !== undefined
         ? patch.payload_expired_at
@@ -209,7 +281,9 @@ export class QueueRepository {
         ? patch.payload_discarded_at
         : current.payload_discarded_at;
     const lastErrorCode =
-      patch.last_error_code !== undefined ? patch.last_error_code : current.last_error_code;
+      patch.last_error_code !== undefined
+        ? patch.last_error_code
+        : current.last_error_code;
 
     const res = this.db
       .prepare(
@@ -218,7 +292,7 @@ export class QueueRepository {
              admission_deadline_at = ?, recovery_expires_at = ?, payload_text = ?,
              payload_expired_at = ?, payload_discarded_at = ?, last_error_code = ?,
              revision = ?, updated_at = ?
-         WHERE id = ? AND revision = ?`
+         WHERE id = ? AND revision = ?`,
       )
       .run(
         patch.state,
@@ -234,18 +308,18 @@ export class QueueRepository {
         nextRevision,
         now,
         id,
-        expectedRevision
+        expectedRevision,
       );
 
     if (res.changes === 0) {
-      throw new ConflictError('Queue item revision conflict');
+      throw new ConflictError("Queue item revision conflict");
     }
 
     return this.findById(id)!;
   }
 
   delete(id: string): boolean {
-    const res = this.db.prepare('DELETE FROM queue_items WHERE id = ?').run(id);
+    const res = this.db.prepare("DELETE FROM queue_items WHERE id = ?").run(id);
     return res.changes > 0;
   }
 }

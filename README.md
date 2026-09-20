@@ -2,7 +2,7 @@
 
 emu-chat 是轻量、单用户、在线使用的 Hermes Agent Web 工作台。Hermes 是会话历史的唯一来源；emu-chat 只保存草稿、未发送队列、运行协调状态和少量 UI 元数据，不保存完整会话副本。
 
-当前仓库处于“需求与编码基线已批准、尚未开始实现”阶段。本轮只维护开发文档，不包含业务源码。
+当前仓库处于实现与验证阶段。浏览器前端、Fastify 服务、SQLite 本地控制数据和 Fake Hermes 测试均位于本仓库；产品语义仍以批准的开发文档为准。
 
 ## 文档入口
 
@@ -38,38 +38,39 @@ emu-chat 是轻量、单用户、在线使用的 Hermes Agent Web 工作台。He
 ### 1. 依赖安装
 
 ```bash
+# 本项目要求 Node.js >=22.12 且 <23
 # 在项目根目录下安装依赖
-pnpm install
+npm install
 ```
 
 ### 2. 静态检查与构建验证
 
 ```bash
 # 类型检查
-pnpm typecheck
+npm run typecheck
 
 # 代码规范检查与格式
-pnpm lint
-pnpm format:check
+npm run lint
+npm run format:check
 
 # 前端与服务端编译
-pnpm build
+npm run build
 ```
 
 ### 3. 运行自动化测试套件
 
 ```bash
 # 运行单元测试
-pnpm test tests/unit
+npm test -- tests/unit
 
 # 运行组件静态测试
-pnpm test tests/components
+npm test -- tests/components
 
 # 运行 Fake Hermes 全矩阵集成测试
-pnpm test tests/integration
+npm test -- tests/integration
 
 # 运行端到端/全量矩阵验证
-pnpm test tests/integration/phase6-fake-hermes-full-matrix.test.ts
+npm test -- tests/integration/phase6-fake-hermes-full-matrix.test.ts
 ```
 
 ### 4. 环境变量配置与本地运行
@@ -79,14 +80,14 @@ pnpm test tests/integration/phase6-fake-hermes-full-matrix.test.ts
 cp .env.example .env
 
 # 编辑 .env 配置 Hermes 服务地址与端口
-# HERMES_BASE_URL=http://localhost:8000
-# HERMES_TOKEN=your_token_here
-# PORT=3000
+# HERMES_BASE_URL=http://127.0.0.1:8642
+# HERMES_API_KEY=your_token_here
+# EMU_CHAT_PORT=3000
 
 # 启动开发服务器（含 Vite 前端与 Fastify 后端代理）
-pnpm dev
+npm run dev
 
 # 或以生产模式启动
-pnpm start
+npm run build
+npm start
 ```
-

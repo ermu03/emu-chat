@@ -1,28 +1,60 @@
-import type Database from 'better-sqlite3';
-import type { CoordinatorLeaseEntity } from './schema-types.js';
+import type Database from "better-sqlite3";
+import { randomUUID } from "node:crypto";
+import type { CoordinatorLeaseEntity } from "../schema-types.js";
 
 export class LeaseRepository {
   constructor(private db: Database.Database) {}
 
   findByScope(
-    scopeType: CoordinatorLeaseEntity['scope_type'],
-    scopeId: string
+    scopeType: CoordinatorLeaseEntity["scope_type"],
+    scopeId: string,
   ): CoordinatorLeaseEntity | null {
     const row = this.db
-      .prepare('SELECT * FROM coordinator_leases WHERE scope_type = ? AND scope_id = ?')
+      .prepare(
+        "SELECT * FROM coordinator_leases WHERE scope_type = ? AND scope_id = ?",
+      )
       .get(scopeType, scopeId) as CoordinatorLeaseEntity | undefined;
     return row ?? null;
   }
 
   acquire(
-    scopeType: CoordinatorLeaseEntity['scope_type'],
+    scopeType: CoordinatorLeaseEntity["scope_type"],
+    scopeId: string,
+    ownerId: string,
+    ttlMs: number,
+  ): boolean;
+  acquire(
+    scopeType: CoordinatorLeaseEntity["scope_type"],
     scopeId: string,
     ownerId: string,
     leaseToken: string,
-    ttlMs: number
+    ttlMs: number | string,
+  ): boolean;
+  acquire(
+    scopeType: CoordinatorLeaseEntity["scope_type"],
+    scopeId: string,
+    ownerId: string,
+    leaseTokenOrTtl: string | number,
+    ttlMsOrExpiresAt?: number | string,
   ): boolean {
     const now = new Date();
-    const expiresAt = new Date(now.getTime() + ttlMs).toISOString();
+    let leaseToken: string;
+    let expiresAt: string;
+    if (typeof leaseTokenOrTtl === "number") {
+      leaseToken = `${ownerId}_${randomUUID()}`;
+      expiresAt = new Date(now.getTime() + leaseTokenOrTtl).toISOString();
+    } else {
+      leaseToken = leaseTokenOrTtl;
+      if (typeof ttlMsOrExpiresAt === "number") {
+        expiresAt = new Date(now.getTime() + ttlMsOrExpiresAt).toISOString();
+      } else if (typeof ttlMsOrExpiresAt === "string") {
+        // Accept an absolute ISO expiry for compatibility with the original
+        // coordinator implementation; new code should pass a numeric TTL.
+        expiresAt = ttlMsOrExpiresAt;
+      } else {
+        throw new TypeError("Lease TTL or expiry is required");
+      }
+    }
     const nowIso = now.toISOString();
 
     const res = this.db
@@ -37,8 +69,8 @@ export class LeaseRepository {
           expires_at = excluded.expires_at,
           heartbeat_at = excluded.heartbeat_at,
           updated_at = excluded.updated_at
-        WHERE coordinator_leases.expires_at < ?
-           OR (coordinator_leases.owner_id = excluded.owner_id AND coordinator_leases.lease_token = excluded.lease_token)`
+        WHERE coordinator_leases.expires_at <= ?
+           OR (coordinator_leases.owner_id = excluded.owner_id AND coordinator_leases.lease_token = excluded.lease_token)`,
       )
       .run(
         scopeType,
@@ -49,17 +81,17 @@ export class LeaseRepository {
         nowIso,
         nowIso,
         nowIso,
-        nowIso
+        nowIso,
       );
 
     return res.changes > 0;
   }
 
   renew(
-    scopeType: CoordinatorLeaseEntity['scope_type'],
+    scopeType: CoordinatorLeaseEntity["scope_type"],
     scopeId: string,
     leaseToken: string,
-    ttlMs: number
+    ttlMs: number,
   ): boolean {
     const now = new Date();
     const expiresAt = new Date(now.getTime() + ttlMs).toISOString();
@@ -69,7 +101,7 @@ export class LeaseRepository {
       .prepare(
         `UPDATE coordinator_leases
          SET expires_at = ?, heartbeat_at = ?, updated_at = ?
-         WHERE scope_type = ? AND scope_id = ? AND lease_token = ? AND expires_at > ?`
+         WHERE scope_type = ? AND scope_id = ? AND lease_token = ? AND expires_at > ?`,
       )
       .run(expiresAt, nowIso, nowIso, scopeType, scopeId, leaseToken, nowIso);
 
@@ -77,14 +109,14 @@ export class LeaseRepository {
   }
 
   release(
-    scopeType: CoordinatorLeaseEntity['scope_type'],
+    scopeType: CoordinatorLeaseEntity["scope_type"],
     scopeId: string,
-    leaseToken: string
+    leaseToken: string,
   ): boolean {
     const res = this.db
       .prepare(
         `DELETE FROM coordinator_leases
-         WHERE scope_type = ? AND scope_id = ? AND lease_token = ?`
+         WHERE scope_type = ? AND scope_id = ? AND lease_token = ?`,
       )
       .run(scopeType, scopeId, leaseToken);
 
@@ -93,7 +125,7 @@ export class LeaseRepository {
 
   releaseAllByOwner(ownerId: string): number {
     const res = this.db
-      .prepare('DELETE FROM coordinator_leases WHERE owner_id = ?')
+      .prepare("DELETE FROM coordinator_leases WHERE owner_id = ?")
       .run(ownerId);
     return res.changes;
   }
