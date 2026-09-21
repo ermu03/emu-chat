@@ -19,6 +19,31 @@ HERMES_API_KEY=your_token_here
 EMU_CHAT_PORT=3000
 ```
 
+环境变量说明：
+
+- `EMU_CHAT_HOST=0.0.0.0`：让 emu-chat 监听本机所有网络接口，局域网内的其他设备也可以访问。如果只允许本机访问，可改为 `127.0.0.1`。
+- `EMU_CHAT_PORT=3104`：emu-chat 使用的 HTTP 端口。启动后通常通过 `http://<主机地址>:3104/` 打开；端口必须没有被其他程序占用。
+
+## 项目目录
+
+```text
+emu-chat/
+├── migrations/              # SQLite 数据库迁移脚本，启动时自动执行
+├── src/
+│   ├── client/              # React 前端、页面状态和浏览器 API client
+│   ├── server/              # Fastify HTTP 服务、Hermes 适配器和队列协调器
+│   └── shared/              # 前后端共用的 schema、类型、枚举和限制
+├── tests/                   # 单元、组件和集成测试
+├── public/                  # PWA manifest 和静态图标
+├── openapi/                 # emu-chat HTTP API 契约
+├── data/                    # 运行时 SQLite 数据库目录（自动创建，不提交 Git）
+├── index.html               # Vite 前端入口
+├── package.json             # npm 脚本和依赖
+└── vite.config.ts           # 前端构建配置
+```
+
+`migrations/` 不是旧项目兼容代码。它保存 emu-chat 自己的本地控制数据库结构；服务第一次启动时会创建数据库并执行迁移，之后只执行尚未记录的版本。
+
 开发模式：
 
 ```bash
