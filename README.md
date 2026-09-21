@@ -22,7 +22,7 @@ EMU_CHAT_PORT=3000
 环境变量说明：
 
 - `EMU_CHAT_HOST=0.0.0.0`：让 emu-chat 监听本机所有网络接口，局域网内的其他设备也可以访问。如果只允许本机访问，可改为 `127.0.0.1`。
-- `EMU_CHAT_PORT=3104`：emu-chat 使用的 HTTP 端口。启动后通常通过 `http://<主机地址>:3104/` 打开；端口必须没有被其他程序占用。
+- `EMU_CHAT_PORT=3104`：emu-chat 后端 API 使用的 HTTP 端口。生产模式下也由这个端口提供前端页面；端口必须没有被其他程序占用。
 
 ## 项目目录
 
@@ -36,13 +36,11 @@ emu-chat/
 ├── tests/                   # 单元、组件和集成测试
 ├── public/                  # PWA manifest 和静态图标
 ├── openapi/                 # emu-chat HTTP API 契约
-├── data/                    # 运行时 SQLite 数据库目录（自动创建，不提交 Git）
+├── data/                    # 运行时 SQLite 数据库目录
 ├── index.html               # Vite 前端入口
 ├── package.json             # npm 脚本和依赖
 └── vite.config.ts           # 前端构建配置
 ```
-
-`migrations/` 不是旧项目兼容代码。它保存 emu-chat 自己的本地控制数据库结构；服务第一次启动时会创建数据库并执行迁移，之后只执行尚未记录的版本。
 
 开发模式：
 
@@ -50,12 +48,16 @@ emu-chat/
 npm run dev
 ```
 
+开发模式会同时启动两个服务：Vite 前端开发服务器默认使用 `5173`，Fastify 后端使用 `.env` 中的 `EMU_CHAT_PORT`（例如 `3104`）。浏览器应打开 `http://<主机地址>:5173/`；前端发往 `/api` 的请求会由 Vite 自动转发到 `3104` 后端。Vite 端口被占用时可能自动改用下一个可用端口。
+
 生产模式：
 
 ```bash
 npm run build
 npm start
 ```
+
+生产模式不启动 Vite，Fastify 会同时提供构建后的前端页面和 API，因此只需访问 `http://<主机地址>:3104/`。
 
 ## 验证
 
