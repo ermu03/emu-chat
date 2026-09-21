@@ -129,8 +129,7 @@ select:focus-visible {
   text-underline-offset: 3px;
 }
 
-.icon-button,
-.toolbar-button {
+.icon-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -143,28 +142,13 @@ select:focus-visible {
   background: transparent;
   transition: 140ms ease;
 }
-.icon-button:hover,
-.toolbar-button:hover {
+.icon-button:hover {
   color: var(--ink);
   background: var(--surface-subtle);
 }
-.icon-button:disabled,
-.toolbar-button:disabled {
+.icon-button:disabled {
   cursor: not-allowed;
   opacity: 0.45;
-}
-.toolbar-button {
-  width: auto;
-  gap: 8px;
-  padding: 0 11px;
-  border-color: var(--line);
-  background: var(--surface);
-  font-size: 12px;
-}
-.toolbar-button.active {
-  color: var(--accent-strong);
-  border-color: color-mix(in srgb, var(--accent) 32%, var(--line));
-  background: var(--accent-wash);
 }
 .sidebar-backdrop {
   position: fixed;
@@ -201,13 +185,11 @@ select:focus-visible {
 .main-toolbar,
 .main-toolbar-start,
 .main-toolbar-end,
-.status-chip,
 .composer-footer,
 .composer-actions,
 .queue-header,
 .queue-header-actions,
 .queue-item,
-.queue-item-meta,
 .queue-item-actions,
 .assistant-live-actions,
 .queue-item-status {
@@ -454,17 +436,6 @@ select:focus-visible {
   font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.main-toolbar-subtitle {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--ink-faint);
-  font-size: 11px;
-}
-.main-toolbar-subtitle .status-dot {
-  width: 6px;
-  height: 6px;
 }
 .status-dot {
   display: inline-block;
@@ -1268,9 +1239,6 @@ select:focus-visible {
 .spin {
   animation: spin 1s linear infinite;
 }
-.rotate-180 {
-  transform: rotate(180deg);
-}
 @keyframes spin {
   to {
     transform: rotate(360deg);
@@ -1304,9 +1272,6 @@ select:focus-visible {
   .main-toolbar {
     min-height: 54px;
     padding: 0 13px;
-  }
-  .main-toolbar-subtitle {
-    display: none;
   }
   .main-toolbar-title {
     max-width: 50vw;

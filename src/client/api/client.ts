@@ -101,13 +101,10 @@ export class EmuChatApiClient {
   listConversations(params?: {
     limit?: number;
     offset?: number;
-    title?: string;
   }): Promise<ConversationListResponse> {
     const searchParams = new URLSearchParams();
     if (params?.limit) searchParams.set("limit", String(params.limit));
     if (params?.offset) searchParams.set("offset", String(params.offset));
-    if (params?.title) searchParams.set("title", params.title);
-
     const query = searchParams.toString();
     return this.request<ConversationListResponse>(
       `/api/v1/conversations${query ? `?${query}` : ""}`,
@@ -326,85 +323,6 @@ export class EmuChatApiClient {
       method: "PUT",
       body: JSON.stringify(data),
     });
-  }
-
-  // --- SSE Subscription ---
-  subscribeRunEvents(
-    localRunId: string,
-    options: {
-      onEvent: (event: { event: string; data: string; id?: string }) => void;
-      onError?: (err: unknown) => void;
-      after?: number;
-      signal?: AbortSignal;
-    },
-  ): () => void {
-    const searchParams = new URLSearchParams();
-    if (options.after !== undefined) {
-      searchParams.set("after", String(options.after));
-    }
-    const query = searchParams.toString();
-    const url = `${this.baseUrl}/api/v1/runs/${localRunId}/events${query ? `?${query}` : ""}`;
-
-    const controller = new AbortController();
-    const signal = options.signal || controller.signal;
-
-    let active = true;
-
-    fetch(url, {
-      signal,
-      headers: {
-        Accept: "text/event-stream",
-      },
-    })
-      .then(async (response) => {
-        if (!response.ok || !response.body) {
-          throw new Error(`SSE stream failed with status ${response.status}`);
-        }
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-
-        while (active) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-
-          const lines = buffer.split(/\r?\n\r?\n/);
-          buffer = lines.pop() || "";
-
-          for (const block of lines) {
-            if (!block.trim()) continue;
-            let event = "message";
-            let data = "";
-            let id: string | undefined;
-
-            const blockLines = block.split(/\r?\n/);
-            for (const line of blockLines) {
-              if (line.startsWith("event:")) {
-                event = line.slice(6).trim();
-              } else if (line.startsWith("data:")) {
-                data += (data ? "\n" : "") + line.slice(5).trim();
-              } else if (line.startsWith("id:")) {
-                id = line.slice(3).trim();
-              }
-            }
-
-            const parsedEvent =
-              id === undefined ? { event, data } : { event, data, id };
-            options.onEvent(parsedEvent);
-          }
-        }
-      })
-      .catch((err) => {
-        if (active && options.onError) {
-          options.onError(err);
-        }
-      });
-
-    return () => {
-      active = false;
-      controller.abort();
-    };
   }
 }
 

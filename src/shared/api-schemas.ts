@@ -65,7 +65,6 @@ export const GetConversationsQuerySchema = z
       .max(LIMITS.SESSION_LIST_PAGE_MAX)
       .default(LIMITS.SESSION_LIST_PAGE_DEFAULT),
     offset: z.coerce.number().int().min(0).default(0),
-    title: z.string().min(1).optional(),
   })
   .strict();
 export type GetConversationsQuery = z.infer<typeof GetConversationsQuerySchema>;

@@ -180,19 +180,6 @@ export class ApprovalNotPendingError extends AppError {
   }
 }
 
-export class ReviewRequiredError extends AppError {
-  constructor(message: string, details?: Record<string, unknown>) {
-    super({
-      code: "REVIEW_REQUIRED",
-      message,
-      statusCode: 409,
-      retryable: false,
-      action: "review_required",
-      ...(details ? { details } : {}),
-    });
-  }
-}
-
 export class HermesNotReadyError extends AppError {
   constructor(
     message: string = "Hermes upstream is not ready",

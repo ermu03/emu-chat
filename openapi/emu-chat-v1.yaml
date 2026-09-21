@@ -54,14 +54,6 @@ paths:
           schema:
             type: integer
             default: 0
-        - name: session_id
-          in: query
-          schema:
-            type: string
-        - name: title
-          in: query
-          schema:
-            type: string
       responses:
         '200':
           content:
@@ -1347,7 +1339,6 @@ components:
         - sidebar_width
         - send_shortcut
         - expected_revision
-
 
 
 

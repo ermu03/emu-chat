@@ -40,7 +40,6 @@ import type {
 export interface ListConversationsParams {
   limit?: number | undefined;
   offset?: number | undefined;
-  title?: string | undefined;
 }
 
 /** Maps Hermes resources into local conversation projections. */
@@ -71,7 +70,6 @@ export class ConversationService {
         const remote = await this.hermesAdapter.getSession(
           conversation.hermes_session_id,
         );
-        if (params.title && remote.title !== params.title) continue;
         this.conversationRepo.updateLastSeen(
           conversation.id,
           remote.updated_at,
