@@ -1,4 +1,11 @@
-import React, { memo, useEffect, useMemo, useRef } from "react";
+import React, {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import rehypeKatex from "rehype-katex";
@@ -6,9 +13,12 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import {
   Bot,
+  Check,
   ChevronDown,
+  Copy,
   LoaderCircle,
   RefreshCw,
+  Sparkles,
   Square,
   Terminal,
   UserRound,
@@ -32,12 +42,36 @@ export interface MessageViewProps {
   streamingContent?: string;
   onStopGenerating?: (() => void) | undefined;
   onReconcile?: (() => void) | undefined;
+  onSelectPrompt?: ((prompt: string) => void) | undefined;
 }
 
 export interface PendingUserMessage {
   id: string;
   content: string;
 }
+
+const PROMPT_STARTERS = [
+  {
+    icon: "🔍",
+    title: "分析系统架构",
+    prompt: "请帮我梳理当前系统的核心分层、模块职责与数据流向。",
+  },
+  {
+    icon: "⚡",
+    title: "代码性能优化",
+    prompt: "请检查当前代码中的瓶颈或冗余，给出具体的重构与优化建议。",
+  },
+  {
+    icon: "🧪",
+    title: "编写高风险测试",
+    prompt: "针对并发锁、竞态安全和边界错误情况，设计并编写单元测试。",
+  },
+  {
+    icon: "✨",
+    title: "新功能头脑风暴",
+    prompt: "针对当前需求设计几个可行的实现方案，并分析各自的优缺点。",
+  },
+];
 
 export const MessageView: React.FC<MessageViewProps> = ({
   messages,
@@ -50,6 +84,7 @@ export const MessageView: React.FC<MessageViewProps> = ({
   streamingContent = "",
   onStopGenerating,
   onReconcile,
+  onSelectPrompt,
 }) => {
   const turns = useMemo(() => groupMessagesIntoTurns(messages), [messages]);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -97,10 +132,32 @@ export const MessageView: React.FC<MessageViewProps> = ({
         <div className="message-empty">
           <div className="empty-greeting">
             <div className="empty-greeting-mark" aria-hidden="true">
-              e
+              <Sparkles size={24} strokeWidth={2} />
             </div>
             <h2>准备好开始工作</h2>
-            <p>发送一条消息，Hermes 会在当前会话中继续处理。</p>
+            <p>发送一条消息或选择快捷建议，Hermes 会在当前会话中继续处理。</p>
+            {onSelectPrompt && (
+              <div className="prompt-starters-grid">
+                {PROMPT_STARTERS.map((starter, index) => (
+                  <button
+                    key={index}
+                    type="button"
+                    className="prompt-starter-card"
+                    onClick={() => onSelectPrompt(starter.prompt)}
+                  >
+                    <span className="prompt-starter-icon" aria-hidden="true">
+                      {starter.icon}
+                    </span>
+                    <span className="prompt-starter-title">
+                      {starter.title}
+                    </span>
+                    <span className="prompt-starter-desc">
+                      {starter.prompt}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -461,6 +518,69 @@ function LiveAssistantRow({
   );
 }
 
+const CodeBlock = memo(function CodeBlock({
+  className,
+  children,
+}: {
+  className?: string | undefined;
+  children: React.ReactNode;
+}) {
+  const [copied, setCopied] = useState(false);
+  const language = className?.match(/language-([\w-]+)/)?.[1] ?? "";
+
+  const handleCopy = useCallback(() => {
+    const extractText = (node: React.ReactNode): string => {
+      if (typeof node === "string") return node;
+      if (typeof node === "number") return String(node);
+      if (Array.isArray(node)) return node.map(extractText).join("");
+      if (React.isValidElement(node) && node.props) {
+        return extractText(
+          (node.props as { children?: React.ReactNode }).children,
+        );
+      }
+      return "";
+    };
+
+    const textToCopy = extractText(children);
+    if (!textToCopy) return;
+
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard
+        .writeText(textToCopy)
+        .then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 2000);
+        })
+        .catch(() => {});
+    }
+  }, [children]);
+
+  return (
+    <div className="message-code">
+      <div className="message-code-header">
+        <span className="message-code-label">{language || "code"}</span>
+        <button
+          type="button"
+          className={`message-code-copy-btn ${copied ? "is-copied" : ""}`}
+          onClick={handleCopy}
+          aria-label={copied ? "已复制" : "复制代码"}
+          title={copied ? "已复制" : "复制代码"}
+        >
+          {copied ? (
+            <Check size={13} strokeWidth={2.2} />
+          ) : (
+            <Copy size={13} strokeWidth={1.8} />
+          )}
+          <span>{copied ? "已复制" : "复制代码"}</span>
+        </button>
+      </div>
+      <pre>
+        <code className={className}>{children}</code>
+      </pre>
+    </div>
+  );
+});
+
 const MarkdownContent = memo(function MarkdownContent({
   text,
 }: {
@@ -472,18 +592,21 @@ const MarkdownContent = memo(function MarkdownContent({
       rehypePlugins={[rehypeHighlight, rehypeKatex]}
       components={{
         pre({ children }) {
-          return <div className="message-code">{children}</div>;
+          return <>{children}</>;
         },
-        code({ className, children }) {
-          const language = className?.match(/language-([\w-]+)/)?.[1] ?? "";
-          return (
-            <>
-              {language && <div className="message-code-label">{language}</div>}
-              <pre>
-                <code className={className}>{children}</code>
-              </pre>
-            </>
-          );
+        code({ className, children, ...props }) {
+          const isInline =
+            !className &&
+            typeof children === "string" &&
+            !children.includes("\n");
+          if (isInline) {
+            return (
+              <code className={className} {...props}>
+                {children}
+              </code>
+            );
+          }
+          return <CodeBlock className={className}>{children}</CodeBlock>;
         },
       }}
     >

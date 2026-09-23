@@ -244,6 +244,9 @@ export const DraftComposer: React.FC<DraftComposerProps> = ({
             {byteCount.toLocaleString()} /{" "}
             {LIMITS.INPUT_MAX_BYTES.toLocaleString()} bytes
           </span>
+          <span className="composer-shortcut-hint" title="发送快捷键">
+            {sendShortcut === "mod_enter" ? "⌘/Ctrl + ↵ 发送" : "↵ 发送"}
+          </span>
           {saveError && <span className="error">{saveError}</span>}
           {sendError && <span className="error">{sendError}</span>}
         </div>

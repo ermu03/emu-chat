@@ -47,18 +47,20 @@
 
 ### DraftComposer (输入框与草稿管理)
 - **自适应高度**: 根据内容实时调整输入框高度，区间为 `84px` 至 `230px`。
+- **悬浮岛聚焦**: 容器获得焦点（`:focus-within`）时呈现柔和主题色光环扩散（Ring Glow）与层次浮起感。
 - **代数隔离**: 通过 `generationRef` 实现跨会话隔离，避免草稿错乱。
 - **防抖与单飞**: 支持 500ms 防抖存盘，采用单飞锁（保证同一时间只有一个请求）控制。
 - **实时校验**: 使用 `TextEncoder` 进行 UTF-8 字节数实时统计和校验。
 - **发送管道**: 发送前强制触发 `flush` 保存最新草稿，随后执行 `handleSend` 管道。
-- **快捷键**: 区分单纯换行（`Enter` 或根据偏好）和发送提交（`Mod+Enter`）。
+- **快捷键**: 区分单纯换行（`Enter` 或根据偏好）和发送提交（`Mod+Enter`），底部状态栏提供等宽快捷键提示胶囊。
 
 ### MessageView (消息展示)
 - **智能吸底滚动**: 当用户滚动位置接近底部（`scrollHeight - scrollTop - clientHeight < 80`）时，新消息到达或文本流式增长会自动触发滚动吸底。
 - **稳定历史消息渲染**: 仅当 `messages` 引用变化时重新执行回合分组；用户、系统、助手、工具和 Markdown 行使用 `React.memo`。仅流式内容变化时，已加载的历史 Markdown 不会重新解析。
 - **Markdown 渲染管道**: 采用 `remarkGfm` + `remarkMath` + `rehypeHighlight` + `rehypeKatex` 的标准渲染链。
-- **自定义代码块**: 提供具有语言标签“药丸”样式的自定义代码块，以及思考过程的折叠卡片 (`<details>`) 显示。
-- **工具调用与结果**: 通过 `getToolResultContent` 解析工具响应结果。
+- **自定义代码块与复制**: 独立 `CodeBlock` 组件提供语言标签“药丸”顶栏以及一键复制代码按钮（附带复制成功反馈）。
+- **工具调用与结果**: 通过 `getToolResultContent` 解析工具响应结果。思考过程与工具调用收敛至胶囊折叠卡片。
+- **空状态引导**: 会话无历史消息时提供快捷开始建议卡片（Prompt Starters），点击即可联动填充草稿。
 - **流式与乐观渲染**: 包含 `LiveAssistantRow` 用于处理实时流式渲染（附带停止/对账按钮），以及 `PendingUserRow` 用于乐观占位显示。
 
 ### QueuePanel (排队面板)
@@ -89,6 +91,7 @@
 
 ## 6. CSS 设计系统
 - **双轨主题**: 依赖于 `:root` (浅色默认) 及 `data-theme="dark"` (深色模式) 的原生 CSS 变量机制。
-- **核心变量**: 定义了 `canvas`, `surface`, `ink`, `accent`, `danger` 等语义化色板。
+- **核心变量**: 定义了 `canvas`, `surface`, `ink`, `accent`, `danger` 等语义化色板，以及四级微阴影体系 (`--shadow-sm`, `--shadow-soft`, `--shadow-float`, `--shadow-glow`)。
+- **层次与质感**: 顶部导航工具栏与模态弹窗遮罩启用 `backdrop-filter: blur(...)` 毛玻璃模糊。
 - **响应式布局**: 以 `760px` 为断点，移动端触发全屏抽屉式的侧边栏模式。
 - **交互与无障碍**: 实现流式光标动画 (`cursor-blink`)，并通过 `@media (prefers-reduced-motion)` 禁用不必要的动画效果。

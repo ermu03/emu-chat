@@ -39,7 +39,7 @@ import {
   PreferencesDrawer,
   type PreferencesState,
 } from "./features/preferences/preferences-drawer.js";
-import { MessageSquarePlus, Menu, Settings2 } from "lucide-react";
+import { MessageSquarePlus, Menu, Settings2, Sparkles } from "lucide-react";
 import {
   useStreamEvents,
   type RunStreamEvent,
@@ -911,6 +911,24 @@ export function AppShell() {
     return { revision: saved.revision };
   };
 
+  const handleSelectPrompt = useCallback(
+    (prompt: string) => {
+      if (!activeConversationId) return;
+      setDraft((prev) =>
+        prev
+          ? { ...prev, content: prompt }
+          : {
+              object: "emu_chat.draft",
+              conversation_id: activeConversationId,
+              content: prompt,
+              revision: 0,
+              updated_at: null,
+            },
+      );
+    },
+    [activeConversationId],
+  );
+
   const handleSend = async (content: string, expectedDraftRevision: number) => {
     if (!activeConversationId) throw new Error("请先选择会话");
     const conversationId = activeConversationId;
@@ -1265,6 +1283,7 @@ export function AppShell() {
               onReconcile={
                 showReconcile ? () => void handleReconcile() : undefined
               }
+              onSelectPrompt={handleSelectPrompt}
             />
 
             <div className="composer-shell">
@@ -1347,7 +1366,7 @@ export function AppShell() {
             <div className="message-empty">
               <div className="empty-greeting">
                 <div className="empty-greeting-mark" aria-hidden="true">
-                  e
+                  <Sparkles size={24} strokeWidth={2} />
                 </div>
                 <h2>选择一个会话开始</h2>
                 <p>从左侧打开已有会话，或创建一个全新的 Hermes 工作空间。</p>
