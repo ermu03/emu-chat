@@ -4,7 +4,6 @@ coverage/
 data/
 dev-docs/
 dev-record/
-openapi/
 package-lock.json
 *.md
 *.yaml

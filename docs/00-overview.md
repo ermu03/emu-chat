@@ -45,7 +45,8 @@ emu-chat/
 │   └── shared/              # 前后端共用逻辑：API Schema、Zod 定义、枚举和常量限制等，保证类型零漂移
 ├── tests/                   # 单元测试、组件测试和集成测试目录
 ├── public/                  # 静态资源，如 PWA manifest 和系统图标
-├── openapi/                 # emu-chat 后端 HTTP API 的 OpenAPI 契约文档
+├── docs/                    # 项目现状、API 参考与决策笔记规则
+├── .agents/notes/           # 工程决策笔记，目录按需创建
 ├── data/                    # 运行时生成的 SQLite 数据库及数据存储目录
 ├── index.html               # 前端 Vite 运行入口页面
 ├── package.json             # 项目元信息、依赖定义及 npm 脚本
@@ -53,6 +54,8 @@ emu-chat/
 ├── tsconfig.server.json     # 专门针对后端 Node 环境的 TS 编译配置
 └── vite.config.ts           # 前端构建及开发服务器代理配置
 ```
+
+HTTP 端点见 [API 参考](08-api-reference.md)，重要技术取舍见 [决策笔记规则](decision-notes.md)及 .agents/notes/。
 
 ## 4. 开发模式 vs 生产模式
 

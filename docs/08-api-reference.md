@@ -1,143 +1,90 @@
-# API Reference (emu-chat-v1)
+# emu-chat HTTP API 参考
 
-本文档是 emu-chat 项目的 API 参考指南。
+本文档列出 emu-chat 提供给自身前端的 HTTP 接口。基准路径是 /api/v1；表中的路径均相对于该基准路径。端点和成功状态码以 [服务端路由](../src/server/http/routes/) 为准，请求字段和响应数据结构以 [共享 Zod Schema](../src/shared/api-schemas.ts) 为准。更新接口时，同批更新本文档。
 
-## 基础信息
-- **基准路径**: `/api/v1`
+## 通用约定
 
-## 统一错误响应格式
-所有 API 在发生错误时均返回统一的 `ApiErrorEnvelope` 格式：
+JSON 接口返回 JSON；运行事件订阅返回 text/event-stream。服务端在响应头中设置 x-request-id。失败响应使用以下结构，upstream_status 与 details 仅在适用时出现：
 
-```json
+~~~json
 {
   "error": {
-    "code": "ERROR_CODE",
-    "message": "Human readable message",
-    "retryable": true,
-    "action": "retry",
-    "details": {}
-  },
-  "requestId": "req-123456"
+    "code": "INVALID_REQUEST",
+    "message": "Request validation failed",
+    "retryable": false,
+    "action": "none",
+    "request_id": "rq_123e4567-e89b-42d3-a456-426614174000"
+  }
 }
-```
+~~~
 
-## 按功能分组端点
+请求无效通常返回 400；版本或状态冲突通常返回 409。上游 Hermes 故障等情况可能返回其他状态，具体错误码与处理建议见共享 Schema 和服务端错误定义。
 
-### 1. 系统状态
-- **GET `/status`**
-  - **描述**: 获取系统状态
-  - **OperationId**: `getSystemStatus`
-  - **响应**: `SystemStatusSchema` (200 OK)
-- **POST `/status/recheck`**
-  - **描述**: 重新检查系统状态并尝试重连
-  - **OperationId**: `recheckSystemStatus`
-  - **响应**: `SystemStatusSchema` (200 OK)
+## 系统状态
 
-### 2. 会话管理
-- **GET `/conversations`**
-  - **描述**: 列出所有会话
-  - **参数**: 分页参数等
-  - **响应**: `ConversationListSchema` (200 OK)
-- **POST `/conversations`**
-  - **描述**: 创建新会话
-  - **请求体**: `CreateConversationSchema`
-  - **响应**: `ConversationSchema` (201 Created)
-- **GET `/conversations/:id`**
-  - **描述**: 获取会话详情
-  - **响应**: `ConversationSchema` (200 OK)
-- **GET `/conversations/:id/messages`**
-  - **描述**: 获取会话消息列表
-  - **响应**: `MessageListSchema` (200 OK)
-- **POST `/conversations/:id/messages`**
-  - **描述**: 向会话发送新消息
-  - **请求体**: `SendMessageSchema`
-  - **响应**: `MessageSchema` (201 Created)
-- **POST `/conversations/:id/reset`**
-  - **描述**: 重置会话上下文
-  - **响应**: 204 No Content
-- **POST `/conversations/:id/fork`**
-  - **描述**: 分支当前会话
-  - **请求体**: `ForkConversationSchema`
-  - **响应**: `ConversationSchema` (201 Created)
-- **PATCH `/conversations/:id/hermes-metadata`**
-  - **描述**: 更新 Hermes 元数据
-  - **请求体**: `UpdateHermesMetadataSchema`
-  - **响应**: 204 No Content
-- **PATCH `/conversations/:id/local-metadata`**
-  - **描述**: 更新本地元数据
-  - **请求体**: `UpdateLocalMetadataSchema`
-  - **响应**: 204 No Content
-- **POST `/conversations/:id/delete`**
-  - **描述**: 删除会话
-  - **响应**: 204 No Content
+| 方法 | 路径 | 请求 | 成功响应 |
+| --- | --- | --- | --- |
+| GET | /status | 无 | 200 ConnectionStatusResponseSchema |
+| POST | /status/recheck | 无；主动重新探测 Hermes | 200 ConnectionStatusResponseSchema |
 
-### 3. 草稿
-- **GET `/conversations/:id/draft`**
-  - **描述**: 获取会话草稿
-  - **响应**: `DraftSchema` (200 OK)
-- **PUT `/conversations/:id/draft`**
-  - **描述**: 更新会话草稿
-  - **请求体**: `DraftSchema`
-  - **响应**: 204 No Content
+## 会话与消息
 
-### 4. 队列
-- **GET `/conversations/:id/queue`**
-  - **描述**: 获取会话队列状态
-  - **响应**: `QueueStateSchema` (200 OK)
-- **POST `/conversations/:id/queue/resume`**
-  - **描述**: 恢复队列执行
-  - **响应**: 204 No Content
-- **PATCH `/queue-items/:id`**
-  - **描述**: 修改队列项
-  - **请求体**: `UpdateQueueItemSchema`
-  - **响应**: `QueueItemSchema` (200 OK)
-- **POST `/queue-items/:id/cancel`**
-  - **描述**: 取消队列项
-  - **响应**: 204 No Content
-- **POST `/queue-items/:id/copy-to-draft`**
-  - **描述**: 将队列项复制到草稿
-  - **响应**: 204 No Content
-- **POST `/queue-items/:id/discard-recovery`**
-  - **描述**: 丢弃恢复数据
-  - **响应**: 204 No Content
+| 方法 | 路径 | 请求 | 成功响应 |
+| --- | --- | --- | --- |
+| GET | /conversations | limit、offset 查询参数 | 200 ConversationListResponseSchema |
+| POST | /conversations | CreateConversationRequestSchema；可用空对象 | 201 ConversationDetailResponseSchema |
+| GET | /conversations/:conversationId | 无 | 200 ConversationDetailResponseSchema |
+| GET | /conversations/:conversationId/messages | limit、offset、order 查询参数 | 200 MessageListResponseSchema |
+| POST | /conversations/:conversationId/messages | SendMessageRequestSchema | 202 SendMessageResponseSchema |
+| POST | /conversations/:conversationId/reset | ResetConversationRequestSchema；可用空对象 | 201 ConversationDetailResponseSchema |
+| POST | /conversations/:conversationId/fork | ForkConversationRequestSchema；可用空对象 | 201 ConversationDetailResponseSchema |
+| PATCH | /conversations/:conversationId/hermes-metadata | PatchHermesMetadataRequestSchema | 200 ConversationDetailResponseSchema |
+| PATCH | /conversations/:conversationId/local-metadata | PatchLocalMetadataRequestSchema | 200 ConversationDetailResponseSchema |
+| POST | /conversations/:conversationId/delete | DeleteConversationRequestSchema | 200 DeleteConversationResponseSchema |
 
-### 5. 运行控制
-- **GET `/runs/:id`**
-  - **描述**: 获取运行状态
-  - **响应**: `RunSchema` (200 OK)
-- **GET `/runs/:id/events`**
-  - **描述**: 订阅运行事件流 (SSE)
-  - **参数**: `after` (Last-Event-ID)
-  - **响应**: SSE 响应流
-- **POST `/runs/:id/stop`**
-  - **描述**: 停止当前运行
-  - **响应**: 204 No Content
-- **POST `/runs/:id/approval`**
-  - **描述**: 提交审批决策
-  - **请求体**: `ApprovalSchema`
-  - **响应**: 204 No Content
-- **POST `/runs/:id/reconcile`**
-  - **描述**: 强制协调运行状态
-  - **响应**: 204 No Content
+会话列表的 limit、offset 默认分别为 50、0；消息列表的 limit、offset、order 默认分别为 100、0、oldest。发送消息需要 client_request_id 和 expected_draft_revision；202 响应返回入队结果和草稿状态，不直接返回一条已完成的助手消息。删除会话需传 expected_hermes_session_id 与 confirmed。
 
-### 6. 偏好设置
-- **GET `/preferences`**
-  - **描述**: 获取用户偏好设置
-  - **响应**: `PreferencesSchema` (200 OK)
-- **PUT `/preferences`**
-  - **描述**: 更新偏好设置
-  - **请求体**: `PreferencesSchema`
-  - **响应**: 204 No Content
+## 草稿
 
-## SSE 事件流协议说明
+| 方法 | 路径 | 请求 | 成功响应 |
+| --- | --- | --- | --- |
+| GET | /conversations/:id/draft | 无 | 200 DraftResponseSchema |
+| PUT | /conversations/:id/draft | PutDraftRequestSchema：content、expected_revision | 200 DraftResponseSchema |
 
-SSE 接口返回标准 Server-Sent Events 流，支持以下三种事件类型：
+## 队列与恢复
 
-1. **`stream.ready`**
-   - 连接成功并准备好发送事件时触发。
-2. **`run.event`**
-   - 运行过程中的各类事件载荷，包含消息块、状态更新、审批请求等。
-3. **`stream.gap`**
-   - 用于通知客户端事件流出现断档，需要采取补救措施。
+| 方法 | 路径 | 请求 | 成功响应 |
+| --- | --- | --- | --- |
+| GET | /conversations/:conversation_id/queue | include_terminal 查询参数 | 200 QueueListResponseSchema |
+| POST | /conversations/:conversation_id/queue/resume | 可省略请求体或传空对象 | 200 QueueListResponseSchema |
+| PATCH | /queue-items/:queue_item_id | PatchQueueItemRequestSchema | 200 QueueItemResponseSchema |
+| POST | /queue-items/:queue_item_id/cancel | CancelQueueItemRequestSchema | 200 QueueItemResponseSchema |
+| POST | /queue-items/:queue_item_id/copy-to-draft | CopyToDraftRequestSchema | 200 CopyToDraftResponseSchema |
+| POST | /queue-items/:queue_item_id/discard-recovery | 可省略请求体或传空对象 | 200 QueueItemResponseSchema |
 
-客户端可通过 `Last-Event-ID` 请求头或 `after` 查询参数传递最后接收到的事件 ID，以便在断线后恢复事件流。
+include_terminal 只接受字符串 true 或 false，省略时按 false 处理。修改或取消队列项需要 expected_revision；复制恢复内容到草稿需要 expected_draft_revision，可选 overwrite_nonempty。
+
+## 运行与事件
+
+| 方法 | 路径 | 请求 | 成功响应 |
+| --- | --- | --- | --- |
+| GET | /runs/:local_run_id | 无 | 200 RunResponseSchema |
+| POST | /runs/:local_run_id/stop | 可省略请求体或传空对象 | 202 RunResponseSchema |
+| POST | /runs/:local_run_id/approval | ApprovalRequestSchema | 202 RunResponseSchema |
+| POST | /runs/:local_run_id/reconcile | 可省略请求体或传空对象 | 202 ReconcileResponseSchema |
+| GET | /runs/:local_run_id/events | after 查询参数或 Last-Event-ID 请求头 | 200 text/event-stream |
+
+事件游标必须是非负整数；同时传 after 和 Last-Event-ID 时，两者必须一致。SSE 使用以下事件名：
+
+- stream.ready：连接建立，包含 local_run_id、earliest_seq 和 latest_seq。
+- run.event：运行事件，SSE id 为 local_seq；数据包含 local_run_id、local_seq、type、payload、received_at。
+- stream.gap：指定游标无法精确回放时发出，包含缺口原因和序列范围。
+
+连接存续期间还会发送注释形式的心跳。运行事件的短期回放窗口由服务端 SSEHub 管理。
+
+## 偏好设置
+
+| 方法 | 路径 | 请求 | 成功响应 |
+| --- | --- | --- | --- |
+| GET | /preferences | 无 | 200 PreferencesResponseSchema |
+| PUT | /preferences | PutPreferencesRequestSchema | 200 PreferencesResponseSchema |

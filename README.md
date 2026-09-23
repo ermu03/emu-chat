@@ -35,12 +35,15 @@ emu-chat/
 │   └── shared/              # 前后端共用的 schema、类型、枚举和限制
 ├── tests/                   # 单元、组件和集成测试
 ├── public/                  # PWA manifest 和静态图标
-├── openapi/                 # emu-chat HTTP API 契约
+├── docs/                    # 当前架构、API 与决策笔记规则
+├── .agents/notes/           # 工程决策笔记，目录按需创建
 ├── data/                    # 运行时 SQLite 数据库目录
 ├── index.html               # Vite 前端入口
 ├── package.json             # npm 脚本和依赖
 └── vite.config.ts           # 前端构建配置
 ```
+
+系统现状见 [项目文档](docs/00-overview.md)，HTTP 接口见 [API 参考](docs/08-api-reference.md)。重要技术取舍按 [决策笔记规则](docs/decision-notes.md)记录在 .agents/notes/。
 
 开发模式：
 
