@@ -1,12 +1,12 @@
 ---
 name: research
-description: Investigate a question against high-trust primary sources and capture the findings as a Markdown file in the repo. Use when the user wants a topic researched, docs or API facts gathered, or reading legwork delegated to a background agent.
+description: "调查 emu-chat 开发中的技术问题，优先核对一手资料，并在需要留存时写简短研究记录。"
 ---
 
-Spin up a **background agent** to do the research, so you keep working while it reads.
+# 技术研究
 
-Its job:
+先读相关源码、docs/、AGENTS.md 和现有决策笔记，明确项目里已经知道什么。外部事实优先查官方文档、规范、源码或一手 API；对可能变化的信息核对当前版本与日期。
 
-1. Investigate the question against **primary sources** (official docs, source code, specs, first-party APIs), not a secondary write-up of them. Follow every claim back to the source that owns it.
-2. Write the findings to a single Markdown file, citing each claim's source.
-3. Save it where the repo already keeps such notes; match the existing convention, and if there is none, put it somewhere sensible and say where.
+结果说明问题、证据、结论、尚不确定之处，以及对 emu-chat 的实际影响。外部事实附可直接定位的来源链接。研究可以由当前助手完成，不以启动后台代理为前提。
+
+只有用户要求保存，或结论会被后续工作反复使用时，才按需写入 .agents/research/YYYY-MM-DD-<topic>.md。研究记录保存事实与来源；如果据此做出重要工程决定，另按 docs/decision-notes.md 更新四状态决策笔记。不要把尚未采纳的调查结论写成已实施决定。

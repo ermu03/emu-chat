@@ -1,18 +1,12 @@
 ---
 name: claude-handoff
-description: Hand the current conversation off to a fresh background agent that picks up the work immediately.
-argument-hint: "What will the next session be used for?"
-disable-model-invocation: true
+description: "用户要求将 emu-chat 当前工作交给新的 Claude 后台会话时，生成交接摘要并尝试启动它。"
 ---
 
-Write a handoff summary of the current conversation so a fresh agent can continue the work. Instead of saving it, launch a background agent seeded with the summary as its prompt: `claude --bg --name "<descriptive name>" "<handoff summary>"`. It starts in the current working directory and returns immediately; the user manages it with `claude agents`.
+# 交给 Claude 后台会话
 
-Always pass `-n`/`--name` with a descriptive name (e.g. `--name "Fix login bug"`); it sets the display name shown in the job list, session picker, and terminal title.
+仅在用户明确要求交给 Claude 时执行。先按 handoff 的要点整理简短摘要：目标、已完成工作、工作树状态、验证、下一步，以及 AGENTS.md、ISSUES.md、规格和决策笔记的路径。用户给出的后续重点优先写入摘要。剔除密钥、令牌和个人敏感信息。
 
-Include a "suggested skills" section in the summary, naming which skills the next agent should call the Skill tool for.
+将摘要保存为系统临时目录中的唯一文件，便于核对与恢复。若当前 Claude CLI 支持 --bg 与 --name，以项目根目录为工作目录，将 claude、--bg、--name、描述性名称、完整摘要依次作为独立参数启动；不要将摘要原文拼成未经转义的 shell 命令。启动后报告会话名称和交接文件路径。
 
-Do not duplicate content already captured in other artifacts (specs, plans, ADRs, issues, commits, diffs). Reference them by path or URL instead.
-
-Redact any sensitive information, such as API keys, passwords, or personally identifiable information, since the summary becomes the agent's prompt.
-
-If the user passed arguments, treat them as a description of what the next session will focus on and tailor the summary accordingly.
+如果 Claude CLI 不存在或启动失败，保留交接文件并明确报告未启动的原因。不要把文件已写入误报为后台会话已启动。

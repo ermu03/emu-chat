@@ -37,9 +37,13 @@ emu-chat/
 ├── public/                  # PWA manifest 和静态图标
 ├── docs/                    # 当前架构、API 与决策笔记规则
 ├── .agents/notes/           # 工程决策笔记，目录按需创建
+├── .agents/skills/          # 项目开发 Skill 的唯一正文
+├── .claude/skills/          # 指向项目 Skill 的 Claude Code 入口
 ├── data/                    # 运行时 SQLite 数据库目录
 ├── index.html               # Vite 前端入口
 ├── package.json             # npm 脚本和依赖
+├── AGENTS.md                # Codex 与 Claude 共用的开发规范
+├── CLAUDE.md                # Claude Code 导入 AGENTS.md 的入口
 └── vite.config.ts           # 前端构建配置
 ```
 

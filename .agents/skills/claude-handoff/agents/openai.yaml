@@ -1,5 +1,5 @@
 interface:
   display_name: "Claude Handoff"
-  short_description: "Hand off to a background agent"
+  short_description: "Launch a Claude continuation with a project handoff"
 policy:
   allow_implicit_invocation: false

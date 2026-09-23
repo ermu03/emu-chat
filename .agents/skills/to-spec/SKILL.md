@@ -1,75 +1,16 @@
 ---
 name: to-spec
-description: "Turn the current conversation into a spec and publish it to the project issue tracker: no interview, just synthesis of what you've already discussed."
-disable-model-invocation: true
+description: "将 emu-chat 已讨论的功能或修复整理成简洁的本地实施规格；用户要求写规格时使用。"
 ---
 
-This skill takes the current conversation context and codebase understanding and produces a spec. Do NOT interview the user; just synthesize what you already know.
+# 将讨论写成规格
 
-The issue tracker and triage label vocabulary should have been provided to you. If not, tell the user to run `/setup-matt-pocock-skills`.
+目标是让后续实现者知道要交付什么、如何判断完成。依据现有讨论、AGENTS.md、ISSUES.md、相关文档、源码和决策笔记写作，不编造用户故事或备选方案。
 
-## Process
+- 已有对应的 ISSUES.md 条目时，在原条目中补充或链接规格；没有时沿用该文件的条目风格新增一节。避免重复登记同一任务。
+- 内容能在一个条目中讲清楚时，直接写在 ISSUES.md。复杂需求才按需创建 .agents/specs/<topic>.md，并从 ISSUES.md 链接；不预建空目录。
+- 规格包含：问题与目标、可观察行为、范围与不包含的内容、验收条件、已知约束、仍未解决的问题。只写真正必要的字段，不追求冗长清单。
+- 测试与验证部分遵守 AGENTS.md：只覆盖高风险逻辑和主干链路；普通 CRUD、静态渲染等不为规格凑测试。写明手工验证也可以。
+- 技术取舍的理由属于 .agents/notes/，按 docs/decision-notes.md 查找或记录，并在规格中链接；规格描述预期结果，不重复决策笔记。
 
-1. Explore the repo to understand the current state of the codebase, if you haven't already. Use the project's domain glossary vocabulary throughout the spec, and respect any ADRs in the area you're touching.
-
-2. Sketch out the seams at which you're going to test the feature. Existing seams should be preferred to new ones. Use the highest seam possible. If new seams are needed, propose them at the highest point you can. The fewer seams across the codebase, the better - the ideal number is one.
-
-Check with the user that these seams match their expectations.
-
-3. Write the spec using the template below, then publish it to the project issue tracker. Apply the `ready-for-agent` triage label - no need for additional triage.
-
-<spec-template>
-
-## Problem Statement
-
-The problem that the user is facing, from the user's perspective.
-
-## Solution
-
-The solution to the problem, from the user's perspective.
-
-## User Stories
-
-A LONG, numbered list of user stories. Each user story should be in the format of:
-
-1. As an <actor>, I want a <feature>, so that <benefit>
-
-<user-story-example>
-1. As a mobile bank customer, I want to see balance on my accounts, so that I can make better informed decisions about my spending
-</user-story-example>
-
-This list of user stories should be extremely extensive and cover all aspects of the feature.
-
-## Implementation Decisions
-
-A list of implementation decisions that were made. This can include:
-
-- The modules that will be built/modified
-- The interfaces of those modules that will be modified
-- Technical clarifications from the developer
-- Architectural decisions
-- Schema changes
-- API contracts
-- Specific interactions
-
-Do NOT include specific file paths or code snippets. They may end up being outdated very quickly.
-
-Exception: if a prototype produced a snippet that encodes a decision more precisely than prose can (state machine, reducer, schema, type shape), inline it within the relevant decision and note briefly that it came from a prototype. Trim to the decision-rich parts, not a working demo, just the important bits.
-
-## Testing Decisions
-
-A list of testing decisions that were made. Include:
-
-- A description of what makes a good test (only test external behavior, not implementation details)
-- Which modules will be tested
-- Prior art for the tests (i.e. similar types of tests in the codebase)
-
-## Out of Scope
-
-A description of the things that are out of scope for this spec.
-
-## Further Notes
-
-Any further notes about the feature.
-
-</spec-template>
+只有关键决策确实阻塞规格时才向用户提问。产物保存在本地仓库，不自行发布到外部问题跟踪器。

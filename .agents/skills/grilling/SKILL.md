@@ -1,28 +1,15 @@
 ---
 name: grilling
-description: Grill the user relentlessly about a plan, decision, or idea. Use when the user wants to stress-test their thinking, or uses any 'grill' trigger phrases.
+description: "当 emu-chat 的需求、设计或技术取舍尚未明确，用户希望讨论方案时，通过少量分轮问题澄清决策。"
 ---
 
-Interview the user relentlessly until you reach a shared understanding. Map this as a **design tree**: every decision branches into the decisions that hang off it.
+# 澄清需求与决策
 
-Work the tree in **rounds**. The **frontier** is every decision whose prerequisites are already settled: the questions you can ask _now_ without guessing at answers you haven't heard yet. Ask the whole frontier in one round: number each question and give your recommended answer. Then wait for the user's answers before the next round.
+用于讨论尚未定案的问题。已有明确要求的实现任务直接推进，不必先启动访谈。
 
-Format a round like so:
+1. 先查看 AGENTS.md、ISSUES.md、相关源码和项目文档；涉及已有决定时，按 docs/decision-notes.md 查找同主题笔记。代码和文档能查明的事实由助手自行核实。
+2. 只询问会改变方案的约束、偏好和取舍。每轮提出少量互不依赖的问题；每个问题说明推荐选项及理由。后续问题依赖前一轮答案时，留到下一轮。
+3. 对不阻塞工作的细节，说明合理假设并继续能够独立完成的工作。不要为了遍历完整的“设计树”反复要求确认。
+4. 收束时简要列出已定事项、仍待用户决定的事项和实施边界。重要工程决定按 docs/decision-notes.md 记录；普通局部改动不写笔记。
 
-```
-❓ **Q1** - **<question title>**: <question body, might be multiple paragraphs, including multiple choices>
-
-➡️ <your recommended answer>
-
----
-
-❓ **Q2** - **<question title>**: <question body, might be multiple paragraphs, including multiple choices>
-
-➡️ <your recommended answer>
-```
-
-Each round the user answers reshapes the tree: settled decisions push the frontier outward and unblock questions that depended on them. Recompute the frontier and ask the next round. A question whose answer depends on another question still open in this round belongs to a _later_ round, not this one.
-
-Finding _facts_ is your job, never the user's. When a frontier question needs a fact from the environment (filesystem, tools, etc.), dispatch a sub-agent to find it; don't ask the user for anything you could look up yourself. Don't block on it: a running exploration is an unsettled prerequisite, so only the questions downstream of it wait for the sub-agent to report; ask the rest of the frontier now. The _decisions_ are the user's: put each to them and wait.
-
-The session is done when the frontier is empty: every branch of the design tree visited, nothing left silently assumed. Do not act on it until the user confirms you have reached a shared understanding.
+若用户接着要求落地，把已确定的要求交给实现工作；访谈本身不创建外部 Issue 或 PR。

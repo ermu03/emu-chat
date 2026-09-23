@@ -1,16 +1,16 @@
 ---
 name: handoff
-description: Compact the current conversation into a handoff document for another agent to pick up.
-argument-hint: "What will the next session be used for?"
-disable-model-invocation: true
+description: "把 emu-chat 当前开发会话整理成交接文档，供 Codex、Claude 或下一次会话继续。"
 ---
 
-Write a handoff document summarising the current conversation so a fresh agent can continue the work. Save to the temporary directory of the user's OS - not the current workspace.
+# 会话交接
 
-Include a "suggested skills" section in the document, naming which skills the next agent should call the Skill tool for.
+在用户指定的位置保存交接文档；未指定时保存到系统临时目录，使用唯一文件名，并回报绝对路径。内容让新会话能直接继续工作：
 
-Do not duplicate content already captured in other artifacts (specs, plans, ADRs, issues, commits, diffs). Reference them by path or URL instead.
+- 目标、用户已确定的要求和仍待决定的问题；
+- 当前分支、未提交改动，以及哪些改动由本次会话完成；
+- 已完成的工作、验证结果、失败原因与下一步；
+- 相关的 AGENTS.md、ISSUES.md、规格、系统文档和四状态决策笔记路径；
+- 可能有帮助的现存 Skill 名称，只有确实相关才列出。
 
-Redact any sensitive information, such as API keys, passwords, or personally identifiable information.
-
-If the user passed arguments, treat them as a description of what the next session will focus on and tailor the doc accordingly.
+用路径指向已有事实，不复制整份规格、diff 或笔记。剔除密钥、令牌和个人敏感信息。交接文件是临时上下文，不作为已实施决定的记录；重要取舍仍按 docs/decision-notes.md 维护。
