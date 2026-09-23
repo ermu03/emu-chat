@@ -90,8 +90,29 @@ function getExitCodeFailure(exitCode: unknown): string {
     : "";
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Merges newly fetched messages into the current message list, deduplicating by ID
+ * and preserving natural chronological display order (sorted by ID or timestamp).
+ */
+export function mergeMessages(
+  existing: MessageItem[],
+  incoming: MessageItem[],
+): MessageItem[] {
+  const map = new Map<number, MessageItem>();
+  for (const m of existing) {
+    map.set(m.id, m);
+  }
+  for (const m of incoming) {
+    map.set(m.id, m);
+  }
+  return Array.from(map.values()).sort((a, b) => {
+    if (a.id !== b.id) return a.id - b.id;
+    return a.timestamp - b.timestamp;
+  });
 }
 
 export function groupMessagesIntoTurns(messages: MessageItem[]): DisplayTurn[] {

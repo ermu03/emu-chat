@@ -143,6 +143,7 @@ describe("HermesAdapter real Hermes 0.21 contract", () => {
       limit: 25,
       offset: 0,
       order: "oldest",
+      has_more: false,
       messages: [{ tool_calls: null, token_count: null }],
     });
   });

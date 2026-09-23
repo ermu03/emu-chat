@@ -4,6 +4,7 @@ import {
   groupMessagesIntoTurns,
   isToolError,
   getToolResultContent,
+  mergeMessages,
   type AssistantTurn,
 } from "../../src/client/features/messages/message-display.js";
 
@@ -140,5 +141,21 @@ describe("message-display turn aggregation", () => {
     expect(assistantTurn.tools).toHaveLength(1);
     expect(assistantTurn.tools[0].isError).toBe(true);
     expect(assistantTurn.finalContent).toBe("");
+  });
+
+  it("merges messages, deduplicates by id, and sorts in ascending chronological order", () => {
+    const existing: MessageItem[] = [
+      { id: 1, role: "user", content: "first", timestamp: 100 },
+      { id: 2, role: "assistant", content: "second", timestamp: 101 },
+    ];
+    const incoming: MessageItem[] = [
+      { id: 2, role: "assistant", content: "second updated", timestamp: 101 },
+      { id: 3, role: "user", content: "third", timestamp: 102 },
+    ];
+
+    const merged = mergeMessages(existing, incoming);
+    expect(merged).toHaveLength(3);
+    expect(merged.map((m) => m.id)).toEqual([1, 2, 3]);
+    expect(merged[1].content).toBe("second updated");
   });
 });

@@ -24,6 +24,9 @@ import {
 export interface MessageViewProps {
   messages: MessageItem[];
   loading: boolean;
+  hasMoreEarlier?: boolean;
+  loadingEarlier?: boolean;
+  onLoadEarlier?: (() => void) | undefined;
   pendingUserMessage?: PendingUserMessage | null;
   isGenerating?: boolean;
   streamingContent?: string;
@@ -39,6 +42,9 @@ export interface PendingUserMessage {
 export const MessageView: React.FC<MessageViewProps> = ({
   messages,
   loading,
+  hasMoreEarlier = false,
+  loadingEarlier = false,
+  onLoadEarlier,
   pendingUserMessage = null,
   isGenerating = false,
   streamingContent = "",
@@ -48,12 +54,34 @@ export const MessageView: React.FC<MessageViewProps> = ({
   const turns = groupMessagesIntoTurns(messages);
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
+  const previousScrollHeightRef = useRef<number | null>(null);
+
+  // Preserve scroll offset when earlier messages are loaded prepended to the top
+  useEffect(() => {
+    const scroller = scrollRef.current;
+    if (!scroller) return;
+    if (previousScrollHeightRef.current !== null) {
+      const heightDifference =
+        scroller.scrollHeight - previousScrollHeightRef.current;
+      if (heightDifference > 0) {
+        scroller.scrollTop += heightDifference;
+      }
+      previousScrollHeightRef.current = null;
+    }
+  }, [messages.length]);
 
   useEffect(() => {
     const scroller = scrollRef.current;
     if (!scroller || !stickToBottomRef.current) return;
     scroller.scrollTop = scroller.scrollHeight;
   }, [isGenerating, pendingUserMessage?.id, streamingContent, turns.length]);
+
+  const handleLoadEarlier = () => {
+    if (scrollRef.current) {
+      previousScrollHeightRef.current = scrollRef.current.scrollHeight;
+    }
+    onLoadEarlier?.();
+  };
 
   if (loading && turns.length === 0 && !pendingUserMessage && !isGenerating) {
     return (
@@ -90,6 +118,25 @@ export const MessageView: React.FC<MessageViewProps> = ({
       }}
     >
       <div className="message-list" role="log" aria-live="polite">
+        {hasMoreEarlier && (
+          <div className="message-load-earlier-wrap">
+            <button
+              type="button"
+              className="message-load-earlier-btn"
+              disabled={loadingEarlier}
+              onClick={handleLoadEarlier}
+            >
+              {loadingEarlier ? (
+                <>
+                  <LoaderCircle size={14} className="spin" />
+                  <span>正在加载更早历史消息...</span>
+                </>
+              ) : (
+                <span>加载更早历史消息</span>
+              )}
+            </button>
+          </div>
+        )}
         {turns.map((turn) => {
           if (turn.kind === "user") {
             return <UserTurnRow key={turn.id} message={turn.message} />;

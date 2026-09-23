@@ -212,6 +212,8 @@ export const MessageListResponseSchema = z.object({
   offset: z.number().int().nonnegative(),
   order: z.enum(["oldest", "latest"]),
   returned: z.number().int().nonnegative(),
+  has_more: z.boolean(),
+  total: z.number().int().nonnegative().optional(),
 });
 export type MessageListResponse = z.infer<typeof MessageListResponseSchema>;
 

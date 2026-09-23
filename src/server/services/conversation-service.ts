@@ -136,6 +136,8 @@ export class ConversationService {
       offset: upstream.offset,
       order: upstream.order,
       returned: items.length,
+      has_more: upstream.has_more,
+      ...(upstream.total !== undefined ? { total: upstream.total } : {}),
     };
   }
 

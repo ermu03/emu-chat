@@ -19,6 +19,7 @@ import {
   MessageView,
   type PendingUserMessage,
 } from "./features/messages/message-view.js";
+import { mergeMessages } from "./features/messages/message-display.js";
 import { StreamedAssistantCache } from "./features/messages/streamed-assistant-cache.js";
 import { DraftComposer } from "./features/composer/draft-composer.js";
 import {
@@ -67,6 +68,7 @@ type PendingSubmission = {
 type ConversationViewSnapshot = {
   conversation: ConversationDetailResponse;
   messages: MessageItem[];
+  hasMoreEarlier: boolean;
   draft: DraftResponse;
   queue: QueueListResponse;
   activeRun: RunResponse | null;
@@ -91,6 +93,8 @@ export function AppShell() {
     useState<ConversationDetailResponse | null>(null);
   const [messages, setMessages] = useState<MessageItem[]>([]);
   const [messagesLoading, setMessagesLoading] = useState(false);
+  const [hasMoreEarlier, setHasMoreEarlier] = useState(false);
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [draft, setDraft] = useState<DraftResponse | null>(null);
   const [queue, setQueue] = useState<QueueListResponse | null>(null);
   const [activeRun, setActiveRun] = useState<RunResponse | null>(null);
@@ -168,6 +172,7 @@ export function AppShell() {
     conversationViewCacheRef.current.set(activeConversationId, {
       conversation: activeConversation,
       messages,
+      hasMoreEarlier,
       draft,
       queue,
       activeRun:
@@ -182,6 +187,7 @@ export function AppShell() {
     activeRun,
     draft,
     messages,
+    hasMoreEarlier,
     queue,
     queueOpen,
     streamedAssistantContent,
@@ -240,6 +246,7 @@ export function AppShell() {
     if (snapshot) {
       setActiveConversation(snapshot.conversation);
       setMessages(snapshot.messages);
+      setHasMoreEarlier(snapshot.hasMoreEarlier);
       setDraft(snapshot.draft);
       setQueue(snapshot.queue);
       queueRef.current = snapshot.queue;
@@ -254,6 +261,7 @@ export function AppShell() {
     } else {
       setActiveConversation(null);
       setMessages([]);
+      setHasMoreEarlier(false);
       setDraft(null);
       setQueue(null);
       queueRef.current = null;
@@ -290,8 +298,10 @@ export function AppShell() {
 
       if (messagesResult.status === "fulfilled") {
         setMessages(messagesResult.value.items);
+        setHasMoreEarlier(messagesResult.value.has_more);
       } else if (!useCachedView) {
         setMessages([]);
+        setHasMoreEarlier(false);
         reportLoadError(messagesResult.reason, "无法从 Hermes 加载消息");
       }
 
@@ -355,8 +365,10 @@ export function AppShell() {
 
     if (messagesResult.status === "fulfilled") {
       setMessages(messagesResult.value.items);
+      setHasMoreEarlier(messagesResult.value.has_more);
     } else if (!useCachedView) {
       setMessages([]);
+      setHasMoreEarlier(false);
       reportLoadError(messagesResult.reason, "无法从 Hermes 加载消息");
     }
 
@@ -409,6 +421,7 @@ export function AppShell() {
     (snapshot: ConversationViewSnapshot) => {
       setActiveConversation(snapshot.conversation);
       setMessages(snapshot.messages);
+      setHasMoreEarlier(snapshot.hasMoreEarlier);
       setDraft(snapshot.draft);
       setQueue(snapshot.queue);
       queueRef.current = snapshot.queue;
@@ -450,10 +463,10 @@ export function AppShell() {
         if (run.local_state === "reconciled") {
           const messageResponse = await apiClient.listMessages(conversationId, {
             limit: 100,
-            order: "oldest",
+            order: "latest",
           });
           if (activeConversationIdRef.current === conversationId) {
-            setMessages(messageResponse.items);
+            setMessages((prev) => mergeMessages(prev, messageResponse.items));
             if (streamedAssistantRunIdRef.current === run.id) {
               setStreamedAssistantContent("");
               streamedAssistantRunIdRef.current = null;
@@ -935,6 +948,26 @@ export function AppShell() {
       void refreshRuntime(activeConversationId, result.run.id);
   };
 
+  const handleLoadEarlier = useCallback(async () => {
+    if (!activeConversationId || loadingEarlier) return;
+    setLoadingEarlier(true);
+    try {
+      const response = await apiClient.listMessages(activeConversationId, {
+        limit: 100,
+        offset: messages.length,
+        order: "oldest",
+      });
+      if (activeConversationIdRef.current === activeConversationId) {
+        setMessages((prev) => mergeMessages(prev, response.items));
+        setHasMoreEarlier(response.has_more);
+      }
+    } catch (error) {
+      setWorkspaceError(getErrorMessage(error, "加载更早历史消息失败"));
+    } finally {
+      setLoadingEarlier(false);
+    }
+  }, [activeConversationId, loadingEarlier, messages.length]);
+
   const handleUpdatePreferences = async (patch: Partial<PreferencesState>) => {
     if (!preferences) throw new Error("偏好设置尚未加载");
     const next = await apiClient.putPreferences({
@@ -1064,6 +1097,9 @@ export function AppShell() {
             <MessageView
               messages={hasActiveConversationView ? messages : []}
               loading={!hasActiveConversationView || messagesLoading}
+              hasMoreEarlier={hasActiveConversationView && hasMoreEarlier}
+              loadingEarlier={loadingEarlier}
+              onLoadEarlier={handleLoadEarlier}
               pendingUserMessage={pendingUserMessage}
               isGenerating={isAssistantReplying}
               streamingContent={

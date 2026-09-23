@@ -155,6 +155,8 @@ export const HermesMessageListResponseSchema = z
         offset: z.number().int().nonnegative().optional(),
         order: z.enum(["oldest", "latest"]).optional(),
         returned: z.number().int().nonnegative().optional(),
+        total: z.number().int().nonnegative().optional(),
+        has_more: z.boolean().optional(),
       })
       .passthrough()
       .optional(),

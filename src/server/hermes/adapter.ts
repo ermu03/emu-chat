@@ -29,7 +29,7 @@ export interface HermesRunEvent {
 export interface NormalizedMessageList {
   session_id: string;
   messages: HermesMessageItem[];
-  total: number;
+  total?: number | undefined;
   limit: number;
   offset: number;
   order: "oldest" | "latest";
@@ -134,14 +134,29 @@ export class HermesAdapter {
     const value = parsed.data as HermesMessageListResponse;
     const messages = value.data;
     const pagination = value.pagination;
+    const limit = pagination?.limit ?? query.limit;
+    const offset = pagination?.offset ?? query.offset;
+    const order = pagination?.order ?? query.order;
+
+    let hasMore: boolean;
+    if (typeof pagination?.has_more === "boolean") {
+      hasMore = pagination.has_more;
+    } else if (typeof pagination?.total === "number") {
+      hasMore = offset + messages.length < pagination.total;
+    } else {
+      // When upstream does not report total or has_more, if returned messages count
+      // equals limit, there could be more pages; if less than limit, there are no more.
+      hasMore = messages.length >= limit;
+    }
+
     return {
       session_id: value.session_id,
       messages,
-      total: messages.length,
-      limit: pagination?.limit ?? query.limit,
-      offset: pagination?.offset ?? query.offset,
-      order: pagination?.order ?? query.order,
-      has_more: false,
+      total: pagination?.total,
+      limit,
+      offset,
+      order,
+      has_more: hasMore,
     };
   }
 
