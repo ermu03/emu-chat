@@ -312,6 +312,66 @@ export class QueueRepository {
     return this.findById(id)!;
   }
 
+  expireRecoveryPayloads(now: string, limit: number): number {
+    const result = this.db
+      .prepare(
+        `UPDATE queue_items
+         SET payload_text = NULL, payload_expired_at = recovery_expires_at,
+             revision = revision + 1, updated_at = ?
+         WHERE id IN (
+           SELECT q.id FROM queue_items AS q
+           WHERE q.state IN ('paused', 'review_required', 'rejected')
+             AND q.payload_text IS NOT NULL
+             AND q.recovery_expires_at IS NOT NULL
+             AND q.recovery_expires_at <= ?
+             AND NOT EXISTS (
+               SELECT 1 FROM runs AS r
+               WHERE r.queue_item_id = q.id
+                 AND r.local_state IN ('submitting', 'accepted', 'reconciling')
+             )
+           ORDER BY q.recovery_expires_at ASC, q.id ASC
+           LIMIT ?
+         )`,
+      )
+      .run(now, now, limit);
+    return result.changes;
+  }
+
+  deleteExpiredControlRecords(
+    terminalCutoff: string,
+    discardedCutoff: string,
+    limit: number,
+  ): number {
+    const result = this.db
+      .prepare(
+        `DELETE FROM queue_items
+         WHERE id IN (
+           SELECT q.id FROM queue_items AS q
+           WHERE q.state IN ('done', 'cancelled', 'paused', 'rejected')
+             AND q.updated_at <= ?
+             AND (
+               q.state IN ('done', 'cancelled')
+               OR (
+                 q.state IN ('paused', 'rejected')
+                 AND q.updated_at <= ?
+                 AND q.payload_text IS NULL
+                 AND (q.payload_expired_at IS NOT NULL
+                      OR q.payload_discarded_at IS NOT NULL)
+               )
+             )
+             AND NOT EXISTS (
+               SELECT 1 FROM runs AS r
+               WHERE r.queue_item_id = q.id
+                 AND r.local_state NOT IN ('reconciled', 'rejected')
+             )
+           ORDER BY q.updated_at ASC, q.id ASC
+           LIMIT ?
+         )`,
+      )
+      .run(terminalCutoff, discardedCutoff, limit);
+    return result.changes;
+  }
+
   delete(id: string): boolean {
     const res = this.db.prepare("DELETE FROM queue_items WHERE id = ?").run(id);
     return res.changes > 0;

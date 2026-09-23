@@ -42,7 +42,7 @@ JSON 接口返回 JSON；运行事件订阅返回 text/event-stream。服务端�
 | PATCH | /conversations/:conversationId/local-metadata | PatchLocalMetadataRequestSchema | 200 ConversationDetailResponseSchema |
 | POST | /conversations/:conversationId/delete | DeleteConversationRequestSchema | 200 DeleteConversationResponseSchema |
 
-会话列表的 limit、offset 默认分别为 50、0；消息列表的 limit、offset、order 默认分别为 100、0、oldest。发送消息需要 client_request_id 和 expected_draft_revision；202 响应返回入队结果和草稿状态，不直接返回一条已完成的助手消息。删除会话需传 expected_hermes_session_id 与 confirmed。
+会话列表的 limit、offset 默认分别为 50、0；消息列表的 limit、offset、order 默认分别为 100、0、oldest。发送消息需要 client_request_id 和 expected_draft_revision；202 响应返回入队结果和草稿状态，不直接返回一条已完成的助手消息。相同 client_request_id 在控制记录保留期间返回原结果；`done`、`cancelled` 记录在最后更新后保留 7 天，期满后再提交同一 ID 不保证重放。删除会话需传 expected_hermes_session_id 与 confirmed。
 
 ## 草稿
 
@@ -62,7 +62,7 @@ JSON 接口返回 JSON；运行事件订阅返回 text/event-stream。服务端�
 | POST | /queue-items/:queue_item_id/copy-to-draft | CopyToDraftRequestSchema | 200 CopyToDraftResponseSchema |
 | POST | /queue-items/:queue_item_id/discard-recovery | 可省略请求体或传空对象 | 200 QueueItemResponseSchema |
 
-include_terminal 只接受字符串 true 或 false，省略时按 false 处理。修改或取消队列项需要 expected_revision；复制恢复内容到草稿需要 expected_draft_revision，可选 overwrite_nonempty。
+include_terminal 只接受字符串 true 或 false，省略时按 false 处理。修改或取消队列项需要 expected_revision；复制恢复内容到草稿需要 expected_draft_revision，可选 overwrite_nonempty。失败项的恢复正文在 `recovery_expires_at` 到达时即停止返回和复制；后台随后清除正文并设置 `payload_expired_at`。
 
 ## 运行与事件
 

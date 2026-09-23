@@ -12,7 +12,7 @@ Status: implemented
 
 若以后出现显著磁盘占用，先区分主文件中的空闲页、WAL 文件和仍存活的控制记录，再选择维护方式。`NONE` 模式下空闲页可供后续写入复用，但文件不会因此缩小；`incremental_vacuum(N)` 只有在 `INCREMENTAL` 模式且存在空闲页时才有效。从已有表的 `NONE` 切换到 `INCREMENTAL` 需要 `VACUUM` 重建，不能只在连接时设置 PRAGMA。见 [SQLite PRAGMA 文档](https://www.sqlite.org/pragma.html#pragma_auto_vacuum)与 [VACUUM 文档](https://www.sqlite.org/lang_vacuum.html)。
 
-当前终态队列项和 Run 仍作为存活记录保留；恢复载荷也尚未按到期时间自动清理。这类保留数据不是空闲页，单靠 `VACUUM` 不能解决持续增长；后续处理见[数据保留提案](../../proposed/bug-fix/2026-09-23-expire-recovery-and-terminal-control.md)。
+后续已按[数据保留决定](../bug-fix/2026-09-23-expire-recovery-and-terminal-control.md)分批清理过期恢复载荷和终态控制记录。保留期限内的存活数据仍不是空闲页；清理后形成的空闲页可由 SQLite 复用，是否需要进一步回收文件空间仍按实际占用测量。
 
 ## Alternatives considered
 

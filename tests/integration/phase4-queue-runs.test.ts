@@ -258,6 +258,80 @@ describe("Phase 4: Queue and runs HTTP integration", () => {
     });
   });
 
+  it("expires recovery text before and after a server restart", async () => {
+    const conversationId = await createMappedConversation();
+    fakeHermes.failNextRun = true;
+    await putDraft(conversationId, "Recover this failed submission", 0);
+    const sent = await app!.inject({
+      method: "POST",
+      url: `/api/v1/conversations/${conversationId}/messages`,
+      payload: {
+        client_request_id: "00000000-0000-4000-8000-000000000407",
+        expected_draft_revision: 1,
+      },
+    });
+    expect(sent.statusCode).toBe(202);
+    const itemId = (sent.json() as { queue_item: QueueItemView }).queue_item.id;
+
+    await waitFor(async () => {
+      const response = await app!.inject({
+        method: "GET",
+        url: `/api/v1/conversations/${conversationId}/queue`,
+      });
+      const item = (response.json() as QueueView).data.find(
+        (entry) => entry.id === itemId,
+      );
+      return item?.state === "rejected" ? item : undefined;
+    });
+    const copyBeforeExpiry = await app!.inject({
+      method: "POST",
+      url: `/api/v1/queue-items/${itemId}/copy-to-draft`,
+      payload: { expected_draft_revision: 2 },
+    });
+    expect(copyBeforeExpiry.statusCode).toBe(200);
+    expect(copyBeforeExpiry.json()).toMatchObject({
+      draft: { content: "Recover this failed submission", revision: 3 },
+    });
+
+    const expiredAt = new Date(Date.now() - 60_000).toISOString();
+    db!
+      .prepare("UPDATE queue_items SET recovery_expires_at = ? WHERE id = ?")
+      .run(expiredAt, itemId);
+    const queueAfterExpiry = await app!.inject({
+      method: "GET",
+      url: `/api/v1/conversations/${conversationId}/queue`,
+    });
+    expect(queueAfterExpiry.json()).toMatchObject({
+      data: [{ id: itemId, content: null, payload_available: false }],
+    });
+    const copyAfterExpiry = await app!.inject({
+      method: "POST",
+      url: `/api/v1/queue-items/${itemId}/copy-to-draft`,
+      payload: { expected_draft_revision: 3, overwrite_nonempty: true },
+    });
+    expect(copyAfterExpiry.statusCode).toBe(409);
+    expect(copyAfterExpiry.json()).toMatchObject({
+      error: { message: "Queue item recovery payload is unavailable" },
+    });
+
+    await app!.close();
+    app = null;
+    app = buildServer(config, { db: db! });
+    await app.ready();
+    const row = db!
+      .prepare(
+        "SELECT payload_text, payload_expired_at FROM queue_items WHERE id = ?",
+      )
+      .get(itemId) as {
+      payload_text: string | null;
+      payload_expired_at: string | null;
+    };
+    expect(row).toEqual({
+      payload_text: null,
+      payload_expired_at: expiredAt,
+    });
+  });
+
   it("dispatches a draft through Hermes and reconciles the local run to done", async () => {
     const conversationId = await createMappedConversation();
     const sourceConversation = await app!.inject({

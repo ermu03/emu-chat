@@ -99,6 +99,10 @@ CREATE INDEX ix_queue_recovery_expiry
   ON queue_items (recovery_expires_at)
   WHERE payload_text IS NOT NULL AND recovery_expires_at IS NOT NULL;
 
+CREATE INDEX ix_queue_control_retention
+  ON queue_items (updated_at)
+  WHERE state IN ('done', 'cancelled', 'paused', 'rejected');
+
 CREATE TABLE runs (
   id TEXT NOT NULL PRIMARY KEY CHECK (substr(id, 1, 3) = 'lr_'),
   queue_item_id TEXT NOT NULL UNIQUE,

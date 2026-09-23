@@ -28,6 +28,7 @@ import { StatusService } from "./services/status-service.js";
 import { ConversationService } from "./services/conversation-service.js";
 import { DraftPreferencesService } from "./services/draft-preferences-service.js";
 import { QueueRunService } from "./services/queue-run-service.js";
+import { DataRetentionService } from "./services/data-retention-service.js";
 import { AdmissionCoordinator } from "./coordinator/admission-coordinator.js";
 import { SSEHub } from "./sse/sse-hub.js";
 import { statusRoutes } from "./http/routes/status.js";
@@ -170,6 +171,7 @@ export function buildServer(
   const draftRepo = new DraftRepository(db);
   const queueRepo = new QueueRepository(db);
   const runRepo = new RunRepository(db);
+  const dataRetention = new DataRetentionService(db, queueRepo);
 
   const hermesClient =
     dependencies.hermesClient ??
@@ -218,6 +220,7 @@ export function buildServer(
     hermesAdapter,
     sseHub,
   );
+  dataRetention.start();
   coordinator.start();
 
   const queueRunService =
@@ -251,11 +254,13 @@ export function buildServer(
   // End long-lived streams before Fastify waits for the HTTP server to drain.
   server.addHook("preClose", async () => {
     stopCoordinator();
+    dataRetention.stop();
     closeSseHub();
   });
 
   server.addHook("onClose", async () => {
     stopCoordinator();
+    dataRetention.stop();
     closeSseHub();
     if (ownsDatabase && db.open) db.close();
   });

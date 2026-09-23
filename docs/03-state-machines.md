@@ -117,6 +117,7 @@ stateDiagram-v2
 请求携带大量的历史上下文文本。为了保护 SQLite 的性能并节省存储空间：
 - **必须存在阶段**：`queued`, `dispatching`, `accepted`, `reconciling`。只要请求还在活跃生命周期，或可能需要重试，就必须保留完整 payload 以供发起请求。
 - **必须清空阶段**：`done`, `cancelled`。一旦处于最终静止态，不再有可能被分发，后台业务强制清空此字段（设为 NULL）。
+- **失败后恢复阶段**：`paused`, `review_required`, `rejected` 最多保留正文至 `recovery_expires_at`；期限一到，API 立即停止提供正文，后台分批将其清空。
 - 这种生命周期由数据库层面的 `CHECK` 约束（详情见 02 数据模型设计）强力保证。
 
 ## 9. 状态转换与数据库 CHECK 约束

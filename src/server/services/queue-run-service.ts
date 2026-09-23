@@ -401,6 +401,7 @@ export class QueueRunService {
           current_state: current.state,
         });
       }
+      if (current.payload_text === null) return current;
       const now = new Date().toISOString();
       const result = this.db
         .prepare(
@@ -652,10 +653,15 @@ export class QueueRunService {
   }
 
   private payloadAvailable(item: QueueItemEntity): boolean {
+    const recoverable = ["paused", "review_required", "rejected"].includes(
+      item.state,
+    );
     return (
       item.payload_text !== null &&
-      (item.payload_expired_at === null ||
-        Date.parse(item.payload_expired_at) > Date.now()) &&
+      item.payload_expired_at === null &&
+      (!recoverable ||
+        (item.recovery_expires_at !== null &&
+          Date.parse(item.recovery_expires_at) > Date.now())) &&
       item.payload_discarded_at === null
     );
   }

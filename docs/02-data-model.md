@@ -163,13 +163,14 @@ erDiagram
 - **client_request_id**: (TEXT) 客户端生成的请求 ID，唯一约束防重。
 - **fifo_seq**: (INTEGER) 先进先出序列号，控制同一会话内队列项的处理顺序。
 - **state**: (TEXT) 队列项的当前状态（如 `queued`, `dispatching` 等，详见状态机文档）。
-- **payload_text**: (TEXT) 完整的请求载荷内容。处理完成或取消后会被清空（置 NULL），释放数据库内可复用空间，但不保证数据库文件立即缩小。
+- **payload_text**: (TEXT) 完整的请求载荷内容。处理完成、取消或恢复期满后会被清空（置 NULL），释放数据库内可复用空间，但不保证数据库文件立即缩小。
 - **payload_sha256**, **payload_bytes**: 用于验证载荷完整性和限制大小。
 - **revision**: (INTEGER) 队列项的乐观锁版本。
 - **idempotency_key**: (TEXT) 幂等键，通常带有前缀 `ec_`。
 - **dispatch_session_id**: (TEXT) 分发给运行器处理时的当前派发会话标识。
 - **attempt_count**: (INTEGER) 失败重试次数，限制在 0-4 次。
-- **first_attempt_at**, **admission_deadline_at**, **recovery_expires_at**, **payload_expired_at**, **payload_discarded_at**: 用于控制重试、过期、恢复与载荷垃圾回收的时间戳。
+- **first_attempt_at**, **admission_deadline_at**: 用于控制准入与重试的时间戳。
+- **recovery_expires_at**: 失败项恢复正文的 7 天截止时间；**payload_expired_at** 记录到期清理时的原截止时间，**payload_discarded_at** 记录用户主动丢弃正文的时间。
 - **last_error_code**: (TEXT) 最后一次失败原因。
 
 ### 4.5 `runs`
@@ -253,6 +254,9 @@ erDiagram
 4. **`ix_queue_recovery_expiry`**:
    - `CREATE INDEX ... ON queue_items (recovery_expires_at) WHERE payload_text IS NOT NULL ...`
    - **作用**：支持后台清理进程快速找出已过期但载荷尚未清理的僵尸项进行释放。
+5. **`ix_queue_control_retention`**:
+   - `CREATE INDEX ... ON queue_items (updated_at) WHERE state IN ('done', 'cancelled', 'paused', 'rejected')`
+   - **作用**：支持按保留期限分批删除已终结且不再需要恢复正文的本地控制记录。
 
 ## 7. ID 前缀规范
 

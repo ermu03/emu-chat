@@ -48,7 +48,7 @@ stateDiagram-v2
   7. 唤醒协调器（AdmissionCoordinator）。
 - **stopRun / submitApproval 流程**: 提供终止当前运行或提交人工审批的能力。
 - **故障载荷恢复**: 
-  - `copyToDraft`: 检查 TTL、设置 `overwrite_nonempty` 参数将队列中失败或中断的任务内容写回草稿箱。
+  - `copyToDraft`: 按 `recovery_expires_at` 检查 7 天期限，设置 `overwrite_nonempty` 参数将队列中失败或中断的任务内容写回草稿箱。
   - `discardRecovery`: 丢弃不再需要的恢复载荷。
 
 ```mermaid
@@ -66,6 +66,9 @@ sequenceDiagram
     DB-->>QRS: 提交事务
     QRS->>Coord: 唤醒协调器
 ```
+
+### DataRetentionService
+负责本地数据的到期清理。服务启动时执行一次，之后每分钟执行一次；每次在即时事务中最多清理 100 条到期恢复正文和 100 条过期控制记录。恢复正文清空时写入 `payload_expired_at`；`done`、`cancelled` 控制记录保留 7 天，已过期或主动丢弃正文的 `paused`、`rejected` 记录从最后更新时间起保留 30 天。删除队列项时，关联的终态 Run 由外键级联删除；仍有活跃或待人工处理 Run 的记录不会删除。
 
 ### StatusService
 - **TTL缓存**: 数据默认在本地缓存 5 秒。
