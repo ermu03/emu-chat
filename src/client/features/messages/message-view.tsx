@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from "react";
+import React, { memo, useEffect, useMemo, useRef } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import rehypeKatex from "rehype-katex";
@@ -51,7 +51,7 @@ export const MessageView: React.FC<MessageViewProps> = ({
   onStopGenerating,
   onReconcile,
 }) => {
-  const turns = groupMessagesIntoTurns(messages);
+  const turns = useMemo(() => groupMessagesIntoTurns(messages), [messages]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
   const previousScrollHeightRef = useRef<number | null>(null);
@@ -159,7 +159,11 @@ export const MessageView: React.FC<MessageViewProps> = ({
   );
 };
 
-function UserTurnRow({ message }: { message: MessageItem }) {
+const UserTurnRow = memo(function UserTurnRow({
+  message,
+}: {
+  message: MessageItem;
+}) {
   return (
     <article className="message-row user">
       <div className="message-avatar" aria-hidden="true">
@@ -178,9 +182,13 @@ function UserTurnRow({ message }: { message: MessageItem }) {
       </div>
     </article>
   );
-}
+});
 
-function SystemTurnRow({ message }: { message: MessageItem }) {
+const SystemTurnRow = memo(function SystemTurnRow({
+  message,
+}: {
+  message: MessageItem;
+}) {
   return (
     <article className="message-row system">
       <div className="message-avatar" aria-hidden="true">
@@ -199,9 +207,13 @@ function SystemTurnRow({ message }: { message: MessageItem }) {
       </div>
     </article>
   );
-}
+});
 
-function AssistantTurnRow({ turn }: { turn: AssistantTurn }) {
+const AssistantTurnRow = memo(function AssistantTurnRow({
+  turn,
+}: {
+  turn: AssistantTurn;
+}) {
   const hasTools = turn.tools.length > 0;
   const hasReasonings = turn.reasonings.length > 0;
   const anyToolFailed = turn.tools.some((t) => t.isError);
@@ -321,9 +333,13 @@ function AssistantTurnRow({ turn }: { turn: AssistantTurn }) {
       </div>
     </article>
   );
-}
+});
 
-function ToolStepItem({ tool }: { tool: ToolCallItem }) {
+const ToolStepItem = memo(function ToolStepItem({
+  tool,
+}: {
+  tool: ToolCallItem;
+}) {
   const isCompleted = tool.resultContent !== undefined;
   const statusLabel = tool.isError ? "失败" : isCompleted ? "已完成" : "已调用";
 
@@ -361,9 +377,13 @@ function ToolStepItem({ tool }: { tool: ToolCallItem }) {
       </div>
     </details>
   );
-}
+});
 
-function PendingUserRow({ message }: { message: PendingUserMessage }) {
+const PendingUserRow = memo(function PendingUserRow({
+  message,
+}: {
+  message: PendingUserMessage;
+}) {
   return (
     <article
       className="message-row user message-pending"
@@ -380,7 +400,7 @@ function PendingUserRow({ message }: { message: PendingUserMessage }) {
       </div>
     </article>
   );
-}
+});
 
 function LiveAssistantRow({
   content,
@@ -441,7 +461,11 @@ function LiveAssistantRow({
   );
 }
 
-function MarkdownContent({ text }: { text: string }) {
+const MarkdownContent = memo(function MarkdownContent({
+  text,
+}: {
+  text: string;
+}) {
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm, remarkMath]}
@@ -466,7 +490,7 @@ function MarkdownContent({ text }: { text: string }) {
       {text}
     </ReactMarkdown>
   );
-}
+});
 
 function formatTimestamp(timestamp: number): string {
   const milliseconds =

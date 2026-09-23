@@ -77,6 +77,28 @@ type ConversationViewSnapshot = {
   streamedRunId: string | null;
 };
 
+type RetainedConversationView = {
+  conversationId: string;
+  title: string | null;
+  messages: MessageItem[];
+  queue: QueueListResponse | null;
+  activeRun: RunResponse | null;
+  streamedContent: string;
+};
+
+function retainConversationView(
+  snapshot: ConversationViewSnapshot,
+): RetainedConversationView {
+  return {
+    conversationId: snapshot.conversation.conversation_id,
+    title: snapshot.conversation.title,
+    messages: snapshot.messages,
+    queue: snapshot.queue,
+    activeRun: snapshot.activeRun,
+    streamedContent: snapshot.streamedContent,
+  };
+}
+
 export function AppShell() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -92,7 +114,9 @@ export function AppShell() {
   const [activeConversation, setActiveConversation] =
     useState<ConversationDetailResponse | null>(null);
   const [messages, setMessages] = useState<MessageItem[]>([]);
-  const [messagesLoading, setMessagesLoading] = useState(false);
+  const [messagesConversationId, setMessagesConversationId] = useState<
+    string | null
+  >(null);
   const [hasMoreEarlier, setHasMoreEarlier] = useState(false);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [draft, setDraft] = useState<DraftResponse | null>(null);
@@ -107,6 +131,10 @@ export function AppShell() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [streamNotice, setStreamNotice] = useState<string | null>(null);
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
+  const [conversationLoadError, setConversationLoadError] = useState<{
+    conversationId: string;
+    message: string;
+  } | null>(null);
   const [pendingSubmissions, setPendingSubmissions] = useState<
     PendingSubmission[]
   >([]);
@@ -124,6 +152,7 @@ export function AppShell() {
   const conversationViewCacheRef = useRef(
     new ConversationViewCache<ConversationViewSnapshot>(),
   );
+  const currentViewSnapshotRef = useRef<RetainedConversationView | null>(null);
   const [streamedAssistantContent, setStreamedAssistantContent] = useState("");
 
   routeConversationIdRef.current = routeConversationId;
@@ -160,33 +189,58 @@ export function AppShell() {
   useEffect(() => {
     if (
       !activeConversationId ||
-      !activeConversation ||
-      activeConversation.conversation_id !== activeConversationId ||
-      !draft ||
-      draft.conversation_id !== activeConversationId ||
-      !queue ||
-      queue.conversation_id !== activeConversationId
+      messagesConversationId !== activeConversationId
     ) {
       return;
     }
-    conversationViewCacheRef.current.set(activeConversationId, {
-      conversation: activeConversation,
+    const currentConversation =
+      activeConversation?.conversation_id === activeConversationId
+        ? activeConversation
+        : null;
+    const activeSummary = conversations.find(
+      (conversation) => conversation.conversation_id === activeConversationId,
+    );
+    const currentQueue =
+      queue?.conversation_id === activeConversationId ? queue : null;
+    const currentRun =
+      activeRun?.conversation_id === activeConversationId ? activeRun : null;
+    currentViewSnapshotRef.current = {
+      conversationId: activeConversationId,
+      title: currentConversation?.title ?? activeSummary?.title ?? null,
+      messages,
+      queue: currentQueue,
+      activeRun: currentRun,
+      streamedContent: streamedAssistantContent,
+    };
+
+    if (
+      !currentConversation ||
+      !draft ||
+      draft.conversation_id !== activeConversationId ||
+      !currentQueue
+    ) {
+      return;
+    }
+    const snapshot = {
+      conversation: currentConversation,
       messages,
       hasMoreEarlier,
       draft,
-      queue,
-      activeRun:
-        activeRun?.conversation_id === activeConversationId ? activeRun : null,
+      queue: currentQueue,
+      activeRun: currentRun,
       queueOpen,
       streamedContent: streamedAssistantContent,
       streamedRunId: streamedAssistantRunIdRef.current,
-    });
+    };
+    conversationViewCacheRef.current.set(activeConversationId, snapshot);
   }, [
     activeConversationId,
     activeConversation,
     activeRun,
+    conversations,
     draft,
     messages,
+    messagesConversationId,
     hasMoreEarlier,
     queue,
     queueOpen,
@@ -240,12 +294,14 @@ export function AppShell() {
     const loadId = ++activeLoadRef.current;
     const snapshot = conversationViewCacheRef.current.get(conversationId);
     const useCachedView = snapshot !== undefined;
-    setMessagesLoading(!useCachedView);
+    setConversationLoadError(null);
     setWorkspaceError(null);
 
     if (snapshot) {
+      currentViewSnapshotRef.current = retainConversationView(snapshot);
       setActiveConversation(snapshot.conversation);
       setMessages(snapshot.messages);
+      setMessagesConversationId(conversationId);
       setHasMoreEarlier(snapshot.hasMoreEarlier);
       setDraft(snapshot.draft);
       setQueue(snapshot.queue);
@@ -261,6 +317,7 @@ export function AppShell() {
     } else {
       setActiveConversation(null);
       setMessages([]);
+      setMessagesConversationId(null);
       setHasMoreEarlier(false);
       setDraft(null);
       setQueue(null);
@@ -272,45 +329,58 @@ export function AppShell() {
     }
 
     const reportLoadError = (error: unknown, fallback: string) => {
-      if (!useCachedView) {
-        setWorkspaceError(getErrorMessage(error, fallback));
+      if (!useCachedView && loadId === activeLoadRef.current) {
+        const message = getErrorMessage(error, fallback);
+        setWorkspaceError(message);
+        setConversationLoadError({ conversationId, message });
       }
     };
 
     const loadConversationContent = async () => {
-      const [conversationResult, messagesResult, draftResult] =
-        await Promise.allSettled([
-          apiClient.getConversation(conversationId),
-          apiClient.listMessages(conversationId, {
+      const loadConversation = async () => {
+        try {
+          const conversation = await apiClient.getConversation(conversationId);
+          if (loadId !== activeLoadRef.current) return;
+          setActiveConversation(conversation);
+        } catch (error) {
+          if (loadId !== activeLoadRef.current) return;
+          if (!useCachedView) setActiveConversation(null);
+          reportLoadError(error, "无法加载会话详情");
+        }
+      };
+
+      const loadMessages = async () => {
+        try {
+          const response = await apiClient.listMessages(conversationId, {
             limit: 100,
             order: "oldest",
-          }),
-          apiClient.getDraft(conversationId),
-        ]);
+          });
+          if (loadId !== activeLoadRef.current) return;
+          setMessages(response.items);
+          setMessagesConversationId(conversationId);
+          setHasMoreEarlier(response.has_more);
+        } catch (error) {
+          if (loadId !== activeLoadRef.current || useCachedView) return;
+          setMessages([]);
+          setMessagesConversationId(null);
+          setHasMoreEarlier(false);
+          reportLoadError(error, "无法从 Hermes 加载消息");
+        }
+      };
 
-      if (loadId !== activeLoadRef.current) return;
+      const loadDraft = async () => {
+        try {
+          const nextDraft = await apiClient.getDraft(conversationId);
+          if (loadId !== activeLoadRef.current) return;
+          setDraft(nextDraft);
+        } catch (error) {
+          if (loadId !== activeLoadRef.current || useCachedView) return;
+          setDraft(null);
+          reportLoadError(error, "无法加载草稿");
+        }
+      };
 
-      if (conversationResult.status === "fulfilled") {
-        setActiveConversation(conversationResult.value);
-      } else {
-        reportLoadError(conversationResult.reason, "无法加载会话详情");
-      }
-
-      if (messagesResult.status === "fulfilled") {
-        setMessages(messagesResult.value.items);
-        setHasMoreEarlier(messagesResult.value.has_more);
-      } else if (!useCachedView) {
-        setMessages([]);
-        setHasMoreEarlier(false);
-        reportLoadError(messagesResult.reason, "无法从 Hermes 加载消息");
-      }
-
-      if (draftResult.status === "fulfilled") {
-        setDraft(draftResult.value);
-      } else if (!useCachedView) {
-        setDraft(null);
-        reportLoadError(draftResult.reason, "无法加载草稿");
-      }
+      await Promise.all([loadConversation(), loadMessages(), loadDraft()]);
     };
 
     if (snapshot && isAgentGenerating(snapshot.activeRun, snapshot.queue)) {
@@ -340,49 +410,30 @@ export function AppShell() {
         }
       } catch (error) {
         reportLoadError(error, "无法刷新运行状态");
-      } finally {
-        if (loadId === activeLoadRef.current) setMessagesLoading(false);
       }
       return;
     }
 
-    const [conversationResult, messagesResult, draftResult, queueResult] =
-      await Promise.allSettled([
-        apiClient.getConversation(conversationId),
-        apiClient.listMessages(conversationId, { limit: 100, order: "oldest" }),
-        apiClient.getDraft(conversationId),
-        apiClient.getQueue(conversationId),
-      ]);
+    const loadQueue = async () => {
+      let nextQueue: QueueListResponse;
+      try {
+        nextQueue = await apiClient.getQueue(conversationId);
+      } catch (error) {
+        if (loadId !== activeLoadRef.current) return;
+        if (!useCachedView) {
+          setQueue(null);
+          queueRef.current = null;
+          setActiveRun(null);
+          setQueueOpen(false);
+        }
+        reportLoadError(error, "无法加载消息队列");
+        return;
+      }
+      if (loadId !== activeLoadRef.current) return;
 
-    if (loadId !== activeLoadRef.current) return;
-
-    if (conversationResult.status === "fulfilled") {
-      setActiveConversation(conversationResult.value);
-    } else if (!useCachedView) {
-      setActiveConversation(null);
-      reportLoadError(conversationResult.reason, "无法加载会话详情");
-    }
-
-    if (messagesResult.status === "fulfilled") {
-      setMessages(messagesResult.value.items);
-      setHasMoreEarlier(messagesResult.value.has_more);
-    } else if (!useCachedView) {
-      setMessages([]);
-      setHasMoreEarlier(false);
-      reportLoadError(messagesResult.reason, "无法从 Hermes 加载消息");
-    }
-
-    if (draftResult.status === "fulfilled") {
-      setDraft(draftResult.value);
-    } else if (!useCachedView) {
-      setDraft(null);
-      reportLoadError(draftResult.reason, "无法加载草稿");
-    }
-
-    if (queueResult.status === "fulfilled") {
-      setQueue(queueResult.value);
-      queueRef.current = queueResult.value;
-      const runId = getCurrentRunId(queueResult.value);
+      setQueue(nextQueue);
+      queueRef.current = nextQueue;
+      const runId = getCurrentRunId(nextQueue);
       if (runId) {
         try {
           const run = await apiClient.getRun(runId);
@@ -406,21 +457,17 @@ export function AppShell() {
         streamedAssistantRunIdRef.current = null;
         setStreamedAssistantContent("");
       }
-    } else if (!useCachedView) {
-      setQueue(null);
-      queueRef.current = null;
-      setActiveRun(null);
-      setQueueOpen(false);
-      reportLoadError(queueResult.reason, "无法加载消息队列");
-    }
+    };
 
-    if (loadId === activeLoadRef.current) setMessagesLoading(false);
+    await Promise.all([loadConversationContent(), loadQueue()]);
   }, []);
 
   const restoreConversationView = useCallback(
     (snapshot: ConversationViewSnapshot) => {
+      currentViewSnapshotRef.current = retainConversationView(snapshot);
       setActiveConversation(snapshot.conversation);
       setMessages(snapshot.messages);
+      setMessagesConversationId(snapshot.conversation.conversation_id);
       setHasMoreEarlier(snapshot.hasMoreEarlier);
       setDraft(snapshot.draft);
       setQueue(snapshot.queue);
@@ -560,8 +607,16 @@ export function AppShell() {
     onEvent: handleRunStreamEvent,
   });
 
+  const hasTargetMessages =
+    activeConversationId !== null &&
+    messagesConversationId === activeConversationId;
+  const transitionSnapshot =
+    activeConversationId && !hasTargetMessages
+      ? currentViewSnapshotRef.current
+      : null;
   const hasActiveConversationView =
-    activeConversation?.conversation_id === activeConversationId;
+    activeConversation?.conversation_id === activeConversationId &&
+    hasTargetMessages;
   const activeConversationSummary = useMemo(
     () =>
       conversations.find(
@@ -569,9 +624,15 @@ export function AppShell() {
       ) ?? null,
     [activeConversationId, conversations],
   );
-  const activeConversationTitle = hasActiveConversationView
-    ? activeConversation.title || "未命名会话"
-    : activeConversationSummary?.title || "未命名会话";
+  const activeConversationTitle = transitionSnapshot
+    ? transitionSnapshot.title || "未命名会话"
+    : activeConversation?.conversation_id === activeConversationId
+      ? activeConversation.title || "未命名会话"
+      : activeConversationSummary?.title || "未命名会话";
+  const currentConversationLoadError =
+    conversationLoadError?.conversationId === activeConversationId
+      ? conversationLoadError.message
+      : null;
   const visibleQueue = hasActiveConversationView ? queue : null;
   const visibleRun = hasActiveConversationView ? activeRun : null;
   const activeQueueItem = useMemo(
@@ -613,6 +674,48 @@ export function AppShell() {
         }
       : null;
   }, [activePendingSubmissions, activeQueueItem, messages]);
+  const transitionPendingUserMessage =
+    useMemo<PendingUserMessage | null>(() => {
+      if (!transitionSnapshot) return null;
+
+      const queueItem = getPrimaryQueueItem(
+        transitionSnapshot.queue,
+        transitionSnapshot.activeRun,
+      );
+      if (
+        queueItem?.content &&
+        !hasPersistedQueueMessage(transitionSnapshot.messages, queueItem)
+      ) {
+        return { id: `queue:${queueItem.id}`, content: queueItem.content };
+      }
+
+      const submission = pendingSubmissions.find(
+        (entry) =>
+          entry.conversationId === transitionSnapshot.conversationId &&
+          !entry.isFollowUp,
+      );
+      return submission
+        ? {
+            id: `submission:${submission.requestId}`,
+            content: submission.content,
+          }
+        : null;
+    }, [pendingSubmissions, transitionSnapshot]);
+  const transitionIsAssistantReplying = useMemo(() => {
+    if (!transitionSnapshot) return false;
+    const hasPendingPrimarySubmission = pendingSubmissions.some(
+      (entry) =>
+        entry.conversationId === transitionSnapshot.conversationId &&
+        !entry.isFollowUp,
+    );
+    const run = transitionSnapshot.activeRun;
+    return (
+      (isAgentGenerating(run, transitionSnapshot.queue) ||
+        hasPendingPrimarySubmission) &&
+      run?.upstream_status !== "waiting_for_approval" &&
+      run?.upstream_status !== "stopping"
+    );
+  }, [pendingSubmissions, transitionSnapshot]);
   const pendingQueueItems = useMemo<PendingQueueItem[]>(
     () =>
       activePendingSubmissions
@@ -655,6 +758,10 @@ export function AppShell() {
     activeLoadRef.current += 1;
     setActiveConversation(null);
     setMessages([]);
+    setMessagesConversationId(null);
+    setConversationLoadError(null);
+    setWorkspaceError(null);
+    currentViewSnapshotRef.current = null;
     setDraft(null);
     setQueue(null);
     queueRef.current = null;
@@ -710,6 +817,7 @@ export function AppShell() {
 
   const selectConversation = (conversationId: string) => {
     const snapshot = conversationViewCacheRef.current.get(conversationId);
+    setConversationLoadError(null);
     if (snapshot) {
       restoreConversationView(snapshot);
     }
@@ -1086,6 +1194,33 @@ export function AppShell() {
               onRecheck={() => void loadStatus(true)}
             />
 
+            {activeConversationId && !hasTargetMessages && (
+              <div
+                className="workspace-alert"
+                role={currentConversationLoadError ? "alert" : "status"}
+              >
+                <span>
+                  {currentConversationLoadError
+                    ? transitionSnapshot
+                      ? `无法加载「${activeConversationSummary?.title || "目标会话"}」，仍显示「${transitionSnapshot.title || "未命名会话"}」。`
+                      : `无法加载「${activeConversationSummary?.title || "目标会话"}」，请重试。`
+                    : transitionSnapshot
+                      ? `正在加载「${activeConversationSummary?.title || "目标会话"}」，当前暂显「${transitionSnapshot.title || "未命名会话"}」。`
+                      : `正在加载「${activeConversationSummary?.title || "目标会话"}」。`}
+                </span>
+                {currentConversationLoadError && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void loadActiveConversation(activeConversationId)
+                    }
+                  >
+                    重试
+                  </button>
+                )}
+              </div>
+            )}
+
             {(streamNotice || stream.isReconnecting) && (
               <div className="workspace-alert" role="status">
                 <span>
@@ -1095,15 +1230,34 @@ export function AppShell() {
             )}
 
             <MessageView
-              messages={hasActiveConversationView ? messages : []}
-              loading={!hasActiveConversationView || messagesLoading}
+              key={
+                hasTargetMessages
+                  ? activeConversationId
+                  : (transitionSnapshot?.conversationId ?? activeConversationId)
+              }
+              messages={
+                hasTargetMessages
+                  ? messages
+                  : (transitionSnapshot?.messages ?? [])
+              }
+              loading={!hasTargetMessages && !transitionSnapshot}
               hasMoreEarlier={hasActiveConversationView && hasMoreEarlier}
-              loadingEarlier={loadingEarlier}
+              loadingEarlier={hasActiveConversationView && loadingEarlier}
               onLoadEarlier={handleLoadEarlier}
-              pendingUserMessage={pendingUserMessage}
-              isGenerating={isAssistantReplying}
+              pendingUserMessage={
+                hasTargetMessages
+                  ? pendingUserMessage
+                  : transitionPendingUserMessage
+              }
+              isGenerating={
+                hasTargetMessages
+                  ? isAssistantReplying
+                  : transitionIsAssistantReplying
+              }
               streamingContent={
-                hasActiveConversationView ? streamedAssistantContent : ""
+                hasTargetMessages
+                  ? streamedAssistantContent
+                  : (transitionSnapshot?.streamedContent ?? "")
               }
               onStopGenerating={
                 showStop ? () => void handleStopRun() : undefined

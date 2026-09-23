@@ -16,6 +16,7 @@
 - `activeConversationId`: 当前选中的会话 ID。
 - `activeConversation`: 当前会话的详细元数据。
 - `messages`: 当前会话的已对账消息列表。
+- `messagesConversationId`: 这份消息列表所属的会话 ID；加载完成前不会把旧会话数据当作目标会话。
 - `draft`: 当前会话的草稿内容。
 - `queue`: 消息发送队列。
 - `activeRun`: 当前正在执行的后台 Run 状态。
@@ -25,8 +26,11 @@
 ### 防护 Refs (并发与缓存防护)
 - `activeLoadRef`: 并发请求计数器，防止网络竞态和乱序导致的数据覆盖。
 - `conversationViewCacheRef`: LRU 缓存实例，容量为 12，用于实现会话的秒开切换。
+- `currentViewSnapshotRef`: 保留当前展示快照；目标会话未加载出消息时，继续展示原会话并禁用会话级操作。
 - `streamedAssistantCacheRef`: 增量流文本合并缓存。
 - `pendingSendRef`: 防止重复点击或网络延迟引发的多次发送。
+
+冷缓存切换会在顶部标明目标会话，同时暂时显示当前会话。目标消息请求独立完成后立即切换消息视图，不等待会话详情、草稿或队列请求；其他操作仍会等各自所需数据就绪。消息加载失败时保留当前视图并提供重试。首次打开且没有可保留的会话时显示加载状态。缓存命中仍会立即恢复快照，并继续向服务端刷新状态。
 
 ## 3. API 客户端 (EmuChatApiClient)
 
@@ -51,6 +55,7 @@
 
 ### MessageView (消息展示)
 - **智能吸底滚动**: 当用户滚动位置接近底部（`scrollHeight - scrollTop - clientHeight < 80`）时，新消息到达或文本流式增长会自动触发滚动吸底。
+- **稳定历史消息渲染**: 仅当 `messages` 引用变化时重新执行回合分组；用户、系统、助手、工具和 Markdown 行使用 `React.memo`。仅流式内容变化时，已加载的历史 Markdown 不会重新解析。
 - **Markdown 渲染管道**: 采用 `remarkGfm` + `remarkMath` + `rehypeHighlight` + `rehypeKatex` 的标准渲染链。
 - **自定义代码块**: 提供具有语言标签“药丸”样式的自定义代码块，以及思考过程的折叠卡片 (`<details>`) 显示。
 - **工具调用与结果**: 通过 `getToolResultContent` 解析工具响应结果。

@@ -81,13 +81,21 @@ sequenceDiagram
         AppShell->>AppShell: 瞬间渲染 (秒开)
     else 缓存未命中
         Cache-->>AppShell: 空
-        AppShell->>AppShell: 显示骨架屏 / Loading
+        AppShell->>AppShell: 保留会话 A 快照，标题仍显示 A
+        AppShell->>AppShell: 标明正在加载 B，并禁用会话级操作
     end
 
     AppShell->>API: activeLoadRef 开启保护，并发拉取会话详情、消息、草稿、队列
-    API-->>AppShell: 返回最新真实数据
-    AppShell->>AppShell: activeLoadRef 校验版本，替换视图数据
+    API-->>AppShell: 消息请求先完成
+    AppShell->>AppShell: 校验请求代数；立即切换消息视图到 B
+    API-->>AppShell: 详情、草稿和队列分别返回
+    AppShell->>AppShell: 各自数据就绪后开放对应会话操作
+    alt 目标消息加载失败
+        AppShell->>AppShell: 保留当前快照并显示重试入口
+    end
 ```
+
+首次打开且没有可保留的旧视图时，消息区显示加载状态。缓存命中时先恢复快照，再后台刷新目标会话。
 
 ## 4. 草稿同步流程
 
