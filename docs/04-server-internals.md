@@ -79,9 +79,9 @@ sequenceDiagram
 - **实例标识**: `ownerId` 基于 `inst_<pid>_<random>` 生成，区分不同节点。
 - **启动与崩溃恢复**: 异常后标记 `events_truncated` 并广播 `process_restarted` gap，防止客户端遗漏状态。
 - **tick() 2秒轮询循环**:
-  执行 `heartbeatLeases`，检查活跃项，调用 `recoverRun` 或 `findNextGlobalQueued` 寻找可用任务进行 `dispatch`。
+  执行 `heartbeatLeases`，检查活跃项，调用 `recoverRun` 或 `findNextGlobalQueued` 寻找可用任务进行 `dispatch`。候选查询跳过已暂停或删除状态不为 `none` 的会话，在其余会话中按入队时间取最早项；跳过的任务保留在队列中，恢复会话后重新参与调度。
 - **dispatch 双重租约算法**:
-  先后获取**全局租约**与**会话租约**，进行二次校验。成功后状态更新为 `dispatching`，插入 Run 数据并启动 `submit`。
+  先后获取**全局租约**与**会话租约**，复核任务仍排队、会话未暂停且删除状态为 `none`。成功后状态更新为 `dispatching`，插入 Run 数据并启动 `submit`。
 - **submit 提交流程**:
   尝试执行 `startRun`，成功则标记为 `accepted` 并进入 `consume` 流程；失败则标记为 `rejected` 且暂停对应队列。
 - **consume SSE消费转发循环**: 建立上游长连接并持续接收结果。

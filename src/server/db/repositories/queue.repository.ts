@@ -88,13 +88,16 @@ export class QueueRepository {
     return row ?? null;
   }
 
-  /** Return the oldest queued item across conversations (global FIFO). */
+  /** Return the oldest queued item from a conversation eligible for dispatch. */
   findNextGlobalQueued(): QueueItemEntity | null {
     const row = this.db
       .prepare(
-        `SELECT * FROM queue_items
-         WHERE state = 'queued'
-         ORDER BY created_at ASC, fifo_seq ASC
+        `SELECT queue_items.* FROM queue_items
+         JOIN conversations ON conversations.id = queue_items.conversation_id
+         WHERE queue_items.state = 'queued'
+           AND conversations.queue_paused = 0
+           AND conversations.delete_state = 'none'
+         ORDER BY queue_items.created_at ASC, queue_items.fifo_seq ASC
          LIMIT 1`,
       )
       .get() as QueueItemEntity | undefined;

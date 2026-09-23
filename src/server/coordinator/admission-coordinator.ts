@@ -302,6 +302,7 @@ export class AdmissionCoordinator {
         !current ||
         current.state !== "queued" ||
         !conversation ||
+        conversation.queue_paused ||
         conversation.delete_state !== "none"
       ) {
         this.leaseRepo.release(

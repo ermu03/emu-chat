@@ -176,6 +176,88 @@ describe("Phase 4: Queue and runs HTTP integration", () => {
     });
   });
 
+  it("skips a paused queue head and dispatches another conversation", async () => {
+    const pausedConversationId = await createMappedConversation();
+    const runnableConversationId = await createMappedConversation();
+    db!
+      .prepare(
+        "UPDATE conversations SET queue_paused = 1, pause_reason = 'manual_resume_required' WHERE id = ?",
+      )
+      .run(pausedConversationId);
+
+    await putDraft(pausedConversationId, "Wait for resume", 0);
+    const pausedSubmission = await app!.inject({
+      method: "POST",
+      url: `/api/v1/conversations/${pausedConversationId}/messages`,
+      payload: {
+        client_request_id: "00000000-0000-4000-8000-000000000405",
+        expected_draft_revision: 1,
+      },
+    });
+    expect(pausedSubmission.statusCode).toBe(202);
+    const pausedItemId = (
+      pausedSubmission.json() as { queue_item: QueueItemView }
+    ).queue_item.id;
+    // Keep the queued item unambiguously older than the runnable item.
+    db!
+      .prepare("UPDATE queue_items SET created_at = ? WHERE id = ?")
+      .run(new Date(Date.now() - 60_000).toISOString(), pausedItemId);
+
+    await putDraft(
+      runnableConversationId,
+      "Run while another queue is paused",
+      0,
+    );
+    const runnableSubmission = await app!.inject({
+      method: "POST",
+      url: `/api/v1/conversations/${runnableConversationId}/messages`,
+      payload: {
+        client_request_id: "00000000-0000-4000-8000-000000000406",
+        expected_draft_revision: 1,
+      },
+    });
+    expect(runnableSubmission.statusCode).toBe(202);
+    const runnableItemId = (
+      runnableSubmission.json() as { queue_item: QueueItemView }
+    ).queue_item.id;
+
+    await waitFor(async () => {
+      const response = await app!.inject({
+        method: "GET",
+        url: `/api/v1/conversations/${runnableConversationId}/queue?include_terminal=true`,
+      });
+      const item = (response.json() as QueueView).data.find(
+        (entry) => entry.id === runnableItemId,
+      );
+      return item?.state === "done" ? item : undefined;
+    });
+    const pausedQueue = await app!.inject({
+      method: "GET",
+      url: `/api/v1/conversations/${pausedConversationId}/queue`,
+    });
+    expect(pausedQueue.json()).toMatchObject({
+      paused: true,
+      data: [{ id: pausedItemId, state: "queued", local_run_id: null }],
+    });
+
+    const resume = await app!.inject({
+      method: "POST",
+      url: `/api/v1/conversations/${pausedConversationId}/queue/resume`,
+      payload: {},
+    });
+    expect(resume.statusCode).toBe(200);
+    await waitFor(async () => {
+      const response = await app!.inject({
+        method: "GET",
+        url: `/api/v1/conversations/${pausedConversationId}/queue?include_terminal=true`,
+      });
+      const item = (response.json() as QueueView).data.find(
+        (entry) => entry.id === pausedItemId,
+      );
+      return item?.state === "done" ? item : undefined;
+    });
+  });
+
   it("dispatches a draft through Hermes and reconciles the local run to done", async () => {
     const conversationId = await createMappedConversation();
     const sourceConversation = await app!.inject({

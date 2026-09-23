@@ -94,7 +94,7 @@ stateDiagram-v2
 
 ## 6. 暂停原因 (PauseReason)
 
-当 `conversations.queue_paused = 1` 时，由 `pause_reason` 枚举具体说明为何阻断队列进行。恢复队列的方式通常是手动重置。
+当 `conversations.queue_paused = 1` 时，由 `pause_reason` 枚举具体说明为何阻断该会话队列的派发；其他会话仍可继续运行。恢复队列的方式通常是手动重置。
 - **run_failed**: 上游执行报错。
 - **run_partial**: 截断或只接收了部分事件就断开了。
 - **run_cancelled**: 任务被远程或本地取消。
