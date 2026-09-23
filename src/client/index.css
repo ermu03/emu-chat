@@ -738,6 +738,12 @@ select:focus-visible {
   background: transparent;
   font-size: 13px;
   text-align: left;
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+}
+.tool-call-summary::-webkit-details-marker {
+  display: none;
 }
 .tool-call-summary:hover {
   background: color-mix(in srgb, var(--surface) 55%, transparent);
@@ -751,6 +757,18 @@ select:focus-visible {
 .tool-call-status {
   color: var(--ink-faint);
   font-size: 11px;
+}
+.tool-call-status.danger {
+  color: var(--danger);
+  font-weight: 500;
+}
+.tool-call-chevron {
+  flex-shrink: 0;
+  color: var(--ink-faint);
+  transition: transform 140ms ease;
+}
+details[open] > summary .tool-call-chevron {
+  transform: rotate(180deg);
 }
 .tool-call-details {
   padding: 11px 13px 13px;
@@ -769,6 +787,62 @@ select:focus-visible {
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.turn-process-card {
+  margin-bottom: 12px;
+}
+.turn-process-summary {
+  font-weight: 500;
+}
+.turn-process-details {
+  padding: 10px 12px 12px;
+  background: color-mix(in srgb, var(--surface) 40%, transparent);
+}
+.turn-steps-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.turn-step-reasoning {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+.turn-step-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+.turn-step-text {
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+.tool-item-card {
+  margin-bottom: 0;
+  background: var(--surface);
+}
+.tool-io-section {
+  margin-top: 8px;
+}
+.tool-io-section:first-child {
+  margin-top: 0;
+}
+.tool-io-label {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-faint);
 }
 
 .composer-shell {
