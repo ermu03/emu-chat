@@ -4,7 +4,7 @@ Status: proposed
 
 ## Problem
 
-原 BUG-2：切到未命中缓存的会话时，[AppShell](../../../../src/client/app.tsx) 会立即清空当前会话、消息、草稿与 Run 状态，消息区短暂出现加载空白。命中 [ConversationViewCache](../../../../src/client/features/conversations/conversation-view-cache.ts) 时虽可恢复快照，但大量消息仍可能在一次渲染中造成卡顿。原 BUG-1 也报告了流式更新时的闪烁；[MessageRow](../../../../src/client/features/messages/message-view.tsx) 当前没有独立的渲染缓存。
+原 BUG-2：[AppShell](../../../../src/client/app.tsx) 当前约 1300 行。切到未命中缓存的会话时，它会立即清空当前会话、消息、草稿与 Run 状态，消息区短暂出现加载空白。命中 [ConversationViewCache](../../../../src/client/features/conversations/conversation-view-cache.ts) 时虽可恢复快照，但大量消息仍可能在一次渲染中造成卡顿。原 BUG-1 也报告了流式更新时的闪烁；[MessageView](../../../../src/client/features/messages/message-view.tsx) 的消息行当前没有独立的渲染缓存。
 
 ## Proposal
 

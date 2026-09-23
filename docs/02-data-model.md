@@ -4,7 +4,7 @@
 
 ## 1. SQLite 连接初始化与 PRAGMA 调优
 
-数据库连接的初始化位于 [connection.ts](file:///d:/projects/emu-chat/src/server/db/connection.ts) 中。为应对高并发读取和可靠写入，采用了以下核心 PRAGMA 配置：
+数据库连接的初始化位于 [connection.ts](../src/server/db/connection.ts) 中。为应对高并发读取和可靠写入，采用了以下核心 PRAGMA 配置：
 
 - **`journal_mode = WAL`**：开启 Write-Ahead Logging。极大提升读写并发性，允许读写操作同时进行，显著减少锁定冲突。
 - **`foreign_keys = ON`**：启用外键约束，保证层级数据（如 `conversations` 到 `queue_items`、`runs` 等）的引用完整性。
@@ -13,7 +13,7 @@
 
 ## 2. 迁移机制 (Migrations)
 
-迁移系统位于 [migrate.ts](file:///d:/projects/emu-chat/src/server/db/migrate.ts)。在每次服务启动时，`runMigrations` 函数会自动执行以下步骤：
+迁移系统位于 [migrate.ts](../src/server/db/migrate.ts)。在每次服务启动时，`runMigrations` 函数会自动执行以下步骤：
 1. 确保 `schema_migrations` 表存在，并读取已应用的迁移版本。
 2. 扫描 `migrations/` 目录下的所有 `.sql` 文件。
 3. 按照文件名前缀的版本号（如 `0001_initial.sql`）进行排序。
@@ -272,7 +272,7 @@ erDiagram
 
 ## 9. `withImmediateTransaction` 的设计
 
-参见 [transaction.ts](file:///d:/projects/emu-chat/src/server/db/transaction.ts)。
+参见 [transaction.ts](../src/server/db/transaction.ts)。
 - **排他写锁 (BEGIN IMMEDIATE)**：标准 SQLite 的 `BEGIN` 是延迟获取写锁。使用 `BEGIN IMMEDIATE` 强制立即获取保留锁(Reserved Lock)，从而避免并发写引发的死锁问题，与 `busy_timeout` 完美配合。
 - **防嵌套重入**：函数内部使用 `db.inTransaction` 检测，如果有上层事务已开启，则复用外部事务，不会报错。
 - **容错回滚**：当业务逻辑抛出异常时，利用 `finally/catch` 确保安全的 `ROLLBACK`，不会在数据库连接池中留下未封闭的损坏事务上下文。

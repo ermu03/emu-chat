@@ -22,26 +22,32 @@
 - **4xx 客户端错误**: 转换为相应的 AppError
 - **5xx 服务端错误**: 隐蔽内部细节，统一转换为 500 内部服务器错误
 
-### 错误码矩阵表 (19种)
-系统预定义了 19 种错误码，矩阵分布如下（部分示例）：
+### 错误码矩阵（共享枚举 19 项）
 
-| 错误类名 | ErrorCode | HTTP状态码 | Retryable | Action | 触发场景 |
-|----------|-----------|------------|-----------|--------|----------|
-| BadRequestError | `BAD_REQUEST` | 400 | false | none | 参数校验失败 |
-| UnauthorizedError | `UNAUTHORIZED` | 401 | false | reconnect | 未认证或Token失效 |
-| ForbiddenError | `FORBIDDEN` | 403 | false | none | 无权限访问 |
-| NotFoundError | `NOT_FOUND` | 404 | false | none | 资源不存在 |
-| ConflictError | `CONFLICT` | 409 | false | resolve_conflict | 并发修改冲突 (CAS) |
-| RateLimitError | `RATE_LIMIT_EXCEEDED` | 429 | true | retry | 速率限制 |
-| InternalError | `INTERNAL_SERVER_ERROR`| 500 | true | retry | 未知内部错误 |
-| HermesTimeoutError | `UPSTREAM_TIMEOUT` | 504 | true | retry | Hermes上游超时 |
-| PayloadTooLargeError| `PAYLOAD_TOO_LARGE` | 413 | false | none | 请求体过大 |
-| QueueFullError | `QUEUE_FULL` | 429 | true | retry | 队列满载 |
-| ApprovalRequiredError| `APPROVAL_REQUIRED` | 403 | false | review_required| 需要审批才能继续 |
-| InvalidStateError | `INVALID_STATE` | 409 | false | refresh_status | 状态机流转错误 |
-| LeaseExpiredError | `LEASE_EXPIRED` | 409 | true | retry | 租约过期 |
-| HermesConnectionError| `UPSTREAM_ERROR` | 502 | true | recheck | Hermes网络连接失败 |
-| ... | ... | ... | ... | ... | ... |
+错误码由 [共享枚举](../src/shared/domain-enums.ts) 定义，HTTP 状态和动作由 [服务端错误类](../src/server/domain/errors.ts) 定义。当前错误类对应的错误码如下：
+
+| 错误类名 | ErrorCode | HTTP 状态码 | Retryable | Action | 常见场景 |
+|---|---|---:|---|---|---|
+| `InvalidRequestError` | `INVALID_REQUEST` | 400 | false | none | 请求参数或载荷校验失败 |
+| `PayloadTooLargeError` | `PAYLOAD_TOO_LARGE` | 413 | false | none | 请求体过大 |
+| `LocalNotFoundError` | `LOCAL_NOT_FOUND` | 404 | false | refresh_status | 本地会话或资源不存在 |
+| `HermesNotFoundError` | `HERMES_NOT_FOUND` | 404 | false | refresh_status | Hermes 上游资源不存在 |
+| `DraftConflictError` | `DRAFT_CONFLICT` | 409 | false | resolve_conflict | 草稿 revision 冲突 |
+| `LocalConflictError` | `LOCAL_CONFLICT` | 409 | false | refresh_status | 本地元数据等 revision 冲突 |
+| `StateConflictError` | `STATE_CONFLICT` | 409 | false | refresh_status | 状态不允许当前操作；`QueueFullError` 继承此类，也返回此错误码 |
+| `RunActiveError` | `RUN_ACTIVE` | 409 | false | refresh_status | 会话或系统已有活跃 Run |
+| `ApprovalNotPendingError` | `APPROVAL_NOT_PENDING` | 409 | false | refresh_status | Run 当前没有待处理审批 |
+| `HermesNotReadyError` | `HERMES_NOT_READY` | 503 | true | recheck | Hermes 尚未就绪 |
+| `HermesAuthFailedError` | `HERMES_AUTH_FAILED` | 502 | false | none | Hermes 鉴权失败 |
+| `HermesUnavailableError` | `HERMES_UNAVAILABLE` | 502 | true | reconnect | Hermes 不可用或连接失败 |
+| `HermesConflictError` | `HERMES_CONFLICT` | 409 | false | refresh_status | Hermes 上游状态冲突 |
+| `HermesTemporaryFailureError` | `HERMES_TEMPORARY_FAILURE` | 502 | true | retry | Hermes 暂时性故障 |
+| `HermesProtocolError` | `HERMES_PROTOCOL_ERROR` | 502 | false | recheck | Hermes 响应不符合协议 |
+| `HermesBusyGlobalError` | `HERMES_BUSY_GLOBAL` | 409 | true | retry | Hermes 正在运行另一个全局任务 |
+| `DeleteUnconfirmedError` | `DELETE_UNCONFIRMED` | 503 | true | refresh_status | 无法确认上游会话已删除 |
+| `InternalError` | `INTERNAL_ERROR` | 500 | false | none | 未知内部错误 |
+
+共享枚举中的 `REVIEW_REQUIRED` 目前没有对应的 `AppError` 子类。`QueueFullError` 当前继承 `StateConflictError`，因此队列达到深度上限时返回 `STATE_CONFLICT`，而不是独立的 `QUEUE_FULL` 错误码。
 
 ### ErrorAction 前端建议动作
 定义了 7 种 `ErrorAction` 供前端采取对应逻辑：

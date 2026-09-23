@@ -10,6 +10,7 @@
 | 单元 | `tests/unit/hermes-client.test.ts` | 认证头、安全边界、错误映射、SSE 存活超时 |
 | 单元 | `tests/unit/hermes-capabilities.test.ts` | Hermes 必需能力与健康状态评估 |
 | 单元 | `tests/unit/hermes-adapter-real-contract.test.ts` | 匿名真实 Hermes 0.21 报文的规范化、Run 接纳和 SSE 契约 |
+| 单元 | `tests/unit/message-display.test.ts` | 助手回合聚合、工具结果配对、错误显示与消息合并去重 |
 | 单元 | `tests/unit/sse-hub-contract.test.ts` | 浏览器 SSE 广播、断线重放、缺口和缓冲限制 |
 | 集成 | `tests/integration/phase4-queue-runs.test.ts` | 草稿原子入队与幂等、协调器派发、审批与终态对账，以及保留数据库和上游状态的服务重建恢复 |
 | 组件 | `tests/components/react-components.test.tsx` | 删除前复选确认、发送失败保留草稿、旧保存 ACK 不覆盖新输入 |
