@@ -1,10 +1,7 @@
-# 前端已知问题清单
-
-> 测试中发现的前端问题汇总，按严重程度排列。
-
+# 前端已知问题清单与优化点总结
 ---
 
-## BUG-1：长对话（120+ 条消息）Agent 回答丢失 🔴 严重
+## BUG-1：长对话（120+ 条消息）Agent 回答丢失
 
 ### 现象
 
@@ -55,7 +52,7 @@
 
 ---
 
-## BUG-2：会话切换卡顿与闪烁 🟡 体验问题
+## BUG-2：会话切换卡顿与闪烁
 
 ### 现象
 
@@ -91,7 +88,7 @@
 
 ---
 
-## BUG-3：工具调用/思考过程的展示方式不合理 🟢 改进建议
+## BUG-3：工具调用/思考过程的展示方式不合理
 
 ### 现象
 
@@ -157,7 +154,7 @@ export function getRenderableMessages(messages: MessageItem[]): MessageItem[] {
 
 ---
 
-## TASK-4：测试套件精简与瘦身（消除过度测试） 🔵 架构优化
+## TASK-4：测试套件精简与瘦身（消除过度测试）
 
 ### 现状分析
 
@@ -193,3 +190,122 @@ export function getRenderableMessages(messages: MessageItem[]): MessageItem[] {
    - 仅保留主干：端到端消息原子入队 → 协调器派发调度 → 终态对账闭环，以及进程崩溃自愈等关键容错链路。
    - 删除过分冗余、重复覆盖的矩阵子项测试。
 
+---
+
+## TASK-5：AppShell 单体解耦与瘦身（消除过大单体组件）
+
+### 现状分析
+
+当前 `src/client/app.tsx`（约 1290 行）承担了“上帝组件”（God Component）的角色，过度臃肿：
+- **职责严重过载**：一个文件同时处理了会话路由解析、会话列表加载、单会话详情拉取、LRU 视图快照恢复、草稿同步、消息队列管理、大模型实时 SSE 流消费、Run 终态对账刷新、网络轮询兜底、以及各类弹窗控制。
+- **状态交织复杂**：单个组件内声明了 18 个 `useState` 与 10 个 `useRef`，状态之间的依赖与同步链路极长（有 8 个 `useEffect`），阅读和修改时心智负担极重。
+- **改动风险高**：任何细小功能的修改（如修改发消息逻辑）都需要在千行单体大文件里穿梭，极易产生非预期的副作用与代码冲突。
+
+### 优化与重构计划
+
+遵循 React 现代工程最佳实践，采用**自定义 Hook（Custom Hooks）**将业务逻辑切片拆离，将 `AppShell` 瘦身至 200 行以内的纯骨架/布局组件：
+
+1. **提取会话切换与视图缓存 Hook（`useConversationView.ts`）**：
+   - 负责加载当前会话（详情/消息/草稿/队列）。
+   - 封装 `loadId` 递增防竞态逻辑与 `ConversationViewCache` 快照读写。
+   - 产出：`activeConversation`, `messages`, `draft`, `queue`, `loadActiveConversation` 等。
+
+2. **提取流式运行与对账 Hook（`useRunRuntime.ts`）**：
+   - 封装 `useStreamEvents` 订阅与 `handleRunStreamEvent` 逻辑。
+   - 管理大模型打字机流式增量文本（`streamedAssistantCache`）。
+   - 封装终态自动对账与轮询保活逻辑（`refreshRuntime`）。
+   - 产出：`activeRun`, `streamedAssistantContent`, `onStopGenerating`, `onReconcile` 等。
+
+3. **提取消息发送与排队 Hook（`useMessageSend.ts`）**：
+   - 负责点击发送消息的完整事务流程（强制 flush 草稿 $\rightarrow$ 生成 UUID $\rightarrow$ 插入 PendingUserRow $\rightarrow$ 调接口 $\rightarrow$ 刷新队列）。
+   - 产出：`handleSendMessage`, `pendingSubmissions` 等。
+
+4. **保持 `AppShell` 纯粹的骨架定位**：
+   - 瘦身后 `AppShell` 仅负责声明式地调用上述 3 个 Hook，并将状态与回调作为 props 传递给各业务组件（`ConversationList`、`MessageView`、`DraftComposer` 等），彻底消除逻辑泥潭。
+
+
+# other
+
+## ISSUE-6：后端消息分页协议缺失 `has_more` 与 `total` 字段
+
+### 现状分析
+
+在后端消息接口与上游协议适配中，存在分页元数据丢失与硬编码问题：
+- 在 [`src/server/hermes/adapter.ts` 第 144 行](src/server/hermes/adapter.ts#L144)，适配器在标准化上游消息列表时硬编码写死了 `has_more: false`。
+- 在前后端共享契约 [`src/shared/api-schemas.ts` 第 208~216 行](src/shared/api-schemas.ts#L208-L216) 的 `MessageListResponseSchema` 中，仅定义了 `items, limit, offset, returned`，完全缺失了 `has_more` 和 `total`。
+- 业务服务 [`src/server/services/conversation-service.ts` 第 132~139 行](src/server/services/conversation-service.ts#L132-L139) 也未向上透传上游的真实消息总量。
+
+### 根因与影响
+
+- 与前端 **BUG-1** 紧密关联。前端无法得知会话是否已全部拉取完毕；当会话消息超过 100 条时，前端无法判断是否存在下一页，默认误以为只有这 100 条消息，进而导致长对话中新回答被截断。
+
+### 解决方案
+
+1. 在 `MessageListResponseSchema` 中增补 `has_more: boolean` 与可选的 `total: number` 字段。
+2. 在 `hermes/adapter.ts` 中根据上游真实的 `total` 或 `pagination` 动态计算 `has_more = (offset + returned < total)`。
+3. 确保路由与服务层对 `order: "latest"` 的逆向分页支持完备，方便前端在打开会话时优先拉取最新的 N 条消息。
+
+---
+
+## TASK-7：全局单活跃 Run 并发模型约束与多槽位演进
+
+### 现状分析
+
+在数据库定义 [`migrations/0001_initial.sql` 第 87~90 行](migrations/0001_initial.sql#L87-L90) 中声明了一条全局唯一索引：
+```sql
+CREATE UNIQUE INDEX ux_queue_one_global_active 
+ON queue_items ((1)) 
+WHERE state IN ('dispatching', 'accepted', 'reconciling');
+```
+这意味着系统在数据库层做了强互斥：**整个应用在同一时刻全局只允许存在 1 个处于活跃执行态的 Run**。
+
+### 影响与考量
+
+- **现状合理性**：当前定位为“单用户本地工作台”，串行执行保证了 SQLite 状态机的绝对简单与外部 Hermes 调度的原子性。
+- **业务局限**：若用户在会话 A 中触发了耗时较长的大模型生成任务，切换至会话 B 发送新问题时，会话 B 的消息将被强制排队等待，无法多任务并行。
+
+### 改进计划
+
+- 前期开发阶段保留单并发设计，优先保证状态机稳定。
+- 中后期若需支持多任务并行，将全局单租约与唯一索引改造为基于**并发槽位（Semaphore）**的模型（如配置 `MAX_ACTIVE_GLOBAL_RUNS = 2~3`）。
+
+---
+
+## TASK-8：`SafeLogger` 日志脱敏系统递归深度防护
+
+### 现状分析
+
+在 [`src/server/logging.ts` 第 80~120 行](src/server/logging.ts#L80-L120) 中，`SafeLogger` 负责递归脱敏所有日志对象（过滤 token、密码、敏感提示词等）。
+目前的递归遍历未设置深度阈值，也未防御循环引用。
+
+### 潜在风险
+
+若打印的对象中包含过深的嵌套结构（如第三方库复杂的 AST、超大深度 JSON），可能触发 V8 引擎的 `Maximum call stack size exceeded` 导致进程直接崩溃。
+
+### 解决方案
+
+在递归脱敏函数中加入 `depth` 计数器，限制最大递归深度（例如 `maxDepth: 8`）；超出层级限制时直接截断为 `"[MAX_DEPTH_REACHED]"`，避免栈溢出。
+
+---
+
+## TASK-9：SQLite 长期运行磁盘碎片与空间回收
+
+### 现状分析
+
+为了节省磁盘并保护敏感数据，系统在队列项执行终态后会将 `payload_text` 字段更新为 `NULL`。
+但 SQLite 的默认存储机制不会将置空腾出的扇区自动归还给操作系统，而是留作内部空洞复用。
+
+### 潜在影响
+
+系统在云服务器上连续运行数月、执行成千上万次对话后，SQLite 数据库物理文件可能会因碎片产生体积膨胀。
+
+### 解决方案
+
+1. 在 [`src/server/db/connection.ts`](src/server/db/connection.ts) 初始化连接时设置增量整理模式：
+   ```sql
+   PRAGMA auto_vacuum = INCREMENTAL;
+   ```
+2. 在服务启动初始化或定时巡检中执行一次轻量的增量整理指令：
+   ```sql
+   PRAGMA incremental_vacuum;
+   ```
