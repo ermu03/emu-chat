@@ -8,23 +8,28 @@
 
 ```mermaid
 sequenceDiagram
-    participant UI as 前端 (AppShell/Composer)
-    participant Draft as 草稿/视图状态
+    participant Composer as DraftComposer
+    participant Send as useMessageSend
+    participant Messages as MessageView
+    participant View as useConversationView
+    participant Runtime as useRunRuntime
     participant API as 后端 API
     participant Coord as 协调器 (Coordinator)
     participant SSE as SSE 通道
 
-    UI->>UI: 判断 Primary / Follow-up，生成 UUID
-    UI->>Draft: 乐观渲染 PendingUserRow
-    UI->>Draft: 强制 flush 草稿
-    UI->>API: apiClient.sendMessage (发送消息)
-    UI->>Draft: 刷新本地队列 (乐观锁)
+    Composer->>API: 强制 flush 草稿 (附带 revision)
+    Composer->>Send: 提交消息与草稿 revision
+    Send->>Send: 判断 Primary / Follow-up，生成或复用 UUID
+    Send-->>Messages: 显示 PendingUserRow 占位
+    Send->>API: apiClient.sendMessage (发送消息)
     
     API->>API: 幂等检查
     API->>API: 检查 Hermes 就绪状态
     API->>API: 即时事务: 写入 Queue + 清空该会话 Draft
     API->>Coord: 唤醒协调器 (Waker)
-    API-->>UI: 返回成功响应 (含 enqueue 信息)
+    API-->>Send: 返回成功响应 (含 enqueue 信息)
+    Send->>View: 更新草稿与队列项
+    Send->>Runtime: 刷新当前 Run
 
     Coord->>Coord: tick (执行心跳)
     Coord->>Coord: 获取双重租约 (Lease)
@@ -35,9 +40,12 @@ sequenceDiagram
 
     Coord->>SSE: 推送 stream.ready
     Coord->>SSE: 推送 run.event (携带 message.delta)
-    SSE-->>UI: useStreamEvents 接收 run.event，增量拼接
+    SSE-->>Runtime: useStreamEvents 接收 run.event
+    Runtime->>View: 增量拼接流式文本
     Coord->>SSE: 推送 run.reconciled (Run 完成)
-    SSE-->>UI: 全量拉取最新消息替换流式占位内容
+    SSE-->>Runtime: 推送终态事件
+    Runtime->>API: 拉取最新消息
+    Runtime->>View: 合并消息并清除流式占位
 ```
 
 ## 2. 工具审批流程
@@ -48,7 +56,7 @@ sequenceDiagram
 sequenceDiagram
     participant Agent as 上游 Agent
     participant Backend as 后端 Server
-    participant SSE as 前端 SSE Hook
+    participant SSE as useRunRuntime / useStreamEvents
     participant Dialog as ApprovalDialog
 
     Agent->>Backend: 请求工具审批
@@ -68,28 +76,30 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     participant User as 用户
-    participant AppShell as 前端 AppShell
+    participant AppShell as AppShell
+    participant View as useConversationView
     participant Cache as ConversationViewCache
     participant API as 后端 API
 
     User->>AppShell: 点击会话 B (离开会话 A)
-    AppShell->>Cache: 抓取会话 A 的当前视图快照存入 LRU (容量12)
-    AppShell->>Cache: 尝试读取会话 B 快照
+    AppShell->>View: 选中会话 B
+    View->>Cache: 抓取会话 A 的当前视图快照存入 LRU (容量12)
+    View->>Cache: 尝试读取会话 B 快照
     
     alt 缓存命中
-        Cache-->>AppShell: 返回会话 B 缓存数据
-        AppShell->>AppShell: 瞬间渲染 (秒开)
+        Cache-->>View: 返回会话 B 缓存数据
+        View-->>AppShell: 立即恢复 B 的视图
     else 缓存未命中
-        Cache-->>AppShell: 空
-        AppShell->>AppShell: 保留会话 A 快照，标题仍显示 A
+        Cache-->>View: 空
+        View-->>AppShell: 保留会话 A 快照，标题仍显示 A
         AppShell->>AppShell: 标明正在加载 B，并禁用会话级操作
     end
 
-    AppShell->>API: activeLoadRef 开启保护，并发拉取会话详情、消息、草稿、队列
-    API-->>AppShell: 消息请求先完成
-    AppShell->>AppShell: 校验请求代数；立即切换消息视图到 B
-    API-->>AppShell: 详情、草稿和队列分别返回
-    AppShell->>AppShell: 各自数据就绪后开放对应会话操作
+    View->>API: activeLoadRef 开启保护，并发拉取会话详情、消息、草稿、队列
+    API-->>View: 消息请求先完成
+    View-->>AppShell: 校验请求代数；立即切换消息视图到 B
+    API-->>View: 详情、草稿和队列分别返回
+    View-->>AppShell: 各自数据就绪后开放对应会话操作
     alt 目标消息加载失败
         AppShell->>AppShell: 保留当前快照并显示重试入口
     end

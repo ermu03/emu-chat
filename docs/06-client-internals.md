@@ -8,27 +8,19 @@
 - **`AppRouter(BrowserRouter)`**: 负责整体应用的 HTML5 History 路由。
 - **`AppShell`**: 作为通配路由挂载，处理所有应用的 URL。这种设计保证了即使在不同会话之间切换，外壳组件及其上下文也不会被卸载，从而维持核心状态和缓存。
 
-## 2. AppShell 编排中枢
+## 2. AppShell 与状态 Hook
 
-`AppShell` 是整个应用的前端编排中枢（当前约 1300 行代码），负责协调所有核心功能与子组件。
+`AppShell` 保留路由、连接状态、会话列表、偏好设置和布局组合。会话视图、Run 生命周期与发送过程由三个状态 Hook 持有：
 
-### 核心状态变量
-- `activeConversationId`: 当前选中的会话 ID。
-- `activeConversation`: 当前会话的详细元数据。
-- `messages`: 当前会话的已对账消息列表。
-- `messagesConversationId`: 这份消息列表所属的会话 ID；加载完成前不会把旧会话数据当作目标会话。
-- `draft`: 当前会话的草稿内容。
-- `queue`: 消息发送队列。
-- `activeRun`: 当前正在执行的后台 Run 状态。
-- `streamedAssistantContent`: 实时流式的助手回复文本。
-- `pendingSubmissions`: 尚未完成乐观更新的网络请求队列。
+| 模块 | 持有状态与副作用 |
+| --- | --- |
+| `useConversationView` | 当前会话详情、消息、草稿、队列、Run 快照、流式文本、LRU 缓存、历史消息加载和旧请求隔离。`messagesConversationId` 标明消息属于哪个会话。 |
+| `useRunRuntime` | Run 的 SSE 订阅、事件缺口提示、运行状态轮询、终态对账，以及队列项和 Run 操作。 |
+| `useMessageSend` | 发送请求 UUID、待确认提交的乐观占位、发送后队列与草稿更新。 |
 
-### 防护 Refs (并发与缓存防护)
-- `activeLoadRef`: 并发请求计数器，防止网络竞态和乱序导致的数据覆盖。
-- `conversationViewCacheRef`: LRU 缓存实例，容量为 12，用于实现会话的秒开切换。
-- `currentViewSnapshotRef`: 保留当前展示快照；目标会话未加载出消息时，继续展示原会话并禁用会话级操作。
-- `streamedAssistantCacheRef`: 增量流文本合并缓存。
-- `pendingSendRef`: 防止重复点击或网络延迟引发的多次发送。
+`AppShell` 将 `useConversationView` 的视图状态传给 Run 和发送 Hook。Run Hook 通过视图提供的更新方法写入队列、Run 和消息；发送 Hook 在 API 接受提交后写入队列项并触发 Run 刷新。共享状态只有一个所有者，避免两条异步流程各维护一份当前队列。
+
+`useConversationView` 用 `activeLoadRef` 标记每次会话加载。切换时立即使旧请求失效；缓存命中先恢复快照，随后刷新服务端状态。`activeConversationIdRef` 使发送、Run 操作和轮询在网络返回后确认目标会话仍然选中。`currentViewSnapshotRef` 保留正在展示的旧会话；目标消息尚未就绪时不会把它误当成新会话。`useMessageSend` 的 `pendingSendRef` 保存重试所需的发送 UUID。
 
 冷缓存切换会在顶部标明目标会话，同时暂时显示当前会话。目标消息请求独立完成后立即切换消息视图，不等待会话详情、草稿或队列请求；其他操作仍会等各自所需数据就绪。消息加载失败时保留当前视图并提供重试。首次打开且没有可保留的会话时显示加载状态。缓存命中仍会立即恢复快照，并继续向服务端刷新状态。
 

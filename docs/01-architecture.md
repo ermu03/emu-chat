@@ -139,11 +139,14 @@ classDiagram
 
 ## 4. 前端组件架构
 
-前端采用单页应用设计，以 `AppShell` 作为编排中枢处理整个布局，将各个维度的交互解耦：
+前端采用单页应用设计。`AppShell` 负责路由、全局状态和布局组合；会话视图、Run 生命周期及发送过程由各自的状态 Hook 管理：
 
 ```mermaid
 flowchart TD
-    AppShell["AppShell<br/>(编排中枢，加载路由及状态)"]
+    AppShell["AppShell<br/>(路由、全局状态与页面组合)"]
+    View["useConversationView<br/>(会话加载、缓存与草稿)"]
+    Runtime["useRunRuntime<br/>(SSE、轮询与对账)"]
+    Send["useMessageSend<br/>(发送与乐观占位)"]
     
     Sidebar["Sidebar (左侧边栏)"]
     Main["Main Content (右侧主窗口)"]
@@ -152,6 +155,9 @@ flowchart TD
     AppShell --> Sidebar
     AppShell --> Main
     AppShell --> Overlay
+    AppShell --> View
+    AppShell --> Runtime
+    AppShell --> Send
     
     Sidebar --> ConversationList["ConversationList<br/>(会话列表，切换当前会话)"]
     Sidebar --> StatusBar["StatusBar<br/>(全局系统连接状态探测)"]
