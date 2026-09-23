@@ -36,7 +36,7 @@ emu-chat/
 ├── tests/                   # 单元、组件和集成测试
 ├── public/                  # PWA manifest 和静态图标
 ├── docs/                    # 当前架构、API 与决策笔记规则
-├── .agents/notes/           # 工程决策笔记，目录按需创建
+├── .agents/notes/           # 待处理提案与四状态工程决策笔记
 ├── .agents/skills/          # 项目开发 Skill 的唯一正文
 ├── .claude/skills/          # 指向项目 Skill 的 Claude Code 入口
 ├── data/                    # 运行时 SQLite 数据库目录
@@ -47,7 +47,7 @@ emu-chat/
 └── vite.config.ts           # 前端构建配置
 ```
 
-系统现状见 [项目文档](docs/00-overview.md)，HTTP 接口见 [API 参考](docs/08-api-reference.md)。重要技术取舍按 [决策笔记规则](docs/decision-notes.md)记录在 .agents/notes/。
+系统现状见 [项目文档](docs/00-overview.md)，HTTP 接口见 [API 参考](docs/08-api-reference.md)。待处理问题与改进方案见 [proposed 笔记](.agents/notes/proposed/)，重要技术取舍遵循[决策笔记规则](docs/decision-notes.md)。
 
 开发模式：
 

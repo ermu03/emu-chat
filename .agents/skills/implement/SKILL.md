@@ -1,14 +1,14 @@
 ---
 name: implement
-description: "根据用户请求、ISSUES.md 条目或本地规格，实现 emu-chat 的功能和修复。"
+description: "根据用户请求、proposed 笔记或本地规格，实现 emu-chat 的功能和修复。"
 ---
 
 # 实现功能或修复
 
-以用户当前要求为准；ISSUES.md 和 .agents/specs/ 只提供已有背景。开始前阅读 AGENTS.md、相关项目文档、源码和同主题决策笔记，确认现有行为与验收目标。
+以用户当前要求为准；.agents/notes/proposed/ 和 .agents/specs/ 提供已有背景。开始前阅读 AGENTS.md、相关项目文档、源码和同主题笔记，确认现有行为与验收目标。
 
 1. 在相关模块中完成最小而完整的改动。涉及队列、Run、Hermes、SQLite 或 SSE 时，先核对现有状态与数据流约束；不要为尚未提出的扩展增加抽象。
-2. 重要设计取舍依 docs/decision-notes.md 处理：新决定先记 proposed，落地时与代码一同移入 implemented；被取代或否决的决定按规则流转。同步更新因代码变化而失效的系统文档和 ISSUES.md 对应待办。
+2. 重要设计取舍依 docs/decision-notes.md 处理：优先更新同主题 proposed 笔记，落地且仍有参考价值时与代码一同移入 implemented；被取代或否决的决定按规则流转。同步更新因代码变化而失效的系统文档和笔记。
 3. 按改动风险验证：优先运行相关的现有测试、类型检查或构建；涉及核心消息链路或大范围改动时再扩大验证。新增测试遵守 AGENTS.md 的必要测试范围，不为覆盖率补测试。
 4. 对照用户要求、规格和 AGENTS.md 检查最终 diff，修正遗漏。交付时说明改动、验证结果、剩余风险，并给出可供用户手动提交的 commit 信息。
 

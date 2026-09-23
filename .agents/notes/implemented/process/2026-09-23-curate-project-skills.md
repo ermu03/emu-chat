@@ -10,7 +10,7 @@ Status: implemented
 
 仅保留需求澄清、规格、任务拆分、研究、实现、架构设计与评估、代码评审、会话交接这十个项目 Skill。正文以 .agents/skills/ 为唯一维护源；Claude Code 通过 .claude/skills/ 中的目录链接读取同一份正文，根目录的 CLAUDE.md 导入 AGENTS.md。
 
-本地待办使用 ISSUES.md；复杂规格和可复用研究记录分别按需存入 .agents/specs/ 与 .agents/research/；工程决策仍只在 .agents/notes/ 按四状态管理。实现流程遵守 AGENTS.md 的测试范围，交付工作树改动和 commit 信息，由用户手动提交。定制后的 Skill 不再使用上游安装锁文件管理。
+值得持续跟进的待处理事项记录在 .agents/notes/proposed/，不另设本地待办清单；复杂规格和可复用研究分别按需存入 .agents/specs/ 与 .agents/research/。工程决策在 .agents/notes/ 按四状态管理，具体迁移决定见[流程笔记](2026-09-23-track-pending-work-in-proposed-notes.md)。实现流程遵守 AGENTS.md 的测试范围，交付工作树改动和 commit 信息，由用户手动提交。定制后的 Skill 不再使用上游安装锁文件管理。
 
 ## Alternatives considered
 
@@ -20,7 +20,7 @@ Status: implemented
 
 ## Consequences
 
-- **收益**：两个工具使用同一套项目规则；规格、待办、研究和决策各有明确位置；实现与评审流程不再默认创建 PR、自动提交或运行不必要的测试。
+- **收益**：两个工具使用同一套项目规则；规格、待处理提案、研究和已实施决策各有明确位置；实现与评审流程不再默认创建 PR、自动提交或运行不必要的测试。
 - **代价**：这些 Skill 由项目自行维护，不能直接用上游安装锁文件更新。Claude Code 的目录链接依赖克隆环境正确保留符号链接；若迁到不支持链接的环境，需要重新提供 Claude 入口。
 
 ## Verification
