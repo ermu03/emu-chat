@@ -4,6 +4,7 @@ import Database from "better-sqlite3";
 import { buildServer } from "../../src/server/app.js";
 import type { AppConfig } from "../../src/server/config.js";
 import { runMigrations } from "../../src/server/db/migrate.js";
+import { RunRepository } from "../../src/server/db/repositories/run.repository.js";
 import { FakeHermesServer } from "../fixtures/fake-hermes/fake-hermes-server.js";
 
 type DraftView = {
@@ -20,8 +21,6 @@ type QueueItemView = {
 };
 
 type QueueView = {
-  object: string;
-  paused: boolean;
   data: QueueItemView[];
 };
 
@@ -50,6 +49,7 @@ describe("Phase 4: Queue and runs HTTP integration", () => {
   let app: FastifyInstance | null = null;
   let db: Database.Database | null = null;
   let fakeHermes: FakeHermesServer;
+  let config: AppConfig;
 
   beforeEach(async () => {
     fakeHermes = new FakeHermesServer();
@@ -57,7 +57,7 @@ describe("Phase 4: Queue and runs HTTP integration", () => {
     db = new Database(":memory:");
     runMigrations(db);
 
-    const config: AppConfig = {
+    config = {
       host: "127.0.0.1",
       port: 0,
       dataDir: "/tmp/emu-chat-test",
@@ -105,7 +105,7 @@ describe("Phase 4: Queue and runs HTTP integration", () => {
     return response.json() as DraftView;
   }
 
-  it("atomically turns a draft into a queued item, replays the same request, and honors queue item CAS", async () => {
+  it("atomically moves a draft into the queue and replays the same request", async () => {
     const conversationId = await createMappedConversation();
     const initialDraft = await putDraft(
       conversationId,
@@ -115,16 +115,6 @@ describe("Phase 4: Queue and runs HTTP integration", () => {
     expect(initialDraft).toMatchObject({
       content: "Draft sent through the queue",
       revision: 1,
-    });
-
-    const staleDraft = await app!.inject({
-      method: "PUT",
-      url: `/api/v1/conversations/${conversationId}/draft`,
-      payload: { content: "stale", expected_revision: 0 },
-    });
-    expect(staleDraft.statusCode).toBe(409);
-    expect(staleDraft.json()).toMatchObject({
-      error: { code: "DRAFT_CONFLICT" },
     });
 
     // A paused conversation must still accept sends but must leave them queued.
@@ -180,50 +170,10 @@ describe("Phase 4: Queue and runs HTTP integration", () => {
       method: "GET",
       url: `/api/v1/conversations/${conversationId}/queue`,
     });
-    expect(queue.statusCode).toBe(200);
     expect(queue.json()).toMatchObject({
-      object: "emu_chat.queue",
       paused: true,
       data: [{ id: sent.queue_item.id, state: "queued" }],
     });
-
-    const edited = await app!.inject({
-      method: "PATCH",
-      url: `/api/v1/queue-items/${sent.queue_item.id}`,
-      payload: { content: "Edited queued content", expected_revision: 0 },
-    });
-    expect(edited.statusCode).toBe(200);
-    expect(edited.json()).toMatchObject({
-      id: sent.queue_item.id,
-      state: "queued",
-      content: "Edited queued content",
-      revision: 1,
-    });
-
-    const cancelled = await app!.inject({
-      method: "POST",
-      url: `/api/v1/queue-items/${sent.queue_item.id}/cancel`,
-      payload: { expected_revision: 1 },
-    });
-    expect(cancelled.statusCode).toBe(200);
-    expect(cancelled.json()).toMatchObject({
-      state: "cancelled",
-      content: null,
-      revision: 2,
-    });
-
-    const hiddenTerminal = await app!.inject({
-      method: "GET",
-      url: `/api/v1/conversations/${conversationId}/queue`,
-    });
-    expect((hiddenTerminal.json() as QueueView).data).toEqual([]);
-    const terminal = await app!.inject({
-      method: "GET",
-      url: `/api/v1/conversations/${conversationId}/queue?include_terminal=true`,
-    });
-    expect((terminal.json() as QueueView).data).toMatchObject([
-      { id: sent.queue_item.id, state: "cancelled", content: null },
-    ]);
   });
 
   it("dispatches a draft through Hermes and reconciles the local run to done", async () => {
@@ -235,10 +185,6 @@ describe("Phase 4: Queue and runs HTTP integration", () => {
     const sourceSessionId = (
       sourceConversation.json() as { hermes_session_id: string }
     ).hermes_session_id;
-    const rotated = fakeHermes.createSession({
-      title: "Effective session after run",
-    });
-    fakeHermes.setEffectiveSessionIdForMessages(sourceSessionId, rotated.id);
     await putDraft(conversationId, "Run this through Fake Hermes", 0);
 
     const sent = await app!.inject({
@@ -279,42 +225,6 @@ describe("Phase 4: Queue and runs HTTP integration", () => {
         .getMessages(sourceSessionId)
         ?.map((message) => message.content),
     ).toContain("Run this through Fake Hermes");
-
-    const conversation = await app!.inject({
-      method: "GET",
-      url: `/api/v1/conversations/${conversationId}`,
-    });
-    expect(conversation.statusCode).toBe(200);
-    expect(conversation.json()).toMatchObject({
-      hermes_session_id: rotated.id,
-      effective_hermes_session_id: rotated.id,
-    });
-
-    const registered = await app!.inject({
-      method: "GET",
-      url: "/api/v1/conversations",
-    });
-    expect(registered.statusCode).toBe(200);
-    const registeredItems = (
-      registered.json() as {
-        items: Array<{ conversation_id: string; hermes_session_id: string }>;
-      }
-    ).items;
-    expect(registeredItems).toHaveLength(1);
-    expect(registeredItems[0]).toMatchObject({
-      conversation_id: conversationId,
-      hermes_session_id: rotated.id,
-    });
-
-    const incompatibleCursors = await app!.inject({
-      method: "GET",
-      url: `/api/v1/runs/${completedItem.local_run_id}/events?after=1`,
-      headers: { "last-event-id": "2" },
-    });
-    expect(incompatibleCursors.statusCode).toBe(400);
-    expect(incompatibleCursors.json()).toMatchObject({
-      error: { code: "INVALID_REQUEST" },
-    });
   });
 
   it("forwards tool approval through the run API and reconciles its terminal result", async () => {
@@ -377,4 +287,66 @@ describe("Phase 4: Queue and runs HTTP integration", () => {
     });
     expect(reconciled.approval).toBeNull();
   });
+
+  it("reconciles an accepted run after a server restart without submitting it twice", async () => {
+    const conversationId = await createMappedConversation();
+    fakeHermes.pauseNextRun = true;
+    await putDraft(conversationId, "Keep this run across restart", 0);
+
+    const sent = await app!.inject({
+      method: "POST",
+      url: `/api/v1/conversations/${conversationId}/messages`,
+      payload: {
+        client_request_id: "00000000-0000-4000-8000-000000000404",
+        expected_draft_revision: 1,
+      },
+    });
+    expect(sent.statusCode).toBe(202);
+
+    const accepted = await waitFor(async () => {
+      const response = await app!.inject({
+        method: "GET",
+        url: `/api/v1/conversations/${conversationId}/queue?include_terminal=true`,
+      });
+      const item = (response.json() as QueueView).data[0];
+      return item?.state === "accepted" && item.local_run_id ? item : undefined;
+    });
+    const runId = accepted.local_run_id!;
+    const waiting = await waitFor(async () => {
+      const response = await app!.inject({
+        method: "GET",
+        url: `/api/v1/runs/${runId}`,
+      });
+      const run = response.json() as RunView;
+      return run.approval ? run : undefined;
+    });
+    const approved = await app!.inject({
+      method: "POST",
+      url: `/api/v1/runs/${runId}/approval`,
+      payload: { choice: "once", request_id: waiting.approval!.request_id },
+    });
+    expect(approved.statusCode).toBe(202);
+
+    await app!.close();
+    app = null;
+    fakeHermes.completeApprovalRun(waiting.hermes_run_id!);
+
+    app = buildServer(config, { db: db! });
+    await app.ready();
+    const done = await waitFor(async () => {
+      const response = await app!.inject({
+        method: "GET",
+        url: `/api/v1/conversations/${conversationId}/queue?include_terminal=true`,
+      });
+      const item = (response.json() as QueueView).data[0];
+      return item?.state === "done" ? item : undefined;
+    }, 5_000);
+    expect(done.content).toBeNull();
+    expect(new RunRepository(db!).findById(runId)).toMatchObject({
+      local_state: "reconciled",
+      upstream_status: "completed",
+      events_truncated: 1,
+    });
+    expect(fakeHermes.runs.size).toBe(1);
+  }, 8_000);
 });

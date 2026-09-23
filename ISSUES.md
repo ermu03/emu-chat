@@ -154,41 +154,15 @@ export function getRenderableMessages(messages: MessageItem[]): MessageItem[] {
 
 ---
 
-## TASK-4：测试套件精简与瘦身（消除过度测试）
+## TASK-4：测试套件精简与瘦身（已完成）
 
-### 现状分析
+原测试套件有 17 个测试文件、88 个用例、3118 行，包含静态 DOM、简单纯函数和重复的上游 HTTP 矩阵测试。现已按 `AGENTS.md` 收敛为 7 个文件、37 个用例、1232 行：
 
-当前 `tests/` 目录下拥有 20 个测试文件（近千行测试代码），存在明显的**过度测试**倾向：
-- 很多简单的纯函数（如 `message-display.ts` 格式化一个 JSON、`conversation-view-cache.ts` 的基础 Map 存取、`queue-state.ts` 的条件判断）都单独写了单元测试。
-- 组件测试文件 `react-components.test.tsx`（486 行）中包含了大量纯静态 DOM 检查（例如检查 textarea 是否渲染了 placeholder、是否渲染了静态文字标签等）。这类测试极脆弱，UI 一改动就会挂，但毫无业务保障价值。
-- 维护大量非核心测试严重拖慢了前期开发的重构效率，与现阶段目标背道而驰。
+- 组件只保留删除勾选确认、发送失败保留草稿、旧保存 ACK 不覆盖新输入三个交互用例。
+- 单元保留 CAS、FIFO、租约、Hermes 协议与能力评估、SSE 广播和重放等核心机制。
+- 集成聚焦消息原子入队、派发、审批与终态对账；用共享数据库和 Fake Hermes 模拟服务重建后的 Run 恢复。删去了重复的会话和适配器矩阵。
 
-### 优化与裁剪计划
-
-遵循 `AGENTS.md` 规范，对测试目录进行大幅瘦身：
-
-1. **组件测试裁剪（`react-components.test.tsx`）**：
-   - ❌ **删除所有纯静态渲染测试**：
-     - 检查 placeholder 文本
-     - 检查图标或标题是否存在
-     - 检查普通按钮点击是否有回调
-     - 500ms 假时钟微秒级防抖精度测试
-   - ✅ **仅保留 3 个核心高危交互测试**：
-     - **不可逆删除防护**：删除确认弹窗必须勾选复选框才解锁按钮并允许提交。
-     - **断网防丢保护**：发送请求失败（如网络错误）时，输入框草稿内容必须原样保留，禁止清空。
-     - **异步竞态安全**：用户正在输入的新内容不会被稍后返回的旧保存 ACK 覆盖。
-
-2. **单元测试精简（`tests/unit/`）**：
-   - ❌ **裁撤/合并琐碎测试**：
-     - 移除 `message-display.test.ts`、`conversation-view-cache.test.ts`、`streamed-assistant-cache.test.ts`、`queue-state.test.ts` 等普通纯函数/基础数据结构测试。
-   - ✅ **保留核心机制测试**：
-     - 仓储层与状态机流转（CAS 乐观锁、FIFO 队列、租约争夺互斥）。
-     - 上游协议适配与能力评估核心契约。
-     - SSEHub 核心广播与断线重放机制。
-
-3. **集成测试聚焦（`tests/integration/`）**：
-   - 仅保留主干：端到端消息原子入队 → 协调器派发调度 → 终态对账闭环，以及进程崩溃自愈等关键容错链路。
-   - 删除过分冗余、重复覆盖的矩阵子项测试。
+现行范围与运行方式见 [测试策略](docs/10-testing.md)，取舍见 [决策笔记](.agents/notes/implemented/testing/2026-09-23-focus-test-suite-on-critical-behavior.md)。
 
 ---
 
