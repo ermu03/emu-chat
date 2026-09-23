@@ -69,11 +69,13 @@
 - 文件权限：`0o600` (仅所有者可读写)
 
 ### `SafeLogger` 日志脱敏系统
-所有日志在落盘前均通过 `SafeLogger` 处理：
+`SafeLogger` 在序列化日志前对 `meta.details` 做递归脱敏：
 - **`SENSITIVE_KEYS`**: 包含 10 个凭据相关的键（如 `password`, `token`, `secret` 等），其值将被替换为 `[REDACTED_SECRET]`。
-- **`FORBIDDEN_CONTENT_KEYS`**: 包含 11 个可能涉及用户隐私的内容键（如 `message`, `content`, `prompt` 等），其值将被替换为 `[REDACTED_CONTENT: length N]`。
+- **`FORBIDDEN_CONTENT_KEYS`**: 包含 11 个可能涉及用户隐私的内容键（如 `content`, `payload`, `text` 等）；字符串值替换为 `[REDACTED_CONTENT: length N]`，其他值替换为 `[REDACTED_CONTENT]`。
 - **文件路径脱敏**: 正则匹配替换敏感路径信息为 `[PATH]`。
-- 自动递归遍历对象和数组进行深层脱敏。
+- 对象和数组最多深入 `details` 下 8 层；更深的容器替换为 `[MAX_DEPTH]`。当前递归路径上的循环引用替换为 `[CIRCULAR]`，独立分支间的重复引用仍分别脱敏。
+
+日志的 `message` 和 `details` 以外的元数据字段不经过这段递归脱敏逻辑。
 
 ### 数据生命周期管理
 - **载荷自动清除**: 任务达到终态（Success/Failed/Cancelled）后，其 `payload_text` 将被设为 `NULL` 以释放空间。

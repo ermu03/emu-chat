@@ -27,7 +27,20 @@ const FORBIDDEN_CONTENT_KEYS = new Set([
   "payload",
 ]);
 
+const MAX_LOG_NESTING_DEPTH = 8;
+const CIRCULAR_PLACEHOLDER = "[CIRCULAR]";
+const MAX_DEPTH_PLACEHOLDER = "[MAX_DEPTH]";
+
 export function sanitizeLogValue(key: string, val: unknown): unknown {
+  return sanitizeLogValueAtDepth(key, val, 0, new WeakSet<object>());
+}
+
+function sanitizeLogValueAtDepth(
+  key: string,
+  val: unknown,
+  depth: number,
+  ancestors: WeakSet<object>,
+): unknown {
   const lowerKey = key.toLowerCase();
   if (SENSITIVE_KEYS.has(lowerKey)) {
     return "[REDACTED_SECRET]";
@@ -46,14 +59,24 @@ export function sanitizeLogValue(key: string, val: unknown): unknown {
     );
   }
   if (val !== null && typeof val === "object") {
-    if (Array.isArray(val)) {
-      return val.map((item, idx) => sanitizeLogValue(String(idx), item));
+    if (ancestors.has(val)) return CIRCULAR_PLACEHOLDER;
+    if (depth > MAX_LOG_NESTING_DEPTH) return MAX_DEPTH_PLACEHOLDER;
+
+    ancestors.add(val);
+    try {
+      if (Array.isArray(val)) {
+        return val.map((item, idx) =>
+          sanitizeLogValueAtDepth(String(idx), item, depth + 1, ancestors),
+        );
+      }
+      const cleanObj: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(val as Record<string, unknown>)) {
+        cleanObj[k] = sanitizeLogValueAtDepth(k, v, depth + 1, ancestors);
+      }
+      return cleanObj;
+    } finally {
+      ancestors.delete(val);
     }
-    const cleanObj: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(val as Record<string, unknown>)) {
-      cleanObj[k] = sanitizeLogValue(k, v);
-    }
-    return cleanObj;
   }
   return val;
 }
