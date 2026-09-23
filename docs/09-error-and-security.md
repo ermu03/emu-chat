@@ -78,8 +78,8 @@
 日志的 `message` 和 `details` 以外的元数据字段不经过这段递归脱敏逻辑。
 
 ### 数据生命周期管理
-- **载荷自动清除**: 任务达到终态（Success/Failed/Cancelled）后，其 `payload_text` 将被设为 `NULL` 以释放空间。
-- **恢复载荷 TTL**: 断点恢复载荷保留 7 天 (TTL)，支持手动调用 discard 丢弃。
+- **载荷清除**: 队列项成功完成或取消时，`payload_text` 会设为 `NULL`；失败后的恢复载荷可由用户手动丢弃。
+- **恢复载荷期限**: 系统会记录 7 天恢复期限，但目前未自动清除到期正文；待处理方案见[数据保留提案](../.agents/notes/proposed/bug-fix/2026-09-23-expire-recovery-and-terminal-control.md)。
 
 ### 请求安全性
 - **API Key 隔离**: Hermes API Key 仅在服务端环境注入，前端绝不接触。

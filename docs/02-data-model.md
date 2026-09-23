@@ -163,7 +163,7 @@ erDiagram
 - **client_request_id**: (TEXT) 客户端生成的请求 ID，唯一约束防重。
 - **fifo_seq**: (INTEGER) 先进先出序列号，控制同一会话内队列项的处理顺序。
 - **state**: (TEXT) 队列项的当前状态（如 `queued`, `dispatching` 等，详见状态机文档）。
-- **payload_text**: (TEXT) 完整的请求载荷内容。处理完成或取消后会被清空（置 NULL）以释放空间。
+- **payload_text**: (TEXT) 完整的请求载荷内容。处理完成或取消后会被清空（置 NULL），释放数据库内可复用空间，但不保证数据库文件立即缩小。
 - **payload_sha256**, **payload_bytes**: 用于验证载荷完整性和限制大小。
 - **revision**: (INTEGER) 队列项的乐观锁版本。
 - **idempotency_key**: (TEXT) 幂等键，通常带有前缀 `ec_`。
