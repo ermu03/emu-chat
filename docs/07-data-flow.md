@@ -127,6 +127,8 @@ sequenceDiagram
     Composer->>Composer: 更新本地 revision，解锁单飞状态
 ```
 
+上述流程适用于用户在输入框中手工输入。空状态建议卡片只更新 React 草稿状态，当前不会触发这条保存链路；直接发送可能使用服务端旧草稿，详见[建议卡片草稿提案](../.agents/notes/proposed/bug-fix/2026-09-24-save-prompt-starter-draft.md)。
+
 ## 5. 会话删除两阶段流程
 
 为了保证分布式架构下的数据安全，删除动作分为本地标记和上游物理删除两步：
@@ -138,7 +140,7 @@ sequenceDiagram
     participant Upstream as 上游系统 (Hermes)
 
     UI->>UI: 弹窗 + 强制勾选确认
-    UI->>API: 请求删除会话 (ID)
+    UI->>API: 请求删除会话 (ID、expected_hermes_session_id、confirmed)
     
     API->>API: 断言 (confirmed=true, session_id匹配, 无活跃Run)
     API->>API: 本地数据库标记 delete_state = 'pending'

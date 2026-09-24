@@ -33,12 +33,12 @@ Status: implemented
   - **折叠态与移动端适配**：当侧栏折叠为 `64px`，或在小屏移动端抽屉打开时，自动禁用并隐藏拖拽把手；
 - **拖拽事件机制 (Pointer Events)**：
   - 把手监听 `onPointerDown`，通过全局绑定 `pointermove` 与 `pointerup` 监听；
-  - 即使鼠标移出侧边栏或移至浏览器窗口外，依然能保持平滑跟踪；
+  - 鼠标移出侧边栏但仍在浏览器窗口内时，仍由全局监听器跟踪；
   - 拖拽进行时为全局添加 `user-select: none; cursor: col-resize;`，防止文本划选闪烁；
 - **高性能渲染与持久化同步**：
   - 拖拽移动过程使用纯本地状态高帧率更新，配合 CSS `transition: none` 消除跟手延迟；
-  - **松手后才发起网络请求**：在 `pointerup` 结束拖拽的那一刻，调用 `handleUpdatePreferences({ sidebar_width: currentWidth })` 写入后端，避免拖动过程产生密集冗余的 API 请求；
-  - 结合安全容错的 `localStorage` 缓存当前宽度，保证页面刷新时瞬间还原尺寸，杜绝首屏闪烁跳动与测试环境无 `localStorage` 异常。
+  - **松手后才发起网络请求**：在 `pointerup` 结束拖拽的那一刻，调用 `handleUpdatePreferences({ sidebar_width: currentWidth })` 尝试写入后端，避免拖动过程产生密集冗余的 API 请求；目前保存失败会被忽略。
+  - 结合安全容错的 `localStorage` 缓存当前宽度，使同一浏览器刷新后还原尺寸，并兼容无法访问 `localStorage` 的环境。初始宽度只读取这份浏览器缓存，缺失时使用 300px；不会从偏好 API 返回的 `sidebar_width` 初始化，因此跨浏览器的服务端宽度偏好尚不会自动应用。
 
 ### 3. 会话列表三点菜单增加修改标题功能 ([src/client/features/conversations/conversation-list.tsx](../../../../src/client/features/conversations/conversation-list.tsx))
 - **三点菜单增补项**：

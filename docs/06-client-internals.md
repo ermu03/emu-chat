@@ -34,7 +34,8 @@
 
 ### ConversationList (会话列表)
 - **数据分组**: 按照“置顶”与“最近”进行逻辑分组，日期采用相对时间格式化显示（如“2小时前”）。
-- **交互设计**: 行级操作菜单支持置顶、分叉 (Fork)、删除等。支持通过 `pointerdown` 或 `Escape` 键快速关闭菜单。
+- **交互设计**: 行级操作菜单支持就地修改标题、置顶、分叉 (Fork) 和删除。修改标题按 Enter 或失焦保存，按 Escape 取消；菜单支持通过 `pointerdown` 或 `Escape` 键关闭。
+- **布局调整**: 桌面端拖拽侧栏右边界即可调宽，范围为 240～480 像素，最大不超过视口宽度的 45%；折叠时宽度为 64 像素。拖拽过程只改本地状态，松手后写入 `localStorage` 并尝试更新偏好 API。初始宽度从 `localStorage` 读取，缺失时使用 300 像素；目前不会用 GET `/preferences` 返回的 `sidebar_width` 初始化侧栏。
 - **安全删除**: 删除流程需要二次确认弹窗，并强制勾选复选框，防止误删。
 
 ### DraftComposer (输入框与草稿管理)
@@ -52,8 +53,14 @@
 - **Markdown 渲染管道**: 采用 `remarkGfm` + `remarkMath` + `rehypeHighlight` + `rehypeKatex` 的标准渲染链。
 - **自定义代码块与复制**: 独立 `CodeBlock` 组件提供语言标签“药丸”顶栏以及一键复制代码按钮（附带复制成功反馈）。
 - **工具调用与结果**: 通过 `getToolResultContent` 解析工具响应结果。思考过程与工具调用收敛至胶囊折叠卡片。
-- **空状态引导**: 会话无历史消息时提供快捷开始建议卡片（Prompt Starters），点击即可联动填充草稿。
+- **空状态引导**: 会话无历史消息时提供快捷开始建议卡片（Prompt Starters）。点击会更新 React 草稿状态；输入框尚无未保存编辑时会显示建议文本，但当前不会自动保存到服务端草稿。若不再编辑就直接发送，服务端可能仍读到旧草稿。详见[建议卡片草稿提案](../.agents/notes/proposed/bug-fix/2026-09-24-save-prompt-starter-draft.md)。
 - **流式与乐观渲染**: 包含 `LiveAssistantRow` 用于处理实时流式渲染（附带停止/对账按钮），以及 `PendingUserRow` 用于乐观占位显示。
+- **当前分页限制**: 初次加载请求最早的 100 条（`order: "oldest"`）；顶部「加载更早历史消息」按钮继续按 `oldest` 和当前消息数量计算 offset，实际取得后续页。终态合并最新消息后，这个 offset 还可能跳过中间页。修正方案见[消息分页提案](../.agents/notes/proposed/bug-fix/2026-09-24-correct-message-pagination.md)。
+
+### 顶部工具栏与偏好
+- **新建与重命名**: 点击新建会话直接向 Hermes 创建标题为「新会话」的会话；点击当前会话标题可就地修改，Enter 或失焦保存，Escape 取消。
+- **主题切换**: 工具栏右上角按钮在浅色和深色间切换，并通过偏好 API 保存；载入的 `system` 主题偏好会跟随系统配色。
+- **发送快捷键**: `DraftComposer` 遵循偏好 API 返回的 `enter` 或 `mod_enter`；当前页面没有修改快捷键的入口。
 
 ### QueuePanel (排队面板)
 - **队列管理**: 基于 FIFO 的排序展示。
@@ -63,7 +70,7 @@
 ### 弹窗与辅助组件
 - **ApprovalDialog (审批弹窗)**: 提供“停止”、“拒绝”和“允许一次 (once)”三种操作选项。
 - **StatusBar (状态栏)**: Hermes 健康且无局域网 HTTP 提示时隐藏；连接或能力异常时显示重检入口。SSE 断线由 `AppShell` 的独立提示条显示。
-- **PreferencesDrawer (偏好设置)**: 允许用户配置界面主题（深/浅）、快捷键行为和侧边栏宽度等。
+`PreferencesDrawer` 源文件仍存在，但 `AppShell` 不再渲染它，页面没有设置抽屉。
 
 ## 5. 核心状态模块与缓存
 

@@ -202,7 +202,7 @@ erDiagram
 单行表，用于保存系统 UI 全局偏好配置。
 - **id**: (INTEGER) 固定为 1。
 - **theme**: 主题（system/light/dark）。
-- **sidebar_width**: 侧边栏宽度（240-520）。
+- **sidebar_width**: 服务端偏好字段，允许 240～520 像素；当前桌面端拖拽交互限制在 240～480 像素，且最多占视口宽度的 45%。
 - **send_shortcut**: 发送快捷键，如 `enter`。
 - **revision**: 用于更新的乐观锁。
 

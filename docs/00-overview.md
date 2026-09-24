@@ -14,9 +14,9 @@
 
 本地会话登记表是列表的边界：外部 Hermes 客户端创建的会话不会通过刷新列表被自动导入。对于已登记的会话，emu-chat 会向 Hermes 拉取最新的会话和消息状态；上游已删除的会话会从本地登记表清理。
 
-## 2. 完整技术栈
+## 2. 技术栈
 
-项目采用了现代化的全栈 TypeScript 生态，并严格按照最新的依赖规范进行构建。
+项目使用全栈 TypeScript，主要依赖如下。
 
 ### 前端生态
 - **框架与视图**: React 19 + React Router DOM v7
@@ -36,7 +36,7 @@
 ### 运行环境
 - **Node.js**: 要求版本 **>= 22.12** 且 **< 23**
 
-## 3. 完整目录结构树
+## 3. 主要目录结构
 
 ```text
 emu-chat/
@@ -44,11 +44,13 @@ emu-chat/
 ├── src/
 │   ├── client/              # 前端源码：包含 React 组件、页面状态、路由和浏览器 API 客户端
 │   ├── server/              # 后端源码：Fastify HTTP 服务、业务服务、协调器与 Hermes 的集成适配
-│   └── shared/              # 前后端共用逻辑：API Schema、Zod 定义、枚举和常量限制等，保证类型零漂移
+│   └── shared/              # 前后端共用的 API Schema、枚举和限制常量
 ├── tests/                   # 单元测试、组件测试和集成测试目录
 ├── public/                  # 静态资源，如 PWA manifest 和系统图标
 ├── docs/                    # 项目现状、API 参考与决策笔记规则
-├── .agents/notes/           # 工程决策笔记，目录按需创建
+├── .agents/notes/           # 待处理提案与工程决策笔记
+├── .agents/skills/          # 项目开发 Skill 的正文
+├── .claude/skills/          # Claude Code 的项目 Skill 入口
 ├── data/                    # 运行时生成的 SQLite 数据库及数据存储目录
 ├── index.html               # 前端 Vite 运行入口页面
 ├── package.json             # 项目元信息、依赖定义及 npm 脚本
@@ -86,6 +88,8 @@ HTTP 端点见 [API 参考](08-api-reference.md)，重要技术取舍见 [决策
 
 可通过在项目根目录创建 `.env` 文件来配置系统：
 
+复制 `.env.example` 后填写 Hermes API key 即可得到与 Vite 默认代理端口一致的开发配置；后端在未设置 `EMU_CHAT_PORT` 时仍默认监听 `3000`。
+
 - `EMU_CHAT_HOST`：后端服务绑定的 IP，默认 `0.0.0.0` (允许局域网访问)。如果只允许本机可改为 `127.0.0.1`。
 - `EMU_CHAT_PORT`：后端 API 监听的 HTTP 端口，默认 `3000`；开发模式建议设为 `3104`，与 Vite 的默认代理目标一致。
 - `EMU_CHAT_SERVER_URL`：Vite 开发服务器的 `/api` 代理目标，默认 `http://127.0.0.1:3104`。后端使用其他端口时，须在启动 Vite 的 shell 环境中同步设置；后端读取的 `.env` 不会自动传给 Vite 配置。
@@ -98,3 +102,7 @@ HTTP 端点见 [API 参考](08-api-reference.md)，重要技术取舍见 [决策
 ## 7. PWA 支持
 
 前端构建通过 `vite-plugin-pwa` 生成 manifest 和 Service Worker；当前设置了 `injectRegister: null`，客户端入口也没有注册 Service Worker。因此目前只有 manifest 与构建产物，离线缓存功能尚未启用；聊天和状态 API 仍需要连接后端与 Hermes。
+
+## 8. 当前界面入口
+
+新建会话直接创建标题为「新会话」的 Hermes 会话；顶部会话标题和列表三点菜单都能就地重命名。桌面端可拖拽侧栏右边界调宽，工具栏右上角可切换明暗主题。设置抽屉已从页面移除；发送快捷键偏好仍由数据库和 API 保存，当前页面没有修改入口。侧栏调宽时浏览器会缓存宽度，并在松手后尝试写入偏好 API。

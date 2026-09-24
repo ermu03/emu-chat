@@ -35,7 +35,7 @@ JSON 接口返回 JSON；运行事件订阅返回 text/event-stream。服务端�
 | POST | /conversations | CreateConversationRequestSchema；可用空对象 | 201 ConversationDetailResponseSchema |
 | GET | /conversations/:conversationId | 无 | 200 ConversationDetailResponseSchema |
 | GET | /conversations/:conversationId/messages | limit、offset、order 查询参数 | 200 MessageListResponseSchema |
-| POST | /conversations/:conversationId/messages | SendMessageRequestSchema | 202 SendMessageResponseSchema |
+| POST | /conversations/:conversation_id/messages | SendMessageRequestSchema | 202 SendMessageResponseSchema |
 | POST | /conversations/:conversationId/reset | ResetConversationRequestSchema；可用空对象 | 201 ConversationDetailResponseSchema |
 | POST | /conversations/:conversationId/fork | ForkConversationRequestSchema；可用空对象 | 201 ConversationDetailResponseSchema |
 | PATCH | /conversations/:conversationId/hermes-metadata | PatchHermesMetadataRequestSchema | 200 ConversationDetailResponseSchema |
@@ -88,3 +88,5 @@ include_terminal 只接受字符串 true 或 false，省略时按 false 处理�
 | --- | --- | --- | --- |
 | GET | /preferences | 无 | 200 PreferencesResponseSchema |
 | PUT | /preferences | PutPreferencesRequestSchema | 200 PreferencesResponseSchema |
+
+服务端仍接受 `theme`、`sidebar_width` 和 `send_shortcut` 偏好；当前页面只提供主题切换和侧栏拖拽调宽，发送快捷键没有页面内的修改入口。

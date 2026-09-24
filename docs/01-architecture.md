@@ -163,7 +163,8 @@ flowchart TD
     AppShell --> Runtime
     AppShell --> Send
     
-    Sidebar --> ConversationList["ConversationList<br/>(会话列表，切换当前会话)"]
+    Sidebar --> ConversationList["ConversationList<br/>(会话列表、重命名与侧栏调宽)"]
+    Main --> Toolbar["顶部工具栏<br/>(标题重命名、主题切换)"]
     Main --> StatusBar["StatusBar<br/>(展示 Hermes 连接状态)"]
     
     Main --> MessageView["MessageView<br/>(渲染已有聊天记录，流式更新)"]
@@ -171,8 +172,9 @@ flowchart TD
     Main --> DraftComposer["DraftComposer<br/>(文本输入，自动存草稿)"]
     
     Overlay --> ApprovalDialog["ApprovalDialog<br/>(需要用户介入批准的流程)"]
-    Overlay --> PreferencesDrawer["PreferencesDrawer<br/>(设置界面主题与快捷键)"]
 ```
+
+`PreferencesDrawer` 组件文件仍在仓库中，但 `AppShell` 不再挂载它；当前页面只提供主题快捷切换和侧栏拖拽调宽。主题、侧栏宽度与发送快捷键的持久化接口仍由 `DraftPreferencesService` 提供。
 
 ## 5. 前后端共享层 (`src/shared/`)
 

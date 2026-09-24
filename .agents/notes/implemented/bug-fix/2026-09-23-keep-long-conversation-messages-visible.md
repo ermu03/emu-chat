@@ -19,7 +19,7 @@ Status: implemented
 3. **客户端双向对账合并与增量去重**：
    - 在 [message-display.ts](../../../../src/client/features/messages/message-display.ts) 中实现 `mergeMessages(existing, incoming)`，按消息 `id` 去重并维持升序自然时序。
    - 在 [useRunRuntime](../../../../src/client/state/use-run-runtime.ts) 中，当 Run 达到 `reconciled` 终态时，向 Hermes 请求最新的 100 条消息（`order: "latest"`），通过 `mergeMessages` 合并至当前列表，随后清除对应的流式缓存。
-   - 在 [useConversationView](../../../../src/client/state/use-conversation-view.ts) 中提供 `handleLoadEarlier`，当有更早历史时以 `offset: messages.length` 分页请求更早消息并合并，同时在快照恢复与会话切换中维护 `hasMoreEarlier`。
+   - 在 [useConversationView](../../../../src/client/state/use-conversation-view.ts) 中提供 `handleLoadEarlier`，以 `order: "oldest", offset: messages.length` 请求后续页并合并，同时在快照恢复与会话切换中维护 `hasMoreEarlier`。这一分页方向及偏移仍有下述缺陷。
 4. **滚动视口锚定与顶部加载控件**：
    - 在 [MessageView](../../../../src/client/features/messages/message-view.tsx) 顶部增加「加载更早历史消息」按钮及加载中指示。
    - 在顶部追加历史消息时，利用 `scrollHeight` 差值自动修正 `scrollTop`，防止视口跳动。
@@ -27,9 +27,11 @@ Status: implemented
 ## Alternatives considered
 
 - **每次拉取全量历史**：实现直观但长对话下网络开销和渲染成本巨大，废弃。
-- **单纯追加式分页**：对于超长对话，如果在第 100+ 条处生成新消息，单纯尾部追加若对账时不拉最新条目，刷新或进入时仍可能缺失。选择对账时拉取最新一页并合并，向上提供按需加载更早历史。
+- **单纯追加式分页**：对于超长对话，如果在第 100+ 条处生成新消息，单纯尾部追加若对账时不拉最新条目，刷新或进入时仍可能缺失。选择对账时拉取最新一页并合并；当前历史分页的方向和偏移问题留待修正。
 
 ## Consequences
 
-- **收益**：长会话（>100 条）在生成完成、Run 终态对账后，最新回答保持可见且稳定；用户可随时向上查看更早消息；分页元数据真实反映 upstream 状态。
+- **收益**：长会话（>100 条）在生成完成、Run 终态对账后，最新回答保持可见；分页元数据真实反映 upstream 状态。
 - **代价**：客户端需要维护合并去重逻辑与滚动位置补偿；在上游未返回 total 时依赖 `messages.length >= limit` 推断 `has_more`。
+
+当前初次加载仍请求 `order: "oldest"` 的前 100 条，而「加载更早历史消息」使用同一排序和 `offset: messages.length`。因此该按钮实际获取的是后续页，且终态对账合并最新页后还可能跳过中间页。此问题另见[消息分页修正提案](../../proposed/bug-fix/2026-09-24-correct-message-pagination.md)。

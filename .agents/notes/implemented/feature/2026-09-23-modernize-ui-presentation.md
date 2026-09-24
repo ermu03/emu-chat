@@ -28,7 +28,7 @@ emu-chat 作为 Hermes Agent 的单用户 Web 工作台，核心状态机与后�
 3. **空状态欢迎页与快捷开始建议**（[src/client/features/messages/message-view.tsx](../../../../src/client/features/messages/message-view.tsx) & [src/client/app.tsx](../../../../src/client/app.tsx)）：
    - 空会话页面引入精致的 Hermes 发光图标徽章。
    - 新增 4 张针对软件工程高频场景的快捷建议卡片（系统架构分析、代码性能优化、高风险测试编写、新功能方案头脑风暴）。
-   - 用户点击建议卡片时，通过 `onSelectPrompt` 联动更新当前草稿并聚焦，用户可直接回车发送。
+   - 用户点击建议卡片时，通过 `onSelectPrompt` 更新 React 草稿状态；输入框尚无未保存编辑时会显示建议文本。当前实现不会自动聚焦输入框或保存建议文本，发送风险见[建议卡片草稿提案](../../proposed/bug-fix/2026-09-24-save-prompt-starter-draft.md)。
 
 4. **底部输入框悬浮岛（Floating Island）**（[src/client/features/composer/draft-composer.tsx](../../../../src/client/features/composer/draft-composer.tsx)）：
    - 输入框容器改用现代化大圆角（`18px`），获得焦点时（`:focus-within`）触发主题色外发光光环扩散（Ring Glow）。
