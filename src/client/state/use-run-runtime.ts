@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { apiClient } from "../api/client.js";
-import { mergeMessages } from "../features/messages/message-display.js";
 import {
   getCurrentRunId,
   isLiveQueueState,
@@ -23,7 +22,7 @@ export function useRunRuntime(
     activeRunRef,
     applyQueue,
     applyRun,
-    setMessages,
+    refreshLatestMessages,
     clearStreamAfterReconcile,
     appendStreamDelta,
     replaceQueueItemInView,
@@ -63,12 +62,8 @@ export function useRunRuntime(
         applyRun(run);
 
         if (run.local_state === "reconciled") {
-          const messageResponse = await apiClient.listMessages(conversationId, {
-            limit: 100,
-            order: "latest",
-          });
+          await refreshLatestMessages(conversationId);
           if (activeConversationIdRef.current === conversationId) {
-            setMessages((prev) => mergeMessages(prev, messageResponse.items));
             clearStreamAfterReconcile(run.id);
             if (lastConversationListRefreshRunIdRef.current !== run.id) {
               lastConversationListRefreshRunIdRef.current = run.id;
@@ -87,7 +82,7 @@ export function useRunRuntime(
       applyRun,
       clearStreamAfterReconcile,
       loadConversations,
-      setMessages,
+      refreshLatestMessages,
       setWorkspaceError,
     ],
   );

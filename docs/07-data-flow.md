@@ -45,8 +45,11 @@ sequenceDiagram
     Runtime->>View: 增量拼接流式文本
     Coord->>SSE: 推送 run.event (run.completed / run.reconciled)
     SSE-->>Runtime: 转发终态事件
-    Runtime->>API: 拉取最新消息
-    Runtime->>View: 合并消息并清除流式占位
+    Runtime->>View: 请求刷新已加载的消息
+    View->>API: 拉取最新页，必要时逐页补齐至已知消息
+    API-->>View: 返回消息页
+    View->>View: 按 ID 合并去重
+    Runtime->>View: 清除流式占位
 ```
 
 ## 2. 工具审批流程
@@ -108,6 +111,8 @@ sequenceDiagram
 ```
 
 首次打开且没有可保留的旧视图时，消息区显示加载状态。缓存命中时先恢复快照，再后台刷新目标会话。
+
+消息首次加载请求最新的 100 条并按 ID 升序展示；顶部按钮依据单独缓存的最早消息 ID 与 `latest` offset 加载更早历史。终态对账或缓存刷新从最新页逐页补齐至已加载消息，翻页时通过重叠页适应新消息插入造成的 offset 移动。详见[消息分页修正决定](../.agents/notes/implemented/bug-fix/2026-09-24-correct-message-pagination.md)。
 
 ## 4. 草稿同步流程
 

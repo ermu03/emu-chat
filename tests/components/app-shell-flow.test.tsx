@@ -256,6 +256,153 @@ describe("AppShell async flows", () => {
     });
   });
 
+  it("loads the newest history first and reaches older messages after terminal reconciliation shifts offsets", async () => {
+    const summary = conversation("cv_history", "History");
+    const other = conversation("cv_other", "Other");
+    mockCommonApi([summary, other]);
+    vi.stubGlobal("EventSource", FakeEventSource);
+
+    const queueItem: QueueItemResponse = {
+      object: "emu_chat.queue_item",
+      id: "qi_history",
+      conversation_id: summary.conversation_id,
+      operation_id: "op_history",
+      fifo_seq: 1,
+      state: "accepted",
+      content: "Message 260",
+      payload_bytes: 11,
+      payload_available: true,
+      recovery_expires_at: null,
+      payload_expired_at: null,
+      local_run_id: "run_history",
+      revision: 1,
+      created_at: "2026-09-23T00:00:00Z",
+      updated_at: "2026-09-23T00:00:00Z",
+      last_error_code: null,
+    };
+    const liveRun: RunResponse = {
+      object: "emu_chat.run",
+      id: "run_history",
+      conversation_id: summary.conversation_id,
+      queue_item_id: queueItem.id,
+      hermes_run_id: "upstream_history",
+      local_state: "accepted",
+      upstream_status: "running",
+      partial: false,
+      last_event_seq: 0,
+      events_truncated: false,
+      approval: null,
+      last_error_code: null,
+      started_at: "2026-09-23T00:00:00Z",
+      terminal_at: null,
+      updated_at: "2026-09-23T00:00:00Z",
+    };
+    let currentQueue = queue(summary.conversation_id, [queueItem]);
+    let currentRun = liveRun;
+    let appendedWhilePaging = false;
+    const history = Array.from({ length: 260 }, (_, index) =>
+      message(index + 1, "session_cv_history", "user", `Message ${index + 1}`),
+    );
+    vi.spyOn(apiClient, "getQueue").mockImplementation(async (id) =>
+      id === summary.conversation_id ? currentQueue : queue(id),
+    );
+    vi.spyOn(apiClient, "getRun").mockImplementation(async () => currentRun);
+    const listMessages = vi
+      .spyOn(apiClient, "listMessages")
+      .mockImplementation(async (id, params) => {
+        if (id === other.conversation_id) {
+          return messageList(id, [
+            message(1, "session_cv_other", "user", "Other message"),
+          ]);
+        }
+        if (params?.limit === 101 && !appendedWhilePaging) {
+          appendedWhilePaging = true;
+          for (let newId = 386; newId <= 395; newId++) {
+            history.push(
+              message(newId, "session_cv_history", "user", `Message ${newId}`),
+            );
+          }
+        }
+        const limit = params?.limit ?? 100;
+        const offset = params?.offset ?? 0;
+        const order = params?.order ?? "oldest";
+        const ordered = order === "latest" ? [...history].reverse() : history;
+        const items = ordered.slice(offset, offset + limit);
+        return {
+          ...messageList(id, items),
+          limit,
+          offset,
+          order,
+          returned: items.length,
+          has_more: offset + items.length < history.length,
+          total: history.length,
+        };
+      });
+
+    render(
+      <MemoryRouter initialEntries={["/conversations/cv_history"]}>
+        <AppShell />
+      </MemoryRouter>,
+    );
+    await screen.findByText("Message 260");
+    expect(screen.queryByText("Message 1")).toBeNull();
+    expect(listMessages).toHaveBeenCalledWith(summary.conversation_id, {
+      limit: 100,
+      offset: 0,
+      order: "latest",
+    });
+    await waitFor(() => expect(FakeEventSource.instances.length).toBe(1));
+
+    for (let id = 261; id <= 385; id++) {
+      history.push(message(id, "session_cv_history", "user", `Message ${id}`));
+    }
+    currentQueue = queue(summary.conversation_id, [
+      { ...queueItem, state: "done" },
+    ]);
+    currentRun = {
+      ...liveRun,
+      local_state: "reconciled",
+      upstream_status: "completed",
+    };
+    act(() => {
+      FakeEventSource.instances[0]!.emit("run.event", {
+        local_run_id: liveRun.id,
+        local_seq: 1,
+        type: "run.completed",
+        payload: {},
+      });
+    });
+    await screen.findByText("Message 385");
+    expect(screen.getByText("Message 261")).toBeDefined();
+
+    fireEvent.click(screen.getByRole("button", { name: "加载更早历史消息" }));
+    await screen.findByText("Message 96");
+    expect(screen.queryByText("Message 95")).toBeNull();
+    expect(appendedWhilePaging).toBe(true);
+    expect(listMessages).toHaveBeenCalledWith(summary.conversation_id, {
+      limit: 101,
+      offset: 99,
+      order: "latest",
+    });
+
+    fireEvent.click(
+      screen.getByText("Other", { selector: ".conversation-title" }),
+    );
+    await screen.findByText("Other message");
+    fireEvent.click(
+      screen.getByText("History", { selector: ".conversation-title" }),
+    );
+    await screen.findByText("Message 395");
+    expect(screen.getByText("Message 96")).toBeDefined();
+
+    fireEvent.click(screen.getByRole("button", { name: "加载更早历史消息" }));
+    await screen.findByText("Message 1");
+    expect(document.querySelectorAll(".message-row.user")).toHaveLength(395);
+    expect(
+      screen.queryByRole("button", { name: "加载更早历史消息" }),
+    ).toBeNull();
+  }, 15_000);
+
   it("keeps an optimistic send through queue acceptance, then replaces the stream after terminal reconciliation", async () => {
     const summary = conversation("cv_alpha", "Alpha");
     mockCommonApi([summary]);

@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { apiClient } from "../api/client.js";
 import type {
@@ -6,6 +13,7 @@ import type {
   ConversationSummary,
   DraftResponse,
   MessageItem,
+  MessageListResponse,
   QueueItemResponse,
   QueueListResponse,
   RunResponse,
@@ -13,6 +21,7 @@ import type {
 import { ConversationViewCache } from "../features/conversations/conversation-view-cache.js";
 import { mergeMessages } from "../features/messages/message-display.js";
 import { StreamedAssistantCache } from "../features/messages/streamed-assistant-cache.js";
+import { LIMITS } from "../../shared/limits.js";
 import {
   getCurrentRunId,
   getPrimaryQueueItem,
@@ -29,6 +38,7 @@ type ConversationViewSnapshot = {
   conversation: ConversationDetailResponse;
   messages: MessageItem[];
   hasMoreEarlier: boolean;
+  olderMessagesCursor: OlderMessagesCursor | null;
   draft: DraftResponse;
   queue: QueueListResponse;
   activeRun: RunResponse | null;
@@ -36,6 +46,60 @@ type ConversationViewSnapshot = {
   streamedContent: string;
   streamedRunId: string | null;
 };
+
+type OlderMessagesCursor = {
+  oldestId: number;
+  offset: number; // Position of oldestId in Hermes's latest-first order at the last fetch.
+};
+
+const MESSAGE_PAGE_SIZE = LIMITS.MESSAGES_PAGE_DEFAULT;
+
+async function fetchLatestThroughAnchor(
+  conversationId: string,
+  anchorId: number | null,
+): Promise<{
+  items: MessageItem[];
+  cursor: OlderMessagesCursor | null;
+  hasMoreEarlier: boolean;
+  reachedAnchor: boolean;
+}> {
+  const items: MessageItem[] = [];
+  let offset = 0;
+  let cursor: OlderMessagesCursor | null = null;
+
+  for (;;) {
+    const page: MessageListResponse = await apiClient.listMessages(
+      conversationId,
+      { limit: MESSAGE_PAGE_SIZE, offset, order: "latest" },
+    );
+    items.push(...page.items);
+    const oldest = page.items.at(-1);
+    if (oldest) {
+      cursor = {
+        oldestId: oldest.id,
+        offset: page.offset + page.items.length - 1,
+      };
+    }
+    const reachedAnchor =
+      anchorId !== null && page.items.some((item) => item.id === anchorId);
+    if (
+      anchorId === null ||
+      reachedAnchor ||
+      !page.has_more ||
+      page.items.length === 0
+    ) {
+      return {
+        items,
+        cursor,
+        hasMoreEarlier: page.has_more && page.items.length > 0,
+        reachedAnchor,
+      };
+    }
+    // Overlap the preceding page so messages inserted at the newest end
+    // while scanning cannot move a page boundary past the anchor.
+    offset = page.offset + Math.max(page.items.length - 1, 1);
+  }
+}
 
 export type RetainedConversationView = {
   conversationId: string;
@@ -68,11 +132,17 @@ export function useConversationView(
   const [activeConversation, setActiveConversation] =
     useState<ConversationDetailResponse | null>(null);
   const [messages, setMessages] = useState<MessageItem[]>([]);
+  const messagesRef = useRef<{
+    conversationId: string | null;
+    items: MessageItem[];
+  }>({ conversationId: null, items: [] });
   const [messagesConversationId, setMessagesConversationId] = useState<
     string | null
   >(null);
   const [hasMoreEarlier, setHasMoreEarlier] = useState(false);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
+  const olderMessagesCursorRef = useRef<OlderMessagesCursor | null>(null);
+  const latestLoadSeqRef = useRef(0);
   const [draft, setDraft] = useState<DraftResponse | null>(null);
   const [queue, setQueue] = useState<QueueListResponse | null>(null);
   const [activeRun, setActiveRun] = useState<RunResponse | null>(null);
@@ -97,6 +167,13 @@ export function useConversationView(
   useEffect(() => {
     activeConversationIdRef.current = activeConversationId;
   }, [activeConversationId]);
+
+  useLayoutEffect(() => {
+    messagesRef.current = {
+      conversationId: messagesConversationId,
+      items: messages,
+    };
+  }, [messages, messagesConversationId]);
 
   useEffect(() => {
     activeRunRef.current = activeRun;
@@ -158,6 +235,7 @@ export function useConversationView(
       conversation: currentConversation,
       messages,
       hasMoreEarlier,
+      olderMessagesCursor: olderMessagesCursorRef.current,
       draft,
       queue: currentQueue,
       activeRun: currentRun,
@@ -193,6 +271,7 @@ export function useConversationView(
       setMessages(snapshot.messages);
       setMessagesConversationId(conversationId);
       setHasMoreEarlier(snapshot.hasMoreEarlier);
+      olderMessagesCursorRef.current = snapshot.olderMessagesCursor;
       setDraft(snapshot.draft);
       setQueue(snapshot.queue);
       queueRef.current = snapshot.queue;
@@ -209,6 +288,7 @@ export function useConversationView(
       setMessages([]);
       setMessagesConversationId(null);
       setHasMoreEarlier(false);
+      olderMessagesCursorRef.current = null;
       setDraft(null);
       setQueue(null);
       queueRef.current = null;
@@ -241,20 +321,37 @@ export function useConversationView(
       };
 
       const loadMessages = async () => {
+        const latestLoadSeq = ++latestLoadSeqRef.current;
         try {
-          const response = await apiClient.listMessages(conversationId, {
-            limit: 100,
-            order: "oldest",
-          });
-          if (loadId !== activeLoadRef.current) return;
-          setMessages(response.items);
+          const anchorId = snapshot?.messages.at(-1)?.id ?? null;
+          const result = await fetchLatestThroughAnchor(
+            conversationId,
+            anchorId,
+          );
+          if (
+            loadId !== activeLoadRef.current ||
+            latestLoadSeq !== latestLoadSeqRef.current
+          )
+            return;
+          if (snapshot?.olderMessagesCursor && result.reachedAnchor) {
+            setMessages((prev) => mergeMessages(prev, result.items));
+          } else {
+            setMessages(mergeMessages([], result.items));
+            olderMessagesCursorRef.current = result.cursor;
+            setHasMoreEarlier(result.hasMoreEarlier);
+          }
           setMessagesConversationId(conversationId);
-          setHasMoreEarlier(response.has_more);
         } catch (error) {
-          if (loadId !== activeLoadRef.current || useCachedView) return;
+          if (
+            loadId !== activeLoadRef.current ||
+            latestLoadSeq !== latestLoadSeqRef.current ||
+            useCachedView
+          )
+            return;
           setMessages([]);
           setMessagesConversationId(null);
           setHasMoreEarlier(false);
+          olderMessagesCursorRef.current = null;
           reportLoadError(error, "无法从 Hermes 加载消息");
         }
       };
@@ -360,6 +457,7 @@ export function useConversationView(
       setMessages(snapshot.messages);
       setMessagesConversationId(snapshot.conversation.conversation_id);
       setHasMoreEarlier(snapshot.hasMoreEarlier);
+      olderMessagesCursorRef.current = snapshot.olderMessagesCursor;
       setDraft(snapshot.draft);
       setQueue(snapshot.queue);
       queueRef.current = snapshot.queue;
@@ -430,6 +528,7 @@ export function useConversationView(
     setMessages([]);
     setMessagesConversationId(null);
     setLoadingEarlier(false);
+    olderMessagesCursorRef.current = null;
     setConversationLoadError(null);
     setWorkspaceError(null);
     currentViewSnapshotRef.current = null;
@@ -471,21 +570,46 @@ export function useConversationView(
   );
 
   const handleLoadEarlier = useCallback(async () => {
-    if (!activeConversationId || loadingEarlier) return;
+    const cursor = olderMessagesCursorRef.current;
+    if (!activeConversationId || loadingEarlier || !hasMoreEarlier || !cursor)
+      return;
     const loadId = activeLoadRef.current;
     setLoadingEarlier(true);
     try {
-      const response = await apiClient.listMessages(activeConversationId, {
-        limit: 100,
-        offset: messages.length,
-        order: "oldest",
-      });
-      if (
-        activeConversationIdRef.current === activeConversationId &&
-        activeLoadRef.current === loadId
-      ) {
-        setMessages((prev) => mergeMessages(prev, response.items));
-        setHasMoreEarlier(response.has_more);
+      let offset = cursor.offset;
+      for (;;) {
+        const response = await apiClient.listMessages(activeConversationId, {
+          limit: MESSAGE_PAGE_SIZE + 1,
+          offset,
+          order: "latest",
+        });
+        if (
+          activeConversationIdRef.current !== activeConversationId ||
+          activeLoadRef.current !== loadId
+        )
+          return;
+
+        const firstOlderIndex = response.items.findIndex(
+          (item) => item.id < cursor.oldestId,
+        );
+        if (firstOlderIndex !== -1) {
+          const earlier = response.items.slice(firstOlderIndex);
+          const oldest = earlier.at(-1)!;
+          olderMessagesCursorRef.current = {
+            oldestId: oldest.id,
+            offset: response.offset + response.items.length - 1,
+          };
+          setMessages((prev) => mergeMessages(prev, earlier));
+          setHasMoreEarlier(response.has_more);
+          return;
+        }
+        if (!response.has_more || response.items.length === 0) {
+          setHasMoreEarlier(false);
+          return;
+        }
+        // New messages shift latest-first offsets. Keep scanning until this
+        // page reaches the oldest message already shown, then prepend older ones.
+        offset = response.offset + Math.max(response.items.length - 1, 1);
       }
     } catch (error) {
       if (
@@ -502,7 +626,31 @@ export function useConversationView(
         setLoadingEarlier(false);
       }
     }
-  }, [activeConversationId, loadingEarlier, messages.length]);
+  }, [activeConversationId, hasMoreEarlier, loadingEarlier]);
+
+  const refreshLatestMessages = useCallback(async (conversationId: string) => {
+    const loadId = activeLoadRef.current;
+    const latestLoadSeq = ++latestLoadSeqRef.current;
+    const anchorId =
+      messagesRef.current.conversationId === conversationId
+        ? (messagesRef.current.items.at(-1)?.id ?? null)
+        : null;
+    const result = await fetchLatestThroughAnchor(conversationId, anchorId);
+    if (
+      activeConversationIdRef.current !== conversationId ||
+      activeLoadRef.current !== loadId ||
+      latestLoadSeq !== latestLoadSeqRef.current
+    )
+      return;
+    if (anchorId !== null && result.reachedAnchor) {
+      setMessages((prev) => mergeMessages(prev, result.items));
+    } else {
+      setMessages(mergeMessages([], result.items));
+      olderMessagesCursorRef.current = result.cursor;
+      setHasMoreEarlier(result.hasMoreEarlier);
+    }
+    setMessagesConversationId(conversationId);
+  }, []);
 
   const applyQueue = useCallback((nextQueue: QueueListResponse | null) => {
     queueRef.current = nextQueue;
@@ -599,6 +747,7 @@ export function useConversationView(
     agentGenerating,
     loadActiveConversation,
     handleLoadEarlier,
+    refreshLatestMessages,
     handleSaveDraft,
     handleSelectPrompt,
     applyQueue,

@@ -55,7 +55,7 @@
 - **工具调用与结果**: 通过 `getToolResultContent` 解析工具响应结果。思考过程与工具调用收敛至胶囊折叠卡片。
 - **空状态引导**: 会话无历史消息时提供快捷开始建议卡片（Prompt Starters）。点击会更新 React 草稿状态；输入框尚无未保存编辑时会显示建议文本，但当前不会自动保存到服务端草稿。若不再编辑就直接发送，服务端可能仍读到旧草稿。详见[建议卡片草稿提案](../.agents/notes/proposed/bug-fix/2026-09-24-save-prompt-starter-draft.md)。
 - **流式与乐观渲染**: 包含 `LiveAssistantRow` 用于处理实时流式渲染（附带停止/对账按钮），以及 `PendingUserRow` 用于乐观占位显示。
-- **当前分页限制**: 初次加载请求最早的 100 条（`order: "oldest"`）；顶部「加载更早历史消息」按钮继续按 `oldest` 和当前消息数量计算 offset，实际取得后续页。终态合并最新消息后，这个 offset 还可能跳过中间页。修正方案见[消息分页提案](../.agents/notes/proposed/bug-fix/2026-09-24-correct-message-pagination.md)。
+- **长会话分页**: 初次加载请求最新的 100 条（`order: "latest"`），显示时按消息 ID 升序排列。顶部「加载更早历史消息」使用单独保存的最早消息 ID 和 `latest` offset；新消息使 offset 移动时，以重叠页扫描到更早的消息。终态对账和缓存会话刷新会逐页补齐至已知消息，按 ID 合并去重；分页位置随会话快照恢复。详见[消息分页修正决定](../.agents/notes/implemented/bug-fix/2026-09-24-correct-message-pagination.md)。
 
 ### 顶部工具栏与偏好
 - **新建与重命名**: 点击新建会话直接向 Hermes 创建标题为「新会话」的会话；点击当前会话标题可就地修改，Enter 或失焦保存，Escape 取消。
