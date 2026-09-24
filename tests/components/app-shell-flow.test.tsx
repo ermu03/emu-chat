@@ -663,7 +663,10 @@ describe("AppShell async flows", () => {
     expect(screen.getByText("read_file")).toBeDefined();
     finalMessages = [
       ...finalMessages,
-      message(5, "session_cv_alpha", "assistant", "Next step"),
+      {
+        ...message(5, "session_cv_alpha", "assistant", "Next step"),
+        reasoning: "The first tool found a file to inspect.",
+      },
       {
         ...message(6, "session_cv_alpha", "assistant", '{"path":"file1.txt"}'),
         tool_name: "read_file",
@@ -780,7 +783,21 @@ describe("AppShell async flows", () => {
     );
     expect(screen.getByText("list_dir").closest("details")?.open).toBe(true);
     expect(screen.getAllByText("Final answer")).toHaveLength(1);
-    expect(screen.queryByText("思考过程")).toBeNull();
+    const reasoningCard = screen.getByText("思考过程").closest("details");
+    expect(reasoningCard?.open).toBe(false);
+    const settledOrder = liveRow!.textContent!;
+    expect(settledOrder.indexOf("list_dir")).toBeLessThan(
+      settledOrder.indexOf("思考过程"),
+    );
+    expect(settledOrder.indexOf("思考过程")).toBeLessThan(
+      settledOrder.indexOf("Next step"),
+    );
+    expect(settledOrder.indexOf("Next step")).toBeLessThan(
+      settledOrder.indexOf("read_file"),
+    );
+    expect(settledOrder.indexOf("read_file")).toBeLessThan(
+      settledOrder.indexOf("Final answer"),
+    );
     expect(apiClient.listMessages).toHaveBeenCalledTimes(5);
   });
 });

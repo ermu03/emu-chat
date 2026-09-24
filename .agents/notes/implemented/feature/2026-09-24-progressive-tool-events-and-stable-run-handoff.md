@@ -11,7 +11,7 @@ Status: implemented
 ## Decision
 
 1. [RunDisplay](../../../../src/client/features/messages/run-display.ts)按 Run ID 和本地 SSE 序号保存文字段与单工具卡片。`tool.started` 立即显示「执行中」，`tool.completed` 立即显示状态和结果预览；完成事件后合并短时间内的 Hermes 消息读取。只有历史结果与未补齐的完成卡片按工具名唯一对应时，才补齐带 `tool_call_id` 的完整输入和输出。同名并发完成事件另列为进度记录，运行中的同名卡片标为待核对，不猜测配对。事件重放按序号忽略，缺口保留提示并以终态历史为准。
-2. [消息分组与展示](../../../../src/client/features/messages/message-display.ts)仍将连续助手与工具消息归入一个助手回合，但按发生顺序展示文字、思考和紧凑的单工具卡片。工具摘要显示结果短预览，展开显示完整输入输出；此前位于工具前的文字留在原位。历史中确认的思考内容保持可折叠；[未确认的 SSE 思考事件不直接成卡](../bug-fix/2026-09-24-avoid-transient-reasoning-card.md)。新布局取代顶部统一过程卡片，同时保留“不把每条原始工具消息做成大气泡”的约束。
+2. [消息分组与展示](../../../../src/client/features/messages/message-display.ts)仍将连续助手与工具消息归入一个助手回合，但按发生顺序展示文字、思考和紧凑的单工具卡片。工具摘要显示结果短预览，展开显示完整输入输出；此前位于工具前的文字留在原位。历史中确认的思考内容保持可折叠；[未确认的 SSE 思考事件不直接成卡](../bug-fix/2026-09-24-avoid-transient-reasoning-card.md)。新布局取代顶部统一过程卡片，同时保留“不把每条原始工具消息做成大气泡”的约束。后续[消息级顺序修正](./2026-09-24-preserve-assistant-output-order.md)移除了历史视图中曾将思考和工具后正文重新聚合的规则。
 3. 终态先把 RunDisplay 标记为「正在核对」，保留已有内容。读取 Hermes 历史成功后，在一次 React 更新中合并权威消息并结算 RunDisplay；实时与历史使用同一个助手行组件和稳定 key，保留已展开工具与行节点，避免重放整行淡入。失败时持续显示实时内容，通过轮询或手动核对重试。Run 状态刷新单飞执行；已对账状态不接受随后到达的旧活跃响应。
 4. 临时展示由 `useConversationView` 独占，缓存快照与切换视图一并保存；`useRunRuntime` 只解释 SSE、触发工具补读和队列/Run 对账。Hermes 继续独占会话历史，emu-chat 不保存消息副本。长会话仍按[现有分页决定](../bug-fix/2026-09-24-correct-message-pagination.md)补页合并。
 

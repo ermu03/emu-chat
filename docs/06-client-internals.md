@@ -52,7 +52,7 @@
 - **稳定历史消息渲染**: 仅当 `messages` 引用变化时重新执行回合分组；用户、系统、助手、工具和 Markdown 行使用 `React.memo`。仅流式内容变化时，已加载的历史 Markdown 不会重新解析。
 - **Markdown 渲染管道**: 采用 `remarkGfm` + `remarkMath` + `rehypeHighlight` + `rehypeKatex` 的标准渲染链。
 - **自定义代码块与复制**: 独立 `CodeBlock` 组件提供语言标签“药丸”顶栏以及一键复制代码按钮（附带复制成功反馈）。
-- **工具调用与结果**: 同一助手回合按文字、思考和工具发生顺序展示。每个工具独立成紧凑卡片，完成时摘要内显示结果预览；展开可读完整输入和输出。历史消息按同样的顺序渲染，`getToolResultContent` 解析工具响应。思考卡片只使用 Hermes 历史消息中确认的 `reasoning` 字段；`reasoning.available` 可能只是普通助手正文的临时投影，不能当作已保存的思考内容。
+- **工具调用与结果**: 同一助手回合按消息顺序展示文字、思考和工具，不把思考统一前置，也不把最后一个工具后的正文合并为最终答案。每个工具独立成紧凑卡片，完成时摘要内显示结果预览；展开可读完整输入和输出，`getToolResultContent` 解析工具响应。思考只使用 Hermes 历史消息中确认的 `reasoning` 字段，在所属消息位置显示默认折叠的紧凑入口；`reasoning.available` 可能只是普通助手正文的临时投影，不能当作已保存的思考内容。当前流式视图没有可靠的思考事件，入口可能在终态历史核对后补充。
 - **空状态引导**: 会话无历史消息时提供快捷开始建议卡片（Prompt Starters）。点击后由 `DraftComposer` 更新输入框并按正常流程保存草稿；直接发送也会等待保存成功。输入框已有用户内容时，卡片不会覆盖它，而是提示先清空；已选且未编辑的建议可以切换。详见[建议卡片草稿修正决定](../.agents/notes/implemented/bug-fix/2026-09-24-save-prompt-starter-draft.md)。
 - **流式与乐观渲染**: `AssistantTurnRow` 同时承载实时 Run 回合和 Hermes 历史回合。SSE 文字段与工具卡片逐个加入；终态后保留该行并显示核对状态，直到历史消息到达，再用相同 React key 切换权威内容，保留工具展开状态并避免整行重新淡入。`PendingUserRow` 显示发送占位。
 - **长会话分页**: 初次加载请求最新的 100 条（`order: "latest"`），显示时按消息 ID 升序排列。顶部「加载更早历史消息」使用单独保存的最早消息 ID 和 `latest` offset；新消息使 offset 移动时，以重叠页扫描到更早的消息。终态对账和缓存会话刷新会逐页补齐至已知消息，按 ID 合并去重；分页位置随会话快照恢复。详见[消息分页修正决定](../.agents/notes/implemented/bug-fix/2026-09-24-correct-message-pagination.md)。

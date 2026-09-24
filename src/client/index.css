@@ -1014,6 +1014,10 @@ select:focus-visible {
   letter-spacing: -0.005em;
 }
 
+.message-row.assistant .message-content-wrap > .message-body + .message-body {
+  margin-top: 14px;
+}
+
 .message-row.user .message-body {
   padding: 13px 18px;
   border-radius: 20px 20px 4px 20px;
@@ -1269,14 +1273,25 @@ details[open] > summary .tool-call-chevron {
   word-break: break-word;
 }
 
-/* Dedicated Reasoning Card */
+/* Keep late-confirmed reasoning as a small disclosure at its message position. */
 .reasoning-card {
-  border-color: color-mix(in srgb, var(--accent) 30%, var(--line));
-  background: color-mix(in srgb, var(--accent-wash) 40%, var(--surface-subtle));
+  margin-bottom: 6px;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.reasoning-card:hover {
+  border-color: transparent;
 }
 
 .reasoning-summary {
+  width: fit-content;
+  gap: 6px;
+  padding: 3px 0;
   color: var(--ink-soft);
+  font-size: 12.5px;
 }
 
 .reasoning-spark-icon {
@@ -1284,8 +1299,13 @@ details[open] > summary .tool-call-chevron {
 }
 
 .reasoning-details {
-  padding: 14px 16px;
-  border-top: 1px solid color-mix(in srgb, var(--accent) 20%, var(--line));
+  margin: 6px 0 8px;
+  padding: 8px 12px;
+  border-top: 0;
+  border-left: 2px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: var(--surface-subtle);
+  font-size: 13.5px;
 }
 
 .tool-item-card {

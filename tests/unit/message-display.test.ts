@@ -33,15 +33,22 @@ describe("message-display turn aggregation", () => {
     expect(failedResult).toContain("工具执行失败（退出码 2）");
   });
 
-  it("groups simple conversation without tools into distinct turns", () => {
+  it("keeps reasoning and text interleaved across messages without tools", () => {
     const messages: MessageItem[] = [
       { id: "1", role: "user", content: "Hello", timestamp: 1000 },
       {
         id: "2",
         role: "assistant",
-        content: "Hi there!",
-        reasoning: "User greeted, reply politely.",
+        content: "Let me check.",
+        reasoning: "First thought",
         timestamp: 1001,
+      },
+      {
+        id: "3",
+        role: "assistant",
+        content: "Hi there!",
+        reasoning: "Second thought",
+        timestamp: 1002,
       },
     ];
 
@@ -51,16 +58,20 @@ describe("message-display turn aggregation", () => {
     expect(turns[1].kind).toBe("assistant_turn");
 
     const assistantTurn = turns[1] as AssistantTurn;
-    expect(assistantTurn.tools).toHaveLength(0);
-    expect(assistantTurn.reasonings).toEqual(["User greeted, reply politely."]);
-    expect(assistantTurn.blocks.map((block) => block.kind)).toEqual([
-      "reasoning",
-      "text",
+    expect(
+      assistantTurn.blocks.map((block) => [
+        block.kind,
+        block.kind === "tool" ? block.tool.name : block.content,
+      ]),
+    ).toEqual([
+      ["reasoning", "First thought"],
+      ["text", "Let me check."],
+      ["reasoning", "Second thought"],
+      ["text", "Hi there!"],
     ]);
-    expect(assistantTurn.finalContent).toBe("Hi there!");
   });
 
-  it("aggregates assistant tool calls, intermediate texts, and final response into one turn", () => {
+  it("keeps text, reasoning, and tool calls in message order", () => {
     const messages: MessageItem[] = [
       { id: "u1", role: "user", content: "Search for files", timestamp: 100 },
       {
@@ -88,8 +99,38 @@ describe("message-display turn aggregation", () => {
       {
         id: "a3",
         role: "assistant",
-        content: "I found two files: file1.txt and file2.txt.",
+        content: "I found two files. I will read the first one.",
+        reasoning: "Inspect the directory result",
         timestamp: 104,
+      },
+      {
+        id: "a4",
+        role: "assistant",
+        content: JSON.stringify({ path: "file1.txt" }),
+        tool_name: "read_file",
+        tool_call_id: "call_2",
+        timestamp: 105,
+      },
+      {
+        id: "t2",
+        role: "tool",
+        content: JSON.stringify({ output: "File contents" }),
+        tool_name: "read_file",
+        tool_call_id: "call_2",
+        timestamp: 106,
+      },
+      {
+        id: "a5",
+        role: "assistant",
+        content: "The first file has useful context.",
+        timestamp: 107,
+      },
+      {
+        id: "a6",
+        role: "assistant",
+        content: "The first file contains the answer.",
+        reasoning: "Check the file content",
+        timestamp: 108,
       },
     ];
 
@@ -98,29 +139,31 @@ describe("message-display turn aggregation", () => {
 
     const assistantTurn = turns[1] as AssistantTurn;
     expect(assistantTurn.kind).toBe("assistant_turn");
-    expect(assistantTurn.tools).toHaveLength(1);
-    expect(assistantTurn.tools[0].name).toBe("list_dir");
-    expect(assistantTurn.tools[0].resultContent).toBe(
+    const tools = assistantTurn.blocks.filter((block) => block.kind === "tool");
+    expect(tools.map((block) => block.tool.name)).toEqual([
+      "list_dir",
+      "read_file",
+    ]);
+    expect(tools[0]?.tool.resultContent).toBe(
       JSON.stringify({ output: "file1.txt\nfile2.txt" }),
     );
-    expect(assistantTurn.tools[0].isError).toBe(false);
+    expect(tools[1]?.tool.resultContent).toBe(
+      JSON.stringify({ output: "File contents" }),
+    );
     expect(assistantTurn.blocks.map((block) => block.kind)).toEqual([
       "text",
       "tool",
+      "reasoning",
+      "text",
+      "tool",
+      "text",
+      "reasoning",
       "text",
     ]);
-
-    // Intermediate text before tool execution is inside steps, not in finalContent
-    expect(
-      assistantTurn.steps.some(
-        (s) => s.kind === "text" && s.content.includes("check the directory"),
-      ),
-    ).toBe(true);
-
-    // Final answer after all tools is in finalContent
-    expect(assistantTurn.finalContent).toBe(
-      "I found two files: file1.txt and file2.txt.",
-    );
+    expect(assistantTurn.blocks.at(-1)).toMatchObject({
+      kind: "text",
+      content: "The first file contains the answer.",
+    });
   });
 
   it("correctly handles turns with tools but no final text (e.g. error/interrupted)", () => {
@@ -147,9 +190,11 @@ describe("message-display turn aggregation", () => {
     const turns = groupMessagesIntoTurns(messages);
     expect(turns).toHaveLength(2);
     const assistantTurn = turns[1] as AssistantTurn;
-    expect(assistantTurn.tools).toHaveLength(1);
-    expect(assistantTurn.tools[0].isError).toBe(true);
-    expect(assistantTurn.finalContent).toBe("");
+    expect(assistantTurn.blocks).toHaveLength(1);
+    expect(assistantTurn.blocks[0]).toMatchObject({
+      kind: "tool",
+      tool: { isError: true },
+    });
   });
 
   it("does not attach a result to a different tool_call_id even when names match", () => {
@@ -173,9 +218,10 @@ describe("message-display turn aggregation", () => {
       },
     ]);
     const assistantTurn = turns[1] as AssistantTurn;
-    expect(assistantTurn.tools).toHaveLength(2);
-    expect(assistantTurn.tools[0].resultContent).toBeUndefined();
-    expect(assistantTurn.tools[1].resultContent).toBe("second result");
+    const tools = assistantTurn.blocks.filter((block) => block.kind === "tool");
+    expect(tools).toHaveLength(2);
+    expect(tools[0]?.tool.resultContent).toBeUndefined();
+    expect(tools[1]?.tool.resultContent).toBe("second result");
   });
 
   it("merges messages, deduplicates by id, and sorts in ascending chronological order", () => {

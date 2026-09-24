@@ -345,7 +345,6 @@ const AssistantTurnRow = memo(function AssistantTurnRow({
   const [expandedTools, setExpandedTools] = useState<Record<number, boolean>>(
     {},
   );
-  const hasText = turn.blocks.some((block) => block.kind === "text");
   let toolOrdinal = -1;
 
   return (
@@ -414,11 +413,7 @@ const AssistantTurnRow = memo(function AssistantTurnRow({
           }
           if (block.kind === "reasoning") {
             return (
-              <details
-                key={block.id}
-                className="tool-call-card reasoning-card"
-                open={!hasText ? true : undefined}
-              >
+              <details key={block.id} className="tool-call-card reasoning-card">
                 <summary className="tool-call-summary reasoning-summary">
                   <Sparkles size={14} className="reasoning-spark-icon" />
                   <strong>思考过程</strong>

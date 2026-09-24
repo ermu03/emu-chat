@@ -22,10 +22,6 @@ export interface AssistantTurn {
   role: "assistant";
   timestamp: number;
   blocks: TurnStep[];
-  steps: TurnStep[];
-  tools: ToolCallItem[];
-  reasonings: string[];
-  finalContent: string;
   rawMessages: MessageItem[];
 }
 
@@ -164,103 +160,13 @@ function buildAssistantTurn(chunk: MessageItem[]): AssistantTurn {
   const lastMsg = chunk[chunk.length - 1];
   const timestamp = lastMsg?.timestamp || firstMsg.timestamp;
   const turnId = `turn_assistant_${firstMsg.id}`;
+  const blocks: TurnStep[] = [];
 
-  const hasAnyTools = chunk.some(
-    (m) => m.role === "tool" || Boolean(m.tool_name) || Boolean(m.tool_call_id),
-  );
-
-  // If there are no tools at all, keep it as a simple conversational turn
-  if (!hasAnyTools) {
-    const reasonings: string[] = [];
-    const contents: string[] = [];
-    const steps: TurnStep[] = [];
-
-    for (const msg of chunk) {
-      if (msg.reasoning?.trim()) {
-        const reasoning = msg.reasoning.trim();
-        reasonings.push(reasoning);
-        steps.push({
-          kind: "reasoning",
-          id: `step_reasoning_${msg.id}`,
-          content: reasoning,
-        });
-      }
-      if (msg.content.trim()) {
-        contents.push(msg.content.trim());
-      }
-    }
-
-    return {
-      kind: "assistant_turn",
-      id: turnId,
-      role: "assistant",
-      timestamp,
-      blocks: [
-        ...steps,
-        ...(contents.length > 0
-          ? [
-              {
-                kind: "text" as const,
-                id: `step_final_${lastMsg?.id ?? firstMsg.id}`,
-                content: contents.join("\n\n"),
-              },
-            ]
-          : []),
-      ],
-      steps,
-      tools: [],
-      reasonings,
-      finalContent: contents.join("\n\n"),
-      rawMessages: chunk,
-    };
-  }
-
-  // There are tools. Find the index of the last tool-related message.
-  let lastToolIndex = -1;
-  for (let i = chunk.length - 1; i >= 0; i--) {
-    const m = chunk[i];
-    if (
-      m &&
-      (m.role === "tool" || Boolean(m.tool_name) || Boolean(m.tool_call_id))
-    ) {
-      lastToolIndex = i;
-      break;
-    }
-  }
-
-  // Any assistant message after the last tool execution without tool_name is post-tool final text
-  const finalMessageIndices = new Set<number>();
-  const finalContents: string[] = [];
-  if (lastToolIndex >= 0) {
-    for (let i = lastToolIndex + 1; i < chunk.length; i++) {
-      const m = chunk[i];
-      if (m && m.role === "assistant" && !m.tool_name && m.content.trim()) {
-        finalMessageIndices.add(i);
-        finalContents.push(m.content.trim());
-      }
-    }
-  }
-
-  const steps: TurnStep[] = [];
-
-  for (let i = 0; i < chunk.length; i++) {
-    const msg = chunk[i];
-    if (!msg) continue;
-
-    if (finalMessageIndices.has(i)) {
-      if (msg.reasoning?.trim()) {
-        steps.push({
-          kind: "reasoning",
-          id: `step_reasoning_${msg.id}`,
-          content: msg.reasoning.trim(),
-        });
-      }
-      continue;
-    }
-
+  // Hermes does not mark a final-answer phase, so keep every saved message in order.
+  for (const msg of chunk) {
     if (msg.role === "assistant") {
       if (msg.reasoning?.trim()) {
-        steps.push({
+        blocks.push({
           kind: "reasoning",
           id: `step_reasoning_${msg.id}`,
           content: msg.reasoning.trim(),
@@ -275,13 +181,13 @@ function buildAssistantTurn(chunk: MessageItem[]): AssistantTurn {
           callContent: msg.content.trim() || undefined,
           isError: false,
         };
-        steps.push({
+        blocks.push({
           kind: "tool",
           id: `step_tool_${toolId}`,
           tool: toolItem,
         });
       } else if (msg.content.trim()) {
-        steps.push({
+        blocks.push({
           kind: "text",
           id: `step_text_${msg.id}`,
           content: msg.content.trim(),
@@ -293,7 +199,7 @@ function buildAssistantTurn(chunk: MessageItem[]): AssistantTurn {
 
       // 1. Match by tool_call_id
       if (msg.tool_call_id) {
-        matchedToolStep = steps.find(
+        matchedToolStep = blocks.find(
           (s): s is { kind: "tool"; id: string; tool: ToolCallItem } =>
             s.kind === "tool" &&
             s.tool.id === msg.tool_call_id &&
@@ -303,8 +209,8 @@ function buildAssistantTurn(chunk: MessageItem[]): AssistantTurn {
 
       // 2. Match by tool_name (backwards)
       if (!matchedToolStep && !msg.tool_call_id && msg.tool_name) {
-        for (let j = steps.length - 1; j >= 0; j--) {
-          const s = steps[j];
+        for (let j = blocks.length - 1; j >= 0; j--) {
+          const s = blocks[j];
           if (
             s &&
             s.kind === "tool" &&
@@ -319,8 +225,8 @@ function buildAssistantTurn(chunk: MessageItem[]): AssistantTurn {
 
       // 3. Fallback: last unmatched tool
       if (!matchedToolStep && !msg.tool_call_id) {
-        for (let j = steps.length - 1; j >= 0; j--) {
-          const s = steps[j];
+        for (let j = blocks.length - 1; j >= 0; j--) {
+          const s = blocks[j];
           if (s && s.kind === "tool" && s.tool.resultContent === undefined) {
             matchedToolStep = s;
             break;
@@ -341,7 +247,7 @@ function buildAssistantTurn(chunk: MessageItem[]): AssistantTurn {
           resultContent: msg.content,
           isError: isToolError(msg.content),
         };
-        steps.push({
+        blocks.push({
           kind: "tool",
           id: `step_tool_${orphanTool.id}`,
           tool: orphanTool,
@@ -350,41 +256,12 @@ function buildAssistantTurn(chunk: MessageItem[]): AssistantTurn {
     }
   }
 
-  const tools = steps
-    .filter(
-      (s): s is { kind: "tool"; id: string; tool: ToolCallItem } =>
-        s.kind === "tool",
-    )
-    .map((s) => s.tool);
-
-  const reasonings = steps
-    .filter(
-      (s): s is { kind: "reasoning"; id: string; content: string } =>
-        s.kind === "reasoning",
-    )
-    .map((s) => s.content);
-
   return {
     kind: "assistant_turn",
     id: turnId,
     role: "assistant",
     timestamp,
-    blocks: [
-      ...steps,
-      ...(finalContents.length > 0
-        ? [
-            {
-              kind: "text" as const,
-              id: `step_final_${lastMsg?.id ?? firstMsg.id}`,
-              content: finalContents.join("\n\n"),
-            },
-          ]
-        : []),
-    ],
-    steps,
-    tools,
-    reasonings,
-    finalContent: finalContents.join("\n\n"),
+    blocks,
     rawMessages: chunk,
   };
 }
