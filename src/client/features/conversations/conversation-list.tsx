@@ -1,10 +1,11 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Copy,
   MessageSquarePlus,
   MoreHorizontal,
   PanelLeftClose,
   PanelLeftOpen,
+  Pencil,
   Pin,
   PinOff,
   Trash2,
@@ -26,6 +27,10 @@ export interface ConversationListProps {
   mobileOpen?: boolean;
   onMobileClose?: () => void;
   status?: string | undefined;
+  sidebarWidth?: number;
+  onSidebarWidthChange?: (width: number) => void;
+  onSidebarWidthCommit?: (width: number) => void;
+  onResizingChange?: (isResizing: boolean) => void;
 }
 
 export const ConversationList: React.FC<ConversationListProps> = ({
@@ -43,11 +48,16 @@ export const ConversationList: React.FC<ConversationListProps> = ({
   mobileOpen = false,
   onMobileClose,
   status,
+  sidebarWidth = 300,
+  onSidebarWidthChange,
+  onSidebarWidthCommit,
+  onResizingChange,
 }) => {
   const [deleteTarget, setDeleteTarget] = useState<ConversationSummary | null>(
     null,
   );
   const [deleteConfirmed, setDeleteConfirmed] = useState(false);
+  const [isResizing, setIsResizing] = useState(false);
 
   const pinned = conversations.filter((conversation) => conversation.pinned);
   const recent = conversations.filter((conversation) => !conversation.pinned);
@@ -60,6 +70,41 @@ export const ConversationList: React.FC<ConversationListProps> = ({
   const openDelete = (conversation: ConversationSummary) => {
     setDeleteTarget(conversation);
     setDeleteConfirmed(false);
+  };
+
+  const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || collapsed || mobileOpen) return;
+    event.preventDefault();
+    setIsResizing(true);
+    onResizingChange?.(true);
+    const startX = event.clientX;
+    const startWidth = sidebarWidth;
+
+    const onPointerMove = (moveEvent: PointerEvent) => {
+      const delta = moveEvent.clientX - startX;
+      const maxWidth = Math.min(480, Math.floor(window.innerWidth * 0.45));
+      const nextWidth = Math.max(240, Math.min(startWidth + delta, maxWidth));
+      onSidebarWidthChange?.(nextWidth);
+    };
+
+    const onPointerUp = (upEvent: PointerEvent) => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      setIsResizing(false);
+      onResizingChange?.(false);
+      document.body.style.removeProperty("cursor");
+      document.body.style.removeProperty("user-select");
+
+      const delta = upEvent.clientX - startX;
+      const maxWidth = Math.min(480, Math.floor(window.innerWidth * 0.45));
+      const finalWidth = Math.max(240, Math.min(startWidth + delta, maxWidth));
+      onSidebarWidthCommit?.(finalWidth);
+    };
+
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
   };
 
   return (
@@ -121,6 +166,7 @@ export const ConversationList: React.FC<ConversationListProps> = ({
                 onSelect={select}
                 onFork={onFork}
                 onDelete={openDelete}
+                onUpdateMetadata={onUpdateMetadata}
                 onTogglePin={(conversation) =>
                   onUpdateMetadata(
                     conversation.conversation_id,
@@ -138,6 +184,7 @@ export const ConversationList: React.FC<ConversationListProps> = ({
                 onSelect={select}
                 onFork={onFork}
                 onDelete={openDelete}
+                onUpdateMetadata={onUpdateMetadata}
                 onTogglePin={(conversation) =>
                   onUpdateMetadata(
                     conversation.conversation_id,
@@ -159,6 +206,17 @@ export const ConversationList: React.FC<ConversationListProps> = ({
         <span>{getStatusLabel(status)}</span>
         <span className="sidebar-footer-provider">Hermes</span>
       </div>
+
+      {!collapsed && !mobileOpen && (
+        <div
+          className={`sidebar-resizer ${isResizing ? "is-resizing" : ""}`}
+          onPointerDown={handlePointerDown}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="拖拽调整侧边栏宽度"
+          title="拖拽调整侧边栏宽度"
+        />
+      )}
 
       {deleteTarget && (
         <div
@@ -233,6 +291,7 @@ function ConversationSection({
   onFork,
   onDelete,
   onTogglePin,
+  onUpdateMetadata,
 }: {
   label?: string | undefined;
   conversations: ConversationSummary[];
@@ -241,6 +300,7 @@ function ConversationSection({
   onFork: (id: string) => void;
   onDelete: (conversation: ConversationSummary) => void;
   onTogglePin: (conversation: ConversationSummary) => void;
+  onUpdateMetadata?: ((id: string, title: string, pinned: boolean) => void) | undefined;
 }) {
   return (
     <section>
@@ -254,6 +314,7 @@ function ConversationSection({
           onFork={onFork}
           onDelete={onDelete}
           onTogglePin={onTogglePin}
+          onUpdateMetadata={onUpdateMetadata}
         />
       ))}
     </section>
@@ -267,6 +328,7 @@ function ConversationRow({
   onFork,
   onDelete,
   onTogglePin,
+  onUpdateMetadata,
 }: {
   conversation: ConversationSummary;
   active: boolean;
@@ -274,9 +336,30 @@ function ConversationRow({
   onFork: (id: string) => void;
   onDelete: (conversation: ConversationSummary) => void;
   onTogglePin: (conversation: ConversationSummary) => void;
+  onUpdateMetadata?: ((id: string, title: string, pinned: boolean) => void) | undefined;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [titleDraft, setTitleDraft] = useState(conversation.title || "");
   const actionsRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!isEditing) {
+      setTitleDraft(conversation.title || "");
+    }
+  }, [conversation.title, isEditing]);
+
+  const saveTitle = useCallback(() => {
+    setIsEditing(false);
+    const trimmed = titleDraft.trim();
+    if (trimmed && trimmed !== conversation.title) {
+      onUpdateMetadata?.(
+        conversation.conversation_id,
+        trimmed,
+        conversation.pinned,
+      );
+    }
+  }, [conversation.conversation_id, conversation.pinned, conversation.title, onUpdateMetadata, titleDraft]);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -303,8 +386,11 @@ function ConversationRow({
       className={`conversation-row ${active ? "active" : ""}`}
       role="button"
       tabIndex={0}
-      onClick={() => onSelect(conversation.conversation_id)}
+      onClick={() => {
+        if (!isEditing) onSelect(conversation.conversation_id);
+      }}
       onKeyDown={(event) => {
+        if (isEditing) return;
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
           onSelect(conversation.conversation_id);
@@ -312,9 +398,38 @@ function ConversationRow({
       }}
     >
       <div className="conversation-row-top">
-        <span className="conversation-title">
-          {conversation.title || "未命名会话"}
-        </span>
+        {isEditing ? (
+          <form
+            className="conversation-title-form"
+            onClick={(event) => event.stopPropagation()}
+            onSubmit={(event) => {
+              event.preventDefault();
+              saveTitle();
+            }}
+          >
+            <input
+              type="text"
+              className="conversation-title-input"
+              value={titleDraft}
+              onChange={(event) => setTitleDraft(event.target.value)}
+              onBlur={saveTitle}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  event.stopPropagation();
+                  setIsEditing(false);
+                  setTitleDraft(conversation.title || "");
+                }
+              }}
+              autoFocus
+              maxLength={200}
+              aria-label="编辑会话标题"
+            />
+          </form>
+        ) : (
+          <span className="conversation-title">
+            {conversation.title || "未命名会话"}
+          </span>
+        )}
         <div ref={actionsRef} className="conversation-row-actions">
           <button
             type="button"
@@ -335,6 +450,19 @@ function ConversationRow({
               aria-label="会话操作"
               onClick={(event) => event.stopPropagation()}
             >
+              <button
+                type="button"
+                role="menuitem"
+                aria-label="修改标题"
+                title="修改标题"
+                onClick={() => {
+                  setTitleDraft(conversation.title || "");
+                  setIsEditing(true);
+                  setMenuOpen(false);
+                }}
+              >
+                <Pencil size={16} />
+              </button>
               <button
                 type="button"
                 role="menuitem"

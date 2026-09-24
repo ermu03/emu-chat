@@ -13,17 +13,13 @@ import { DraftComposer } from "./features/composer/draft-composer.js";
 import { QueuePanel } from "./features/queue/queue-panel.js";
 import { isLiveRun } from "./features/queue/queue-state.js";
 import { ApprovalDialog } from "./features/approval/approval-dialog.js";
-import {
-  PreferencesDrawer,
-  type PreferencesState,
-} from "./features/preferences/preferences-drawer.js";
+import { type PreferencesState } from "./features/preferences/preferences-drawer.js";
 import {
   Check,
   Menu,
   MessageSquarePlus,
   Moon,
   Pencil,
-  Settings2,
   Sparkles,
   Sun,
 } from "lucide-react";
@@ -38,6 +34,21 @@ const DEFAULT_PREFERENCES: PreferencesState = {
   send_shortcut: "mod_enter",
   revision: 0,
 };
+
+function getStoredSidebarWidth(): number {
+  try {
+    if (typeof window !== "undefined" && window.localStorage) {
+      const cached = window.localStorage.getItem("emu-chat:sidebar-width");
+      if (cached) {
+        const num = Number(cached);
+        if (!Number.isNaN(num) && num >= 240 && num <= 480) return num;
+      }
+    }
+  } catch {
+    // Ignore storage errors in test or restricted environments
+  }
+  return 300;
+}
 
 export function AppShell() {
   const location = useLocation();
@@ -55,7 +66,8 @@ export function AppShell() {
     null,
   );
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [preferencesOpen, setPreferencesOpen] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState<number>(getStoredSidebarWidth);
+  const [isSidebarResizing, setIsSidebarResizing] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
   const routeConversationIdRef = useRef(routeConversationId);
@@ -311,13 +323,30 @@ export function AppShell() {
     setPreferences(next);
   };
 
+  const handleSidebarWidthChange = useCallback((width: number) => {
+    setSidebarWidth(width);
+  }, []);
+
+  const handleSidebarWidthCommit = useCallback(
+    (width: number) => {
+      setSidebarWidth(width);
+      try {
+        if (typeof window !== "undefined" && window.localStorage) {
+          window.localStorage.setItem("emu-chat:sidebar-width", String(width));
+        }
+      } catch {
+        // Ignore storage errors in test or restricted environments
+      }
+      void handleUpdatePreferences({ sidebar_width: width }).catch(() => {});
+    },
+    [handleUpdatePreferences],
+  );
+
   const composerDisabled =
     !hasActiveConversationView || activeConversation?.delete_state !== "none";
   const sendDisabled = status?.status !== "healthy" || composerDisabled;
   const effectivePreferences = preferences ?? DEFAULT_PREFERENCES;
-  const sidebarWidth = sidebarCollapsed
-    ? 64
-    : effectivePreferences.sidebar_width;
+  const currentSidebarWidth = sidebarCollapsed ? 64 : sidebarWidth;
   const showStop =
     isLiveRun(visibleRun) &&
     visibleRun?.upstream_status !== "waiting_for_approval";
@@ -353,9 +382,14 @@ export function AppShell() {
           void handleUpdateMetadata(conversationId, title, pinned)
         }
         loading={conversationsLoading}
+        sidebarWidth={sidebarWidth}
+        onSidebarWidthChange={handleSidebarWidthChange}
+        onSidebarWidthCommit={handleSidebarWidthCommit}
+        onResizingChange={setIsSidebarResizing}
         style={{
-          width: sidebarWidth,
-          flex: `0 0 ${sidebarWidth}px`,
+          width: currentSidebarWidth,
+          flex: `0 0 ${currentSidebarWidth}px`,
+          transition: isSidebarResizing ? "none" : undefined,
         }}
         collapsed={sidebarCollapsed}
         onToggleCollapse={() => setSidebarCollapsed((collapsed) => !collapsed)}
@@ -456,15 +490,6 @@ export function AppShell() {
                   ) : (
                     <Moon size={16} strokeWidth={1.8} />
                   )}
-                </button>
-                <button
-                  type="button"
-                  className="icon-button"
-                  onClick={() => setPreferencesOpen(true)}
-                  aria-label="打开设置"
-                  title="设置"
-                >
-                  <Settings2 size={16} strokeWidth={1.8} />
                 </button>
               </div>
             </header>
@@ -630,15 +655,6 @@ export function AppShell() {
                     <Moon size={16} strokeWidth={1.8} />
                   )}
                 </button>
-                <button
-                  type="button"
-                  className="icon-button"
-                  onClick={() => setPreferencesOpen(true)}
-                  aria-label="打开设置"
-                  title="设置"
-                >
-                  <Settings2 size={16} />
-                </button>
               </div>
             </header>
             <StatusBar
@@ -678,13 +694,6 @@ export function AppShell() {
         onApprove={() => handleApproval("once")}
         onReject={() => handleApproval("deny")}
         onCancel={handleStopRun}
-      />
-
-      <PreferencesDrawer
-        isOpen={preferencesOpen}
-        preferences={effectivePreferences}
-        onClose={() => setPreferencesOpen(false)}
-        onUpdate={handleUpdatePreferences}
       />
     </div>
   );
