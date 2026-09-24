@@ -27,8 +27,8 @@
 ## 3. API 客户端 (EmuChatApiClient)
 
 `EmuChatApiClient` 提供了统一的 API 调用封装：
-- **统一 `request<T>` 管道**: 自动附加 JSON Header、解析响应，并执行统一的错误拦截。
-- **合成错误信封**: 所有的 HTTP 或网络层错误均会被转化为 `ApiClientError`，其携带有后端的标准错误信封（如错误码、重试建议），方便业务层统一处理。
+- **统一 `request<T>` 管道**: 自动附加 JSON Header、解析响应，并在 HTTP 响应非成功时抛出 `ApiClientError`。
+- **合成错误信封**: 非成功 HTTP 响应体不是合法 JSON 时，会合成 `INTERNAL_ERROR` 信封；客户端不对可解析的错误 JSON 做 Schema 校验。Fetch 层网络错误仍以原始异常抛出。
 
 ## 4. 核心组件功能
 
@@ -58,11 +58,11 @@
 ### QueuePanel (排队面板)
 - **队列管理**: 基于 FIFO 的排序展示。
 - **就地编辑**: 列表内的项支持就地内联编辑（基于 `textarea` 和乐观锁）。
-- **撤销与取消**: 支持取消正在排队的项目。乐观提交项由 `PendingQueueItem` 渲染。
+- **取消排队**: 支持取消尚未派发的项目。乐观提交项由 `PendingQueueItem` 渲染。
 
 ### 弹窗与辅助组件
 - **ApprovalDialog (审批弹窗)**: 提供“停止”、“拒绝”和“允许一次 (once)”三种操作选项。
-- **StatusBar (状态栏)**: 健康状态下隐藏，当出现网络异常、SSE 断开等异常情况时亮起，提示警示信息并提供重试入口。
+- **StatusBar (状态栏)**: Hermes 健康且无局域网 HTTP 提示时隐藏；连接或能力异常时显示重检入口。SSE 断线由 `AppShell` 的独立提示条显示。
 - **PreferencesDrawer (偏好设置)**: 允许用户配置界面主题（深/浅）、快捷键行为和侧边栏宽度等。
 
 ## 5. 核心状态模块与缓存

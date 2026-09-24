@@ -1,8 +1,6 @@
 # emu-chat
 
-emu-chat 是轻量、单用户、在线使用的 Hermes Agent Web 工作台。Hermes 是会话历史的唯一来源；emu-chat 只保存草稿、未发送队列、运行协调状态和少量 UI 元数据，不保存完整会话副本。
-
-emu-chat 是单用户 Hermes Web 工作台。Hermes 保存会话历史，emu-chat 保存草稿、队列和运行控制状态；外部 Hermes 客户端创建的会话不会自动出现在 emu-chat 中。
+emu-chat 是轻量、单用户、在线使用的 Hermes Agent Web 工作台。Hermes 保存会话历史；emu-chat 只保存草稿、队列、运行控制状态和少量 UI 元数据，不保存完整会话副本。会话列表只包含 emu-chat 已登记的会话，外部 Hermes 客户端创建的会话不会因刷新列表而自动导入。
 
 ## 运行
 
@@ -16,13 +14,14 @@ npm install
 ```bash
 HERMES_BASE_URL=http://127.0.0.1:8642
 HERMES_API_KEY=your_token_here
-EMU_CHAT_PORT=3000
+EMU_CHAT_PORT=3104
 ```
 
 环境变量说明：
 
 - `EMU_CHAT_HOST=0.0.0.0`：让 emu-chat 监听本机所有网络接口，局域网内的其他设备也可以访问。如果只允许本机访问，可改为 `127.0.0.1`。
 - `EMU_CHAT_PORT=3104`：emu-chat 后端 API 使用的 HTTP 端口。生产模式下也由这个端口提供前端页面；端口必须没有被其他程序占用。
+- `EMU_CHAT_SERVER_URL`：开发模式下 Vite 的 `/api` 代理目标，默认 `http://127.0.0.1:3104`。若后端改用其他端口，需在启动 Vite 的 shell 环境中设置此变量；后端读取的 `.env` 不会自动传给 Vite 配置。
 
 ## 项目目录
 

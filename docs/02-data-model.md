@@ -9,7 +9,9 @@
 - **`journal_mode = WAL`**：开启 Write-Ahead Logging。极大提升读写并发性，允许读写操作同时进行，显著减少锁定冲突。
 - **`foreign_keys = ON`**：启用外键约束，保证层级数据（如 `conversations` 到 `queue_items`、`runs` 等）的引用完整性。
 - **`synchronous = NORMAL`**：在 WAL 模式下，将同步级别降为 `NORMAL`。在保证较好崩溃恢复能力的同时，避免了每次提交都强制落盘带来的性能损耗。
-- **`busy_timeout = 5000`**：设置 5 秒的重试超时时间。当遇到写锁冲突时，SQLite 会自动等待和重试，减少直接抛出 `SQLITE_BUSY` 错误的频率。
+- **`busy_timeout = 5000`**：设置 5 秒的锁等待时间。遇到写锁冲突时，SQLite 会等待锁释放，减少直接抛出 `SQLITE_BUSY` 的频率。
+
+当前不设置 `auto_vacuum`，也不定期执行 `VACUUM`。清理过期控制记录产生的空闲页可供后续写入复用；是否需要缩小数据库文件，应按实际磁盘占用重新评估。
 
 ## 2. 迁移机制 (Migrations)
 
@@ -163,21 +165,21 @@ erDiagram
 - **client_request_id**: (TEXT) 客户端生成的请求 ID，唯一约束防重。
 - **fifo_seq**: (INTEGER) 先进先出序列号，控制同一会话内队列项的处理顺序。
 - **state**: (TEXT) 队列项的当前状态（如 `queued`, `dispatching` 等，详见状态机文档）。
-- **payload_text**: (TEXT) 完整的请求载荷内容。处理完成、取消或恢复期满后会被清空（置 NULL），释放数据库内可复用空间，但不保证数据库文件立即缩小。
-- **payload_sha256**, **payload_bytes**: 用于验证载荷完整性和限制大小。
+- **payload_text**: (TEXT) 从草稿入队的消息正文。处理完成、取消或恢复期满后会被清空（置 NULL），释放数据库内可复用空间，但不保证数据库文件立即缩小。
+- **payload_sha256**, **payload_bytes**: 记录入队时消息正文的 SHA-256 摘要和 UTF-8 字节数；发送时的大小限制由服务层检查正文。
 - **revision**: (INTEGER) 队列项的乐观锁版本。
 - **idempotency_key**: (TEXT) 幂等键，通常带有前缀 `ec_`。
-- **dispatch_session_id**: (TEXT) 分发给运行器处理时的当前派发会话标识。
-- **attempt_count**: (INTEGER) 失败重试次数，限制在 0-4 次。
-- **first_attempt_at**, **admission_deadline_at**: 用于控制准入与重试的时间戳。
+- **dispatch_session_id**: (TEXT) 本次派发使用的 Hermes 会话 ID。
+- **attempt_count**: (INTEGER) 准入尝试计数，字段约束为 0～4；当前协调器首次派发记为 1，尚未执行多次准入重试。
+- **first_attempt_at**, **admission_deadline_at**: 首次派发时间及按 24 小时幂等窗口计算的截止时间；当前协调器没有读取截止时间来控制重试。
 - **recovery_expires_at**: 失败项恢复正文的 7 天截止时间；**payload_expired_at** 记录到期清理时的原截止时间，**payload_discarded_at** 记录用户主动丢弃正文的时间。
 - **last_error_code**: (TEXT) 最后一次失败原因。
 
 ### 4.5 `runs`
 对应上游 Hermes 的一次实际运行记录。
 - **id**: (TEXT) 本地 Run ID，必须以 `lr_` 开头。
-- **queue_item_id**: (TEXT) 所属队列项，一对一映射，唯一外键。
-- **conversation_id**: (TEXT) 冗余外键，便于快速按会话查询，级联删除。
+- **queue_item_id**: (TEXT) 所属队列项，一对一映射且唯一；与 `conversation_id` 组成复合外键。
+- **conversation_id**: (TEXT) 冗余会话 ID，与 `queue_item_id` 组成指向队列项的复合外键；删除队列项时级联删除 Run。
 - **hermes_run_id**: (TEXT) 上游 Hermes 分配的 Run ID。必须唯一。
 - **local_state**: (TEXT) 本地轮询/同步状态。
 - **upstream_status**: (TEXT) 上游 Hermes 传回的状态同步值。
@@ -191,7 +193,7 @@ erDiagram
 ### 4.6 `coordinator_leases`
 系统协调器用于保证集群或单实例中唯一的角色分配（如单会话仅一个活跃处理任务）。
 - **scope_type**: (TEXT) 作用域范围，`global` 或 `conversation`。
-- **scope_id**: (TEXT) 如果是 `conversation` 则为 `cv_`，否则为 `global`。
+- **scope_id**: (TEXT) 如果是 `conversation` 则为以 `cv_` 开头的会话 ID，否则为 `global`。
 - **owner_id**: (TEXT) 占用该锁的所有者 ID。
 - **lease_token**: (TEXT) 随机生成的防篡改校验令牌。
 - **expires_at**, **heartbeat_at**: 租约过期和心跳时间戳，到期后其他 worker 可抢占。
@@ -221,8 +223,8 @@ erDiagram
 ```
 - **意图解释**：
   1. `queued` 态一定不能分配 `dispatch_session_id`。
-  2. 进入 `dispatching` 和活跃执行期时，必须有明确的 `dispatch_session_id`，用于绑定处理者并防脑裂。
-  3. 当处于排队或活跃状态 (`queued` 到 `reconciling`) 时，**必须持有** `payload_text` 才能发起请求。
+  2. 进入 `dispatching` 和活跃执行期时，必须有明确的 `dispatch_session_id`，以记录本次派发使用的 Hermes 会话；并发互斥由活跃队列项唯一索引和租约保证。
+  3. 当处于排队或活跃状态 (`queued` 到 `reconciling`) 时，**必须持有** `payload_text`；协调器提交 Run 时使用其中的消息正文。
   4. 当到达终态 (`done`, `cancelled`) 时，**必须清理** `payload_text` (置为 NULL)，避免冗长载荷长期占据 SQLite 页面，造成数据库膨胀。
 
 ### 5.2 `runs` 的 CHECK 约束
@@ -250,7 +252,7 @@ erDiagram
    - **作用**：类似地，针对单会话粒度的队列，同一个 `conversation_id` 只能有一个活跃的排队项正在被分发和执行。
 3. **`ix_queue_fifo`**:
    - `CREATE INDEX ... ON queue_items (conversation_id, state, fifo_seq)`
-   - **作用**：优化队列轮询。让协程能够极快地通过 `conversation_id` 找到特定 `state`（如 `queued`）下，按 `fifo_seq` 排序最前面的待处理项，加速出队操作。
+   - **作用**：优化按会话、状态和 FIFO 序号读取队列项；全局候选派发还会检查所属会话是否暂停或待删除。
 4. **`ix_queue_recovery_expiry`**:
    - `CREATE INDEX ... ON queue_items (recovery_expires_at) WHERE payload_text IS NOT NULL ...`
    - **作用**：支持后台清理进程快速找出已过期但载荷尚未清理的僵尸项进行释放。
@@ -265,7 +267,7 @@ erDiagram
 - **`qi_`**：QueueItems（队列项 ID）
 - **`op_`**：Operations（前端和 Hermes 间的通用操作 ID）
 - **`lr_`**：Local Runs（本地 Run ID）
-- **`rq_`**：Client Requests（客户端 HTTP 请求 ID，多为无前缀 uuid 但在架构上区分）
+- **`rq_`**：服务端 HTTP 请求追踪 ID；浏览器发送消息的 `client_request_id` 是无前缀 UUID。
 - **`ec_`**：Idempotency Keys（执行幂等键）
 
 ## 8. 乐观锁 (Revision) 机制

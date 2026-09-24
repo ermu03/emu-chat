@@ -6,11 +6,13 @@
 
 它的核心设计哲学是：**上游 Hermes 是对话历史的单一真相源（Single Source of Truth）**。emu-chat 本身不存储聊天记录或会话内容的完整副本。系统自带的本地 SQLite 数据库仅用于保存以下辅助性控制数据：
 - **草稿 (Drafts)**：用户正在编辑但未发送的消息。
+- **会话登记与元数据 (Conversations)**：本地会话 ID、Hermes 会话映射及列表偏好。
 - **消息队列 (Queues)**：等待发送或按序处理的消息队列。
+- **运行记录 (Runs)**：当前和近期任务的协调及对账状态。
 - **运行租约 (Leases)**：多任务协调控制状态。
 - **UI 偏好 (Preferences)**：用户界面的显示设置和交互偏好。
 
-因为这种设计，由外部 Hermes 客户端创建的会话不会自动出现在 emu-chat 中，除非前端触发列表刷新；而且当会话在 Hermes 端被更新时，emu-chat 会拉取最新的状态来渲染。
+本地会话登记表是列表的边界：外部 Hermes 客户端创建的会话不会通过刷新列表被自动导入。对于已登记的会话，emu-chat 会向 Hermes 拉取最新的会话和消息状态；上游已删除的会话会从本地登记表清理。
 
 ## 2. 完整技术栈
 
@@ -24,7 +26,7 @@
 ### 后端生态
 - **服务框架**: Fastify v5
 - **数据库**: better-sqlite3 v12 (同步 SQLite 驱动)
-- **流式处理**: eventsource-parser v3 (解析 Hermes SSE 数据)
+- **流式处理**: `HermesClient` 用原生 Fetch 读取 Hermes SSE，并逐行解析事件帧
 
 ### 共享 / 工具
 - **类型安全**: Zod v4 + TypeScript 5.9
@@ -61,7 +63,7 @@ HTTP 端点见 [API 参考](08-api-reference.md)，重要技术取舍见 [决策
 
 | 模式 | 启动命令 | 服务架构与端口 |
 | --- | --- | --- |
-| **开发模式** | `npm run dev` | 使用 `concurrently` 同时启动前端和后端：<br>1. **前端 (Vite)**：运行在 `5173` 端口，提供热更新（HMR）。发送到 `/api` 的请求自动代理到后端。<br>2. **后端 (Fastify)**：使用 `tsx watch` 启动，默认监听 `.env` 中指定的端口（例如 `3104`）。 |
+| **开发模式** | `npm run dev` | 使用 `concurrently` 同时启动前端和后端：<br>1. **前端 (Vite)**：运行在 `5173` 端口，提供热更新（HMR）。发送到 `/api` 的请求自动代理到后端。<br>2. **后端 (Fastify)**：使用 `tsx watch` 启动，监听 `.env` 中的端口（例如 `3104`）；未配置时默认 `3000`。 |
 | **生产模式** | `npm run build` <br> `npm start` | 只启动单一 Node 进程。Fastify 运行在 `.env` 指定端口（如 `3104`），不仅提供 `/api` 接口，还会使用 `@fastify/static` 处理并提供构建好的前端静态文件（SPA 模式）。 |
 
 ## 5. npm scripts 说明
@@ -85,7 +87,8 @@ HTTP 端点见 [API 参考](08-api-reference.md)，重要技术取舍见 [决策
 可通过在项目根目录创建 `.env` 文件来配置系统：
 
 - `EMU_CHAT_HOST`：后端服务绑定的 IP，默认 `0.0.0.0` (允许局域网访问)。如果只允许本机可改为 `127.0.0.1`。
-- `EMU_CHAT_PORT`：后端 API 监听的 HTTP 端口（开发环境下 Vite 也会将代理指向该端口），默认 `3000`，常规使用 `3104`。
+- `EMU_CHAT_PORT`：后端 API 监听的 HTTP 端口，默认 `3000`；开发模式建议设为 `3104`，与 Vite 的默认代理目标一致。
+- `EMU_CHAT_SERVER_URL`：Vite 开发服务器的 `/api` 代理目标，默认 `http://127.0.0.1:3104`。后端使用其他端口时，须在启动 Vite 的 shell 环境中同步设置；后端读取的 `.env` 不会自动传给 Vite 配置。
 - `EMU_CHAT_DATA_DIR`：本地运行时数据目录（包括 SQLite 数据库文件存放处），默认 `./data`。
 - `HERMES_BASE_URL`：上游 Hermes Agent 的 API 根地址，如 `http://127.0.0.1:8642`。
 - `HERMES_API_KEY`：用于向 Hermes 发起请求的鉴权 Token。
@@ -94,7 +97,4 @@ HTTP 端点见 [API 参考](08-api-reference.md)，重要技术取舍见 [决策
 
 ## 7. PWA 支持
 
-emu-chat 的前端构建集成了 `vite-plugin-pwa`，支持作为一个离线的渐进式 Web 应用（Progressive Web App）安装在桌面上。
-
-**注册策略：**
-系统并非直接注入 ServiceWorker 注册脚本，而是使用 `injectRegister: null`。前端代码中会**手动且有条件地注册 ServiceWorker**，确保仅在**安全上下文** (Secure Context, 通常要求 HTTPS 或 localhost) 下进行注册，以符合 PWA 的安全规范要求。
+前端构建通过 `vite-plugin-pwa` 生成 manifest 和 Service Worker；当前设置了 `injectRegister: null`，客户端入口也没有注册 Service Worker。因此目前只有 manifest 与构建产物，离线缓存功能尚未启用；聊天和状态 API 仍需要连接后端与 Hermes。

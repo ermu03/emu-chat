@@ -18,10 +18,8 @@ Status: implemented
    - 在 [ConversationService.getMessages](../../../../src/server/services/conversation-service.ts) 中透传 `has_more` 和 `total`。
 3. **客户端双向对账合并与增量去重**：
    - 在 [message-display.ts](../../../../src/client/features/messages/message-display.ts) 中实现 `mergeMessages(existing, incoming)`，按消息 `id` 去重并维持升序自然时序。
-   - 在 [AppShell](../../../../src/client/app.tsx) 中：
-     - 当 Run 达到 `reconciled` 终态时，向 Hermes 请求最新的 100 条消息（`order: "latest"`），通过 `mergeMessages` 合并至当前列表，确保无论长短会话，持久化完成后的最新消息均稳妥保留，随后安全清除对应的流式缓存。
-     - 提供 `handleLoadEarlier`，当有更早历史时以 `offset: messages.length` 分页请求更早消息并合并，同时更新 `hasMoreEarlier`。
-     - 在快照恢复与会话切换中维护 `hasMoreEarlier` 状态。
+   - 在 [useRunRuntime](../../../../src/client/state/use-run-runtime.ts) 中，当 Run 达到 `reconciled` 终态时，向 Hermes 请求最新的 100 条消息（`order: "latest"`），通过 `mergeMessages` 合并至当前列表，随后清除对应的流式缓存。
+   - 在 [useConversationView](../../../../src/client/state/use-conversation-view.ts) 中提供 `handleLoadEarlier`，当有更早历史时以 `offset: messages.length` 分页请求更早消息并合并，同时在快照恢复与会话切换中维护 `hasMoreEarlier`。
 4. **滚动视口锚定与顶部加载控件**：
    - 在 [MessageView](../../../../src/client/features/messages/message-view.tsx) 顶部增加「加载更早历史消息」按钮及加载中指示。
    - 在顶部追加历史消息时，利用 `scrollHeight` 差值自动修正 `scrollTop`，防止视口跳动。

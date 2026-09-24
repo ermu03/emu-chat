@@ -35,15 +35,16 @@ sequenceDiagram
     Coord->>Coord: 获取双重租约 (Lease)
     Coord->>Coord: dispatch ()
     Coord->>Coord: submit (startRun)
+    Runtime->>SSE: Run 可见后订阅事件流
+    SSE-->>Runtime: 发送 stream.ready
     Coord->>Coord: consume (streamEvents)
     Coord->>Coord: handleEvent & reconcileById
 
-    Coord->>SSE: 推送 stream.ready
     Coord->>SSE: 推送 run.event (携带 message.delta)
     SSE-->>Runtime: useStreamEvents 接收 run.event
     Runtime->>View: 增量拼接流式文本
-    Coord->>SSE: 推送 run.reconciled (Run 完成)
-    SSE-->>Runtime: 推送终态事件
+    Coord->>SSE: 推送 run.event (run.completed / run.reconciled)
+    SSE-->>Runtime: 转发终态事件
     Runtime->>API: 拉取最新消息
     Runtime->>View: 合并消息并清除流式占位
 ```
@@ -60,8 +61,9 @@ sequenceDiagram
     participant Dialog as ApprovalDialog
 
     Agent->>Backend: 请求工具审批
-    Backend->>SSE: 推送 waiting_for_approval 事件
-    SSE->>Dialog: 挂起队列，弹出审批弹窗
+    Backend->>SSE: 推送 approval.request 事件
+    SSE->>Backend: 刷新 Run，读到 waiting_for_approval
+    SSE->>Dialog: 显示审批弹窗；当前队列项仍为 accepted
     Dialog->>Dialog: 用户选择 once / deny / stop
     Dialog->>Backend: apiClient.submitApproval(action)
     Backend->>Backend: 校验合法性并转发上游
@@ -139,7 +141,8 @@ sequenceDiagram
     UI->>API: 请求删除会话 (ID)
     
     API->>API: 断言 (confirmed=true, session_id匹配, 无活跃Run)
-    API->>API: 本地数据库标记 status = 'pending_deletion'
+    API->>API: 本地数据库标记 delete_state = 'pending'
+    API->>Upstream: 确认会话仍存在
     API->>Upstream: 检查 active_agents == 0
     Upstream-->>API: 确认安全
     API->>Upstream: 发送 deleteSession 指令
@@ -150,10 +153,12 @@ sequenceDiagram
         API-->>UI: 返回删除成功
     else 删除失败 (如超时)
         Upstream-->>API: Error
-        API->>API: 标记 status = 'failed'
+        API->>API: 标记 delete_state = 'failed'
         API-->>UI: 返回删除失败，提示重试
     end
 ```
+
+若健康检查失败或发现上游有活跃 agent，服务会撤销本地 `pending` 标记；若上游会话已不存在，则直接完成本地清理。
 
 ## 6. 故障恢复流程
 
@@ -161,9 +166,10 @@ sequenceDiagram
 
 ```mermaid
 flowchart TD
-    Crash(进程崩溃/重启) --> MarkTruncate[启动时标记 events_truncated]
-    MarkTruncate --> BroadGap[向所有连接广播 stream.gap: process_restarted]
-    BroadGap --> ClientREST[客户端触发 REST 全量重拉替换]
+    Crash(进程崩溃/重启) --> MarkTruncate[启动时标记活跃 Run 的 events_truncated]
+    MarkTruncate --> NewHub[新进程记录 process_restarted 缺口]
+    NewHub --> Reconnect[浏览器重新连接 SSE]
+    Reconnect --> ClientREST[收到 stream.gap 后刷新队列和 Run；若已对账则合并最新消息]
 
     NetDrop(SSE 客户端断线) --> ExpBackoff[客户端指数退避重连 1s→15s]
     ExpBackoff --> SendCursor[带上 lastEventId （cursor） 发起连接]
@@ -191,8 +197,9 @@ graph TD
     end
 
     SSE -->|正常接收| UI[更新界面]
-    SSE -->|发生断线或断档| Gap[触发 stream.gap]
-    Gap --> FullSync[触发全量 REST 刷新]
+    SSE -->|断线| Reconnect[指数退避重连]
+    SSE -->|收到 stream.gap| Gap[回放窗口存在缺口]
+    Gap --> FullSync[刷新队列和 Run；终态时合并最新消息]
     
     Poll -->|判断有待派发项| FastPoll[300ms 快速轮询]
     Poll -->|判断有活跃 Run| SlowPoll[2500ms 兜底轮询]
