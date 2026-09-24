@@ -17,7 +17,16 @@ import {
   PreferencesDrawer,
   type PreferencesState,
 } from "./features/preferences/preferences-drawer.js";
-import { MessageSquarePlus, Menu, Settings2, Sparkles } from "lucide-react";
+import {
+  Check,
+  Menu,
+  MessageSquarePlus,
+  Moon,
+  Pencil,
+  Settings2,
+  Sparkles,
+  Sun,
+} from "lucide-react";
 import { getErrorMessage } from "./state/app-shell-utils.js";
 import { useConversationView } from "./state/use-conversation-view.js";
 import { useRunRuntime } from "./state/use-run-runtime.js";
@@ -185,24 +194,49 @@ export function AppShell() {
     return () => media.removeEventListener("change", applyTheme);
   }, [preferences]);
 
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState("");
+
   const selectConversation = (conversationId: string) => {
+    setIsEditingTitle(false);
     view.restoreCachedView(conversationId);
     setActiveConversationId(conversationId);
     navigate(`/conversations/${encodeURIComponent(conversationId)}`);
   };
 
   const handleCreateConversation = async () => {
-    const title = window.prompt("请输入新会话标题（可选）：", "新会话");
-    if (title === null) return;
     try {
       const created = await apiClient.createConversation({
-        title: title.trim() || undefined,
+        title: "新会话",
       });
       await loadConversations();
       selectConversation(created.conversation_id);
     } catch (error) {
       setWorkspaceError(getErrorMessage(error, "创建会话失败"));
     }
+  };
+
+  const startEditingTitle = () => {
+    setTitleDraft(activeConversationTitle);
+    setIsEditingTitle(true);
+  };
+
+  const saveTitleEdit = async () => {
+    setIsEditingTitle(false);
+    if (!activeConversationId) return;
+    const trimmed = titleDraft.trim();
+    if (trimmed && trimmed !== activeConversationTitle) {
+      await handleUpdateMetadata(
+        activeConversationId,
+        trimmed,
+        activeConversation?.pinned ?? false,
+      );
+    }
+  };
+
+  const cancelTitleEdit = () => {
+    setIsEditingTitle(false);
+    setTitleDraft(activeConversationTitle);
   };
 
   const handleFork = async (conversationId: string) => {
@@ -356,16 +390,73 @@ export function AppShell() {
                 >
                   <Menu size={17} />
                 </button>
-                <span className="brand-mark" aria-hidden="true">
-                  e
-                </span>
                 <div className="toolbar-title-block">
-                  <div className="main-toolbar-title">
-                    {activeConversationTitle}
-                  </div>
+                  {isEditingTitle ? (
+                    <form
+                      className="toolbar-title-form"
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        void saveTitleEdit();
+                      }}
+                    >
+                      <input
+                        type="text"
+                        className="toolbar-title-input"
+                        value={titleDraft}
+                        onChange={(e) => setTitleDraft(e.target.value)}
+                        onBlur={() => void saveTitleEdit()}
+                        onKeyDown={(e) => {
+                          if (e.key === "Escape") cancelTitleEdit();
+                        }}
+                        autoFocus
+                        maxLength={200}
+                        aria-label="编辑会话标题"
+                      />
+                      <button
+                        type="submit"
+                        className="icon-button"
+                        aria-label="保存标题"
+                        title="保存标题"
+                      >
+                        <Check size={14} />
+                      </button>
+                    </form>
+                  ) : (
+                    <div
+                      className="main-toolbar-title-wrap"
+                      onClick={startEditingTitle}
+                      title="点击修改会话标题"
+                    >
+                      <div className="main-toolbar-title">
+                        {activeConversationTitle}
+                      </div>
+                      <Pencil size={12} className="toolbar-title-edit-icon" />
+                    </div>
+                  )}
                 </div>
               </div>
               <div className="main-toolbar-end">
+                <button
+                  type="button"
+                  className="icon-button theme-toggle-btn"
+                  onClick={() => {
+                    const current = document.documentElement.dataset.theme;
+                    const next = current === "dark" ? "light" : "dark";
+                    void handleUpdatePreferences({ theme: next });
+                  }}
+                  aria-label="切换明暗主题"
+                  title={
+                    document.documentElement.dataset.theme === "dark"
+                      ? "切换为浅色模式"
+                      : "切换为深色模式"
+                  }
+                >
+                  {document.documentElement.dataset.theme === "dark" ? (
+                    <Sun size={16} strokeWidth={1.8} />
+                  ) : (
+                    <Moon size={16} strokeWidth={1.8} />
+                  )}
+                </button>
                 <button
                   type="button"
                   className="icon-button"
@@ -515,20 +606,40 @@ export function AppShell() {
                 >
                   <Menu size={17} />
                 </button>
-                <span className="brand-mark" aria-hidden="true">
-                  e
-                </span>
                 <span className="main-toolbar-title">emu-chat</span>
               </div>
-              <button
-                type="button"
-                className="icon-button"
-                onClick={() => setPreferencesOpen(true)}
-                aria-label="打开设置"
-                title="设置"
-              >
-                <Settings2 size={16} />
-              </button>
+              <div className="main-toolbar-end">
+                <button
+                  type="button"
+                  className="icon-button theme-toggle-btn"
+                  onClick={() => {
+                    const current = document.documentElement.dataset.theme;
+                    const next = current === "dark" ? "light" : "dark";
+                    void handleUpdatePreferences({ theme: next });
+                  }}
+                  aria-label="切换明暗主题"
+                  title={
+                    document.documentElement.dataset.theme === "dark"
+                      ? "切换为浅色模式"
+                      : "切换为深色模式"
+                  }
+                >
+                  {document.documentElement.dataset.theme === "dark" ? (
+                    <Sun size={16} strokeWidth={1.8} />
+                  ) : (
+                    <Moon size={16} strokeWidth={1.8} />
+                  )}
+                </button>
+                <button
+                  type="button"
+                  className="icon-button"
+                  onClick={() => setPreferencesOpen(true)}
+                  aria-label="打开设置"
+                  title="设置"
+                >
+                  <Settings2 size={16} />
+                </button>
+              </div>
             </header>
             <StatusBar
               status={status}

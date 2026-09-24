@@ -360,23 +360,31 @@ const AssistantTurnRow = memo(function AssistantTurnRow({
         {/* Collapsible reasoning card when no tools are present */}
         {!hasTools && hasReasonings && (
           <details
-            className="tool-call-card"
+            className="tool-call-card reasoning-card"
             open={!turn.finalContent ? true : undefined}
           >
-            <summary className="tool-call-summary">
+            <summary className="tool-call-summary reasoning-summary">
+              <Sparkles
+                size={14}
+                strokeWidth={1.8}
+                className="reasoning-spark-icon"
+              />
+              <strong>思考过程</strong>
               <ChevronDown
                 size={14}
                 strokeWidth={1.8}
                 className="tool-call-chevron"
               />
-              <strong>思考过程</strong>
             </summary>
-            <div className="tool-call-details">
-              {turn.reasonings.map((reasoning, idx) => (
-                <div key={idx} className="message-body">
-                  <MarkdownContent text={reasoning} />
-                </div>
-              ))}
+            <div className="tool-call-details reasoning-details">
+              <div className="reasoning-trace-line" aria-hidden="true" />
+              <div className="reasoning-content-flow">
+                {turn.reasonings.map((reasoning, idx) => (
+                  <div key={idx} className="message-body reasoning-text">
+                    <MarkdownContent text={reasoning} />
+                  </div>
+                ))}
+              </div>
             </div>
           </details>
         )}

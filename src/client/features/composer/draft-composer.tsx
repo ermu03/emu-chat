@@ -240,12 +240,26 @@ export const DraftComposer: React.FC<DraftComposerProps> = ({
       />
       <div className="composer-footer">
         <div className="composer-meta">
-          <span className={isOverLimit ? "error" : ""}>
+          <span
+            className={`composer-byte-counter ${isOverLimit ? "error" : ""}`}
+          >
             {byteCount.toLocaleString()} /{" "}
             {LIMITS.INPUT_MAX_BYTES.toLocaleString()} bytes
           </span>
           <span className="composer-shortcut-hint" title="发送快捷键">
-            {sendShortcut === "mod_enter" ? "⌘/Ctrl + ↵ 发送" : "↵ 发送"}
+            {sendShortcut === "mod_enter" ? (
+              <>
+                <kbd className="kbd-cap">⌘ / Ctrl</kbd>
+                <span className="kbd-sep">+</span>
+                <kbd className="kbd-cap">↵</kbd>
+                <span className="kbd-action">发送</span>
+              </>
+            ) : (
+              <>
+                <kbd className="kbd-cap">↵</kbd>
+                <span className="kbd-action">发送</span>
+              </>
+            )}
           </span>
           {saveError && <span className="error">{saveError}</span>}
           {sendError && <span className="error">{sendError}</span>}

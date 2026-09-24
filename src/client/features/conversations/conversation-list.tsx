@@ -70,9 +70,13 @@ export const ConversationList: React.FC<ConversationListProps> = ({
     >
       <div className="sidebar-header">
         <div className="brand-row">
-          <span className="brand-mark" aria-hidden="true">
-            e
-          </span>
+          <img
+            src="/icons/icon.svg"
+            alt="emu-chat"
+            className="brand-logo"
+            width={28}
+            height={28}
+          />
           <span className="brand-name">emu-chat</span>
           <button
             type="button"
