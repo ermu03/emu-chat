@@ -13,10 +13,11 @@
 | 单元 | `tests/unit/hermes-capabilities.test.ts` | Hermes 必需能力与健康状态评估 |
 | 单元 | `tests/unit/hermes-adapter-real-contract.test.ts` | 匿名真实 Hermes 0.21 报文的规范化、Run 接纳和 SSE 契约 |
 | 单元 | `tests/unit/message-display.test.ts` | 助手回合聚合、工具结果配对、错误显示与消息合并去重 |
+| 单元 | `tests/unit/run-display.test.ts` | Run 事件去重、同名并发工具结果不猜测配对、终态后不再写入 |
 | 单元 | `tests/unit/sse-hub-contract.test.ts` | 浏览器 SSE 广播、断线重放、缺口和缓冲限制 |
 | 集成 | `tests/integration/phase4-queue-runs.test.ts` | 草稿原子入队与幂等、跳过暂停会话队列头、协调器派发、审批与终态对账、恢复正文到期限制，以及保留数据库和上游状态的服务重建恢复 |
 | 组件 | `tests/components/react-components.test.tsx` | 删除前复选确认、发送失败保留草稿、旧保存 ACK 不覆盖新输入；建议卡片保存期间的编辑防丢失 |
-| 组件 | `tests/components/app-shell-flow.test.tsx` | 切换会话时缓存恢复与旧响应隔离；发送占位、SSE 增量和终态对账；长会话分页方向、偏移移动及缓存游标恢复；建议文本先保存再发送及失败重试 |
+| 组件 | `tests/components/app-shell-flow.test.tsx` | 切换会话时缓存恢复与旧响应隔离；发送占位、文字与逐个工具 SSE、未确认思考事件、延迟终态交接及展开状态；长会话分页方向、偏移移动及缓存游标恢复；建议文本先保存再发送及失败重试 |
 
 集成测试用 `FakeHermesServer` 提供可控的 Hermes HTTP/SSE 服务，用内存 SQLite 隔离用例；协议测试使用 `tests/fixtures/hermes/real-hermes-021.fixture.ts` 中的匿名报文。重建恢复用例会关闭并重建 Fastify 实例，沿用同一数据库和 Fake Hermes，以验证已接纳 Run 继续对账；它不启动或杀死独立操作系统进程。
 

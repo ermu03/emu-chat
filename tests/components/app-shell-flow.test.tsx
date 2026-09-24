@@ -490,7 +490,7 @@ describe("AppShell async flows", () => {
     ).toBeNull();
   }, 15_000);
 
-  it("keeps an optimistic send through queue acceptance, then replaces the stream after terminal reconciliation", async () => {
+  it("shows tool progress before terminal and keeps the assistant row while history is delayed", async () => {
     const summary = conversation("cv_alpha", "Alpha");
     mockCommonApi([summary]);
     vi.stubGlobal("EventSource", FakeEventSource);
@@ -534,12 +534,16 @@ describe("AppShell async flows", () => {
     let currentQueue = queue(summary.conversation_id);
     let currentRun = liveRun;
     let finalMessages: MessageItem[] = [];
+    let delayTerminalHistory = false;
+    const terminalHistory = deferred<MessageListResponse>();
     vi.spyOn(apiClient, "getQueue").mockImplementation(
       async () => currentQueue,
     );
     vi.spyOn(apiClient, "getRun").mockImplementation(async () => currentRun);
     vi.spyOn(apiClient, "listMessages").mockImplementation(async (id) =>
-      messageList(id, finalMessages),
+      delayTerminalHistory
+        ? terminalHistory.promise
+        : messageList(id, finalMessages),
     );
     vi.spyOn(apiClient, "putDraft").mockResolvedValue(
       draft(summary.conversation_id, "Check the design", 1),
@@ -592,6 +596,136 @@ describe("AppShell async flows", () => {
     });
     expect(screen.getByText("Streaming answer")).toBeDefined();
 
+    act(() => {
+      source.emit("run.event", {
+        local_run_id: "run_1",
+        local_seq: 2,
+        type: "tool.started",
+        payload: { tool: "list_dir", preview: '{"path":"."}' },
+      });
+    });
+    expect(screen.getByText("list_dir")).toBeDefined();
+    expect(screen.getByText("执行中")).toBeDefined();
+    finalMessages = [
+      message(1, "session_cv_alpha", "user", "Check the design"),
+      message(2, "session_cv_alpha", "assistant", "Streaming answer"),
+      {
+        ...message(3, "session_cv_alpha", "assistant", '{"path":"."}'),
+        tool_name: "list_dir",
+        tool_call_id: "call_1",
+      },
+      {
+        ...message(
+          4,
+          "session_cv_alpha",
+          "assistant",
+          '{"output":"file1.txt"}',
+        ),
+        role: "tool",
+        tool_name: "list_dir",
+        tool_call_id: "call_1",
+      },
+    ];
+    act(() => {
+      source.emit("run.event", {
+        local_run_id: "run_1",
+        local_seq: 3,
+        type: "tool.completed",
+        payload: { tool: "list_dir", preview: "file1.txt", error: false },
+      });
+    });
+    expect(screen.getByText("已完成")).toBeDefined();
+    expect(document.querySelector(".tool-call-preview")?.textContent).toBe(
+      "file1.txt",
+    );
+    await waitFor(() => expect(screen.getByText("输入")).toBeDefined(), {
+      timeout: 2_000,
+    });
+    const toolCard = screen.getByText("list_dir").closest("details")!;
+    fireEvent.click(toolCard.querySelector("summary")!);
+    await waitFor(() => expect(toolCard.open).toBe(true));
+
+    act(() => {
+      source.emit("run.event", {
+        local_run_id: "run_1",
+        local_seq: 4,
+        type: "message.delta",
+        payload: { delta: "Next step" },
+      });
+      source.emit("run.event", {
+        local_run_id: "run_1",
+        local_seq: 5,
+        type: "tool.started",
+        payload: { tool: "read_file", preview: "file1.txt" },
+      });
+    });
+    expect(screen.getByText("Next step")).toBeDefined();
+    expect(screen.getByText("read_file")).toBeDefined();
+    finalMessages = [
+      ...finalMessages,
+      message(5, "session_cv_alpha", "assistant", "Next step"),
+      {
+        ...message(6, "session_cv_alpha", "assistant", '{"path":"file1.txt"}'),
+        tool_name: "read_file",
+        tool_call_id: "call_2",
+      },
+      {
+        ...message(
+          7,
+          "session_cv_alpha",
+          "assistant",
+          '{"output":"file content"}',
+        ),
+        role: "tool",
+        tool_name: "read_file",
+        tool_call_id: "call_2",
+      },
+    ];
+    act(() => {
+      source.emit("run.event", {
+        local_run_id: "run_1",
+        local_seq: 6,
+        type: "tool.completed",
+        payload: { tool: "read_file", preview: "file content", error: false },
+      });
+    });
+    expect(document.querySelectorAll(".tool-call-preview")).toHaveLength(2);
+    await waitFor(
+      () =>
+        expect(
+          screen.getByText("read_file").closest("details")?.textContent,
+        ).toContain("输入"),
+      { timeout: 2_000 },
+    );
+    act(() => {
+      source.emit("run.event", {
+        local_run_id: "run_1",
+        local_seq: 7,
+        type: "message.delta",
+        payload: { delta: "Final answer" },
+      });
+      source.emit("run.event", {
+        local_run_id: "run_1",
+        local_seq: 8,
+        type: "reasoning.available",
+        payload: { text: "Final answer" },
+      });
+    });
+    const liveRow = screen
+      .getByText("Streaming answer")
+      .closest(".message-row");
+    expect(screen.getByText("Final answer")).toBeDefined();
+    expect(screen.queryByText("思考过程")).toBeNull();
+    const order = liveRow!.textContent!;
+    expect(order.indexOf("Streaming answer")).toBeLessThan(
+      order.indexOf("list_dir"),
+    );
+    expect(order.indexOf("list_dir")).toBeLessThan(order.indexOf("Next step"));
+    expect(order.indexOf("Next step")).toBeLessThan(order.indexOf("read_file"));
+    expect(order.indexOf("read_file")).toBeLessThan(
+      order.indexOf("Final answer"),
+    );
+
     currentQueue = queue(summary.conversation_id, [
       { ...queueItem, state: "done" },
     ]);
@@ -601,18 +735,52 @@ describe("AppShell async flows", () => {
       upstream_status: "completed",
     };
     finalMessages = [
-      message(1, "session_cv_alpha", "user", "Check the design"),
-      message(2, "session_cv_alpha", "assistant", "Final answer"),
+      ...finalMessages,
+      message(8, "session_cv_alpha", "assistant", "Final answer"),
     ];
+    delayTerminalHistory = true;
     act(() => {
       source.emit("run.event", {
         local_run_id: "run_1",
-        local_seq: 2,
+        local_seq: 9,
         type: "run.completed",
         payload: {},
       });
     });
-    await screen.findByText("Final answer");
-    expect(screen.queryByText("Streaming answer")).toBeNull();
+    await screen.findByText("正在核对回复…");
+    await waitFor(() =>
+      expect(apiClient.listMessages).toHaveBeenCalledTimes(4),
+    );
+    act(() => {
+      source.emit("run.event", {
+        local_run_id: "run_1",
+        local_seq: 10,
+        type: "run.reconciled",
+        payload: {},
+      });
+    });
+    expect(screen.getByText("Streaming answer").closest(".message-row")).toBe(
+      liveRow,
+    );
+    expect(screen.getByText("list_dir").closest("details")?.open).toBe(true);
+    await act(async () => {
+      terminalHistory.reject(
+        new Error("Hermes history is temporarily unavailable"),
+      );
+    });
+    expect(screen.getByText("Streaming answer").closest(".message-row")).toBe(
+      liveRow,
+    );
+    expect(screen.getByText("正在核对回复…")).toBeDefined();
+    delayTerminalHistory = false;
+    fireEvent.click(screen.getByRole("button", { name: "重新核对运行状态" }));
+    await waitFor(() => expect(screen.queryByText("正在核对回复…")).toBeNull());
+    expect(screen.getByText("Streaming answer").closest(".message-row")).toBe(
+      liveRow,
+    );
+    expect(screen.getByText("list_dir").closest("details")?.open).toBe(true);
+    expect(screen.getAllByText("Final answer")).toHaveLength(1);
+    expect(screen.queryByText("思考过程")).toBeNull();
+    expect(apiClient.listMessages).toHaveBeenCalledTimes(5);
   });
 });

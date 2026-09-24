@@ -14,8 +14,8 @@
 
 | 模块 | 持有状态与副作用 |
 | --- | --- |
-| `useConversationView` | 当前会话详情、消息、草稿、队列、Run 快照、流式文本、LRU 缓存、历史消息加载和旧请求隔离。`messagesConversationId` 标明消息属于哪个会话。 |
-| `useRunRuntime` | Run 的 SSE 订阅、事件缺口提示、运行状态轮询、终态对账，以及队列项和 Run 操作。 |
+| `useConversationView` | 当前会话详情、消息、草稿、队列、Run 快照、有序实时回合、LRU 缓存、历史消息加载和旧请求隔离。`messagesConversationId` 标明消息属于哪个会话。 |
+| `useRunRuntime` | Run 的 SSE 订阅、工具完成后的增量读取、事件缺口提示、运行状态单飞轮询、终态对账，以及队列项和 Run 操作。 |
 | `useMessageSend` | 发送请求 UUID、待确认提交的乐观占位、发送后队列与草稿更新。 |
 
 `AppShell` 将 `useConversationView` 的视图状态传给 Run 和发送 Hook。Run Hook 通过视图提供的更新方法写入队列、Run 和消息；发送 Hook 在 API 接受提交后写入队列项并触发 Run 刷新。共享状态只有一个所有者，避免两条异步流程各维护一份当前队列。
@@ -52,9 +52,9 @@
 - **稳定历史消息渲染**: 仅当 `messages` 引用变化时重新执行回合分组；用户、系统、助手、工具和 Markdown 行使用 `React.memo`。仅流式内容变化时，已加载的历史 Markdown 不会重新解析。
 - **Markdown 渲染管道**: 采用 `remarkGfm` + `remarkMath` + `rehypeHighlight` + `rehypeKatex` 的标准渲染链。
 - **自定义代码块与复制**: 独立 `CodeBlock` 组件提供语言标签“药丸”顶栏以及一键复制代码按钮（附带复制成功反馈）。
-- **工具调用与结果**: 通过 `getToolResultContent` 解析工具响应结果。思考过程与工具调用收敛至胶囊折叠卡片。
+- **工具调用与结果**: 同一助手回合按文字、思考和工具发生顺序展示。每个工具独立成紧凑卡片，完成时摘要内显示结果预览；展开可读完整输入和输出。历史消息按同样的顺序渲染，`getToolResultContent` 解析工具响应。思考卡片只使用 Hermes 历史消息中确认的 `reasoning` 字段；`reasoning.available` 可能只是普通助手正文的临时投影，不能当作已保存的思考内容。
 - **空状态引导**: 会话无历史消息时提供快捷开始建议卡片（Prompt Starters）。点击后由 `DraftComposer` 更新输入框并按正常流程保存草稿；直接发送也会等待保存成功。输入框已有用户内容时，卡片不会覆盖它，而是提示先清空；已选且未编辑的建议可以切换。详见[建议卡片草稿修正决定](../.agents/notes/implemented/bug-fix/2026-09-24-save-prompt-starter-draft.md)。
-- **流式与乐观渲染**: 包含 `LiveAssistantRow` 用于处理实时流式渲染（附带停止/对账按钮），以及 `PendingUserRow` 用于乐观占位显示。
+- **流式与乐观渲染**: `AssistantTurnRow` 同时承载实时 Run 回合和 Hermes 历史回合。SSE 文字段与工具卡片逐个加入；终态后保留该行并显示核对状态，直到历史消息到达，再用相同 React key 切换权威内容，保留工具展开状态并避免整行重新淡入。`PendingUserRow` 显示发送占位。
 - **长会话分页**: 初次加载请求最新的 100 条（`order: "latest"`），显示时按消息 ID 升序排列。顶部「加载更早历史消息」使用单独保存的最早消息 ID 和 `latest` offset；新消息使 offset 移动时，以重叠页扫描到更早的消息。终态对账和缓存会话刷新会逐页补齐至已知消息，按 ID 合并去重；分页位置随会话快照恢复。详见[消息分页修正决定](../.agents/notes/implemented/bug-fix/2026-09-24-correct-message-pagination.md)。
 
 ### 顶部工具栏与偏好
@@ -84,9 +84,10 @@
 - **重连策略**: 采用指数退避机制重连（1s → 2s → 4s → 8s → 最高 15s 封顶）。
 - **断点续传**: 通过 `lastEventId` 实现序号追踪和断线恢复。
 
-### ConversationViewCache & StreamedAssistantCache
+### ConversationViewCache 与 RunDisplay
 - **ConversationViewCache**: 容量为 12 的 LRU 缓存，利用 JS 原生 `Map` 对插入顺序的保持特性实现 `get`/`set`/`delete`。
-- **StreamedAssistantCache**: 用于增量文本缓存合并，执行序号去重和跨 Run 隔离。支持 `clear` 释放。
+- **RunDisplay**: 按 Run ID 保存文字和工具事件的有序块；`local_seq` 去重，最多保留近期 24 个 Run 的临时视图。`tool.completed` 先显示脱敏预览，再合并读取 Hermes 历史消息；只有工具名与结果唯一可对应时才补齐完整输入输出，同名并发调用保持待核对。SSE 缺口提示用户部分过程不可恢复。
+- **终态交接**: Run 已对账但历史读取未成功时继续显示实时回合，并以轮询或手动核对重试。消息合并与 RunDisplay 结算在同一次 React 更新中提交；历史来源始终是 Hermes。
 
 ## 6. CSS 设计系统
 - **双轨主题**: 依赖于 `:root` (浅色默认) 及 `data-theme="dark"` (深色模式) 的原生 CSS 变量机制。

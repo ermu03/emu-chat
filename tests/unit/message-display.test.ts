@@ -53,6 +53,10 @@ describe("message-display turn aggregation", () => {
     const assistantTurn = turns[1] as AssistantTurn;
     expect(assistantTurn.tools).toHaveLength(0);
     expect(assistantTurn.reasonings).toEqual(["User greeted, reply politely."]);
+    expect(assistantTurn.blocks.map((block) => block.kind)).toEqual([
+      "reasoning",
+      "text",
+    ]);
     expect(assistantTurn.finalContent).toBe("Hi there!");
   });
 
@@ -100,6 +104,11 @@ describe("message-display turn aggregation", () => {
       JSON.stringify({ output: "file1.txt\nfile2.txt" }),
     );
     expect(assistantTurn.tools[0].isError).toBe(false);
+    expect(assistantTurn.blocks.map((block) => block.kind)).toEqual([
+      "text",
+      "tool",
+      "text",
+    ]);
 
     // Intermediate text before tool execution is inside steps, not in finalContent
     expect(
@@ -141,6 +150,32 @@ describe("message-display turn aggregation", () => {
     expect(assistantTurn.tools).toHaveLength(1);
     expect(assistantTurn.tools[0].isError).toBe(true);
     expect(assistantTurn.finalContent).toBe("");
+  });
+
+  it("does not attach a result to a different tool_call_id even when names match", () => {
+    const turns = groupMessagesIntoTurns([
+      { id: 1, role: "user", content: "run", timestamp: 1 },
+      {
+        id: 2,
+        role: "assistant",
+        content: "first call",
+        tool_name: "bash",
+        tool_call_id: "call_1",
+        timestamp: 2,
+      },
+      {
+        id: 3,
+        role: "tool",
+        content: "second result",
+        tool_name: "bash",
+        tool_call_id: "call_2",
+        timestamp: 3,
+      },
+    ]);
+    const assistantTurn = turns[1] as AssistantTurn;
+    expect(assistantTurn.tools).toHaveLength(2);
+    expect(assistantTurn.tools[0].resultContent).toBeUndefined();
+    expect(assistantTurn.tools[1].resultContent).toBe("second result");
   });
 
   it("merges messages, deduplicates by id, and sorts in ascending chronological order", () => {

@@ -23,23 +23,33 @@ export function useRunRuntime(
     applyQueue,
     applyRun,
     refreshLatestMessages,
-    clearStreamAfterReconcile,
-    appendStreamDelta,
+    applyRunStreamEvent,
+    markRunSyncing,
+    hydrateRunTools,
     replaceQueueItemInView,
     activeConversation,
     activeRun,
     visibleRun,
     visibleQueue,
     activeQueueItem,
+    runDisplay,
   } = view;
   const [streamNotice, setStreamNotice] = useState<string | null>(null);
   const lastConversationListRefreshRunIdRef = useRef<string | null>(null);
+  const refreshFlightRef = useRef<{
+    conversationId: string;
+    promise: Promise<void>;
+    rerun: boolean;
+    reconciling: boolean;
+    knownRunId: string | null;
+  } | null>(null);
+  const hydrateTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     setStreamNotice(null);
   }, [activeConversationId, activeRun?.id]);
 
-  const refreshRuntime = useCallback(
+  const refreshOnce = useCallback(
     async (conversationId: string, knownRunId?: string | null) => {
       try {
         const nextQueue = await apiClient.getQueue(conversationId);
@@ -57,14 +67,26 @@ export function useRunRuntime(
           return;
         }
 
-        const run = await apiClient.getRun(runId);
+        const fetchedRun = await apiClient.getRun(runId);
         if (activeConversationIdRef.current !== conversationId) return;
+        const previous = activeRunRef.current;
+        const run =
+          previous?.id === runId &&
+          previous.local_state === "reconciled" &&
+          fetchedRun.local_state !== "reconciled"
+            ? previous
+            : fetchedRun;
         applyRun(run);
 
         if (run.local_state === "reconciled") {
-          await refreshLatestMessages(conversationId);
+          const flight = refreshFlightRef.current;
+          if (flight?.conversationId === conversationId) {
+            flight.reconciling = true;
+            flight.rerun = false;
+          }
+          markRunSyncing(run.id);
+          await refreshLatestMessages(conversationId, run.id);
           if (activeConversationIdRef.current === conversationId) {
-            clearStreamAfterReconcile(run.id);
             if (lastConversationListRefreshRunIdRef.current !== run.id) {
               lastConversationListRefreshRunIdRef.current = run.id;
               void loadConversations();
@@ -80,11 +102,66 @@ export function useRunRuntime(
     [
       applyQueue,
       applyRun,
-      clearStreamAfterReconcile,
       loadConversations,
+      markRunSyncing,
       refreshLatestMessages,
       setWorkspaceError,
     ],
+  );
+
+  const refreshRuntime = useCallback(
+    (conversationId: string, knownRunId?: string | null): Promise<void> => {
+      const flight = refreshFlightRef.current;
+      if (flight?.conversationId === conversationId) {
+        if (!flight.reconciling) flight.rerun = true;
+        flight.knownRunId = knownRunId ?? flight.knownRunId;
+        return flight.promise;
+      }
+      const nextFlight = {
+        conversationId,
+        promise: Promise.resolve(),
+        rerun: false,
+        reconciling: false,
+        knownRunId: knownRunId ?? null,
+      };
+      refreshFlightRef.current = nextFlight;
+      nextFlight.promise = (async () => {
+        do {
+          nextFlight.rerun = false;
+          await refreshOnce(conversationId, nextFlight.knownRunId);
+        } while (
+          nextFlight.rerun &&
+          activeConversationIdRef.current === conversationId
+        );
+        if (refreshFlightRef.current === nextFlight) {
+          refreshFlightRef.current = null;
+        }
+      })();
+      return nextFlight.promise;
+    },
+    [activeConversationIdRef, refreshOnce],
+  );
+
+  const scheduleToolHydration = useCallback(
+    (conversationId: string, runId: string) => {
+      if (hydrateTimerRef.current !== null)
+        window.clearTimeout(hydrateTimerRef.current);
+      hydrateTimerRef.current = window.setTimeout(() => {
+        hydrateTimerRef.current = null;
+        void hydrateRunTools(conversationId, runId).catch(() => {
+          // The event preview stays visible; a later completion or terminal refresh retries.
+        });
+      }, 120);
+    },
+    [hydrateRunTools],
+  );
+
+  useEffect(
+    () => () => {
+      if (hydrateTimerRef.current !== null)
+        window.clearTimeout(hydrateTimerRef.current);
+    },
+    [],
   );
 
   const handleRunStreamEvent = useCallback(
@@ -113,18 +190,21 @@ export function useRunRuntime(
       if (event.event !== "run.event" || typeof event.data.type !== "string")
         return;
       const type = event.data.type;
-      if (type === "message.delta") {
-        const payload = event.data.payload;
+      // Hermes can emit reasoning.available from ordinary assistant content;
+      // only the persisted message reasoning field is safe to render as a card.
+      if (
+        type === "message.delta" ||
+        type === "tool.started" ||
+        type === "tool.completed"
+      ) {
         const sequence =
           typeof event.data.local_seq === "number"
             ? event.data.local_seq
             : null;
-        const delta =
-          isRecord(payload) && typeof payload.delta === "string"
-            ? payload.delta
-            : "";
-        if (delta) {
-          appendStreamDelta(eventRunId, sequence, delta);
+        const payload = isRecord(event.data.payload) ? event.data.payload : {};
+        applyRunStreamEvent(eventRunId, sequence, type, payload);
+        if (type === "tool.completed") {
+          scheduleToolHydration(conversationId, eventRunId);
         }
         return;
       }
@@ -136,10 +216,16 @@ export function useRunRuntime(
         type === "run.interrupted" ||
         type === "run.reconciled"
       ) {
+        if (type !== "approval.request") markRunSyncing(eventRunId);
         void refreshRuntime(conversationId, eventRunId);
       }
     },
-    [appendStreamDelta, refreshRuntime],
+    [
+      applyRunStreamEvent,
+      markRunSyncing,
+      refreshRuntime,
+      scheduleToolHydration,
+    ],
   );
 
   const liveRunId =
@@ -156,10 +242,11 @@ export function useRunRuntime(
 
   const shouldPollRuntime = useMemo(() => {
     if (isLiveRun(visibleRun)) return true;
+    if (runDisplay?.phase === "syncing") return true;
     return (
       visibleQueue?.data.some((item) => isLiveQueueState(item.state)) ?? false
     );
-  }, [visibleQueue, visibleRun]);
+  }, [runDisplay?.phase, visibleQueue, visibleRun]);
   const runtimePollInterval =
     !isLiveRun(visibleRun) && activeQueueItem?.local_run_id === null
       ? 300
@@ -170,7 +257,7 @@ export function useRunRuntime(
     const timer = window.setInterval(() => {
       void refreshRuntime(
         activeConversationId,
-        isLiveRun(visibleRun) ? visibleRun?.id : undefined,
+        isLiveRun(visibleRun) ? visibleRun?.id : runDisplay?.runId,
       );
     }, runtimePollInterval);
     return () => window.clearInterval(timer);
@@ -180,6 +267,7 @@ export function useRunRuntime(
     runtimePollInterval,
     shouldPollRuntime,
     visibleRun,
+    runDisplay?.runId,
   ]);
 
   const handleCancelQueueItem = async (

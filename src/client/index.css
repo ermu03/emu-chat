@@ -273,7 +273,9 @@ select:focus-visible {
   left: 2px;
   width: 2px;
   background: transparent;
-  transition: background var(--transition-fast), box-shadow var(--transition-fast);
+  transition:
+    background var(--transition-fast),
+    box-shadow var(--transition-fast);
 }
 
 .sidebar-resizer:hover::after,
@@ -318,7 +320,9 @@ select:focus-visible {
   display: inline-block;
   flex: 0 0 auto;
   border-radius: 8px;
-  filter: drop-shadow(0 2px 5px color-mix(in srgb, var(--accent) 30%, transparent));
+  filter: drop-shadow(
+    0 2px 5px color-mix(in srgb, var(--accent) 30%, transparent)
+  );
   transition: transform var(--transition-fast);
 }
 
@@ -676,7 +680,9 @@ select:focus-visible {
 .toolbar-title-edit-icon {
   color: var(--ink-faint);
   opacity: 0;
-  transition: opacity var(--transition-fast), color var(--transition-fast);
+  transition:
+    opacity var(--transition-fast),
+    color var(--transition-fast);
 }
 
 .main-toolbar-title-wrap:hover .toolbar-title-edit-icon {
@@ -929,7 +935,6 @@ select:focus-visible {
   display: flex;
   gap: 14px;
   margin-bottom: 28px;
-  animation: fade-in 180ms ease-out;
 }
 
 .message-row.user {
@@ -1196,10 +1201,25 @@ select:focus-visible {
 
 .tool-call-summary strong {
   overflow: hidden;
-  flex: 1;
+  flex: 0 1 auto;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 600;
+}
+
+.tool-call-preview {
+  overflow: hidden;
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--ink-soft);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-call-summary .tool-call-status {
+  flex-shrink: 0;
+  margin-left: auto;
 }
 
 .tool-call-status {
@@ -1264,80 +1284,12 @@ details[open] > summary .tool-call-chevron {
 }
 
 .reasoning-details {
-  position: relative;
-  display: flex;
-  gap: 12px;
   padding: 14px 16px;
   border-top: 1px solid color-mix(in srgb, var(--accent) 20%, var(--line));
 }
 
-.reasoning-trace-line {
-  width: 2px;
-  flex: 0 0 2px;
-  border-radius: 1px;
-  background: linear-gradient(
-    to bottom,
-    var(--accent) 0%,
-    color-mix(in srgb, var(--accent) 20%, transparent) 100%
-  );
-}
-
-.reasoning-content-flow {
-  min-width: 0;
-  flex: 1;
-}
-
-.reasoning-text {
-  font-size: 14px;
-  line-height: 1.7;
-  color: var(--ink-soft);
-}
-
-.turn-process-card {
-  margin-bottom: 14px;
-}
-
-.turn-process-summary {
-  font-weight: 600;
-}
-
-.turn-process-details {
-  padding: 12px;
-  background: color-mix(in srgb, var(--surface) 40%, transparent);
-}
-
-.turn-steps-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.turn-step-reasoning {
-  padding: 10px 14px;
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  border: 1px solid var(--line);
-}
-
-.turn-step-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 6px;
-  font-size: 12px;
-  font-weight: 650;
-  color: var(--ink-soft);
-}
-
-.turn-step-text {
-  padding: 10px 14px;
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  border: 1px solid var(--line);
-}
-
 .tool-item-card {
-  margin-bottom: 0;
+  margin-bottom: 10px;
   background: var(--surface);
 }
 
@@ -1412,6 +1364,13 @@ details[open] > summary .tool-call-chevron {
 
 .assistant-thinking svg {
   animation: spin 900ms linear infinite;
+}
+
+.assistant-syncing {
+  display: inline-block;
+  margin-top: 4px;
+  color: var(--ink-faint);
+  font-size: 12px;
 }
 
 .assistant-stream-cursor {

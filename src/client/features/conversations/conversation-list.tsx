@@ -300,7 +300,8 @@ function ConversationSection({
   onFork: (id: string) => void;
   onDelete: (conversation: ConversationSummary) => void;
   onTogglePin: (conversation: ConversationSummary) => void;
-  onUpdateMetadata?: ((id: string, title: string, pinned: boolean) => void) | undefined;
+  onUpdateMetadata?:
+    ((id: string, title: string, pinned: boolean) => void) | undefined;
 }) {
   return (
     <section>
@@ -336,7 +337,8 @@ function ConversationRow({
   onFork: (id: string) => void;
   onDelete: (conversation: ConversationSummary) => void;
   onTogglePin: (conversation: ConversationSummary) => void;
-  onUpdateMetadata?: ((id: string, title: string, pinned: boolean) => void) | undefined;
+  onUpdateMetadata?:
+    ((id: string, title: string, pinned: boolean) => void) | undefined;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
@@ -359,7 +361,13 @@ function ConversationRow({
         conversation.pinned,
       );
     }
-  }, [conversation.conversation_id, conversation.pinned, conversation.title, onUpdateMetadata, titleDraft]);
+  }, [
+    conversation.conversation_id,
+    conversation.pinned,
+    conversation.title,
+    onUpdateMetadata,
+    titleDraft,
+  ]);
 
   useEffect(() => {
     if (!menuOpen) return;

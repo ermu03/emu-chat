@@ -47,6 +47,7 @@ export function useMessageSend(
     upsertQueueItemInView,
     activeQueueItem,
     messages,
+    runDisplay,
     transitionSnapshot,
   } = view;
   const pendingSendRef = useRef<PendingSend | null>(null);
@@ -74,6 +75,22 @@ export function useMessageSend(
       };
     }
 
+    if (
+      runDisplay?.promptContent &&
+      runDisplay.phase !== "settled" &&
+      !messages.some(
+        (message) =>
+          message.role === "user" &&
+          message.id >= runDisplay.afterMessageId &&
+          message.content === runDisplay.promptContent,
+      )
+    ) {
+      return {
+        id: `run-prompt:${runDisplay.runId}`,
+        content: runDisplay.promptContent,
+      };
+    }
+
     const submission = activePendingSubmissions.find(
       (entry) => !entry.isFollowUp,
     );
@@ -83,7 +100,7 @@ export function useMessageSend(
           content: submission.content,
         }
       : null;
-  }, [activePendingSubmissions, activeQueueItem, messages]);
+  }, [activePendingSubmissions, activeQueueItem, messages, runDisplay]);
   const transitionPendingUserMessage =
     useMemo<PendingUserMessage | null>(() => {
       if (!transitionSnapshot) return null;
@@ -97,6 +114,23 @@ export function useMessageSend(
         !hasPersistedQueueMessage(transitionSnapshot.messages, queueItem)
       ) {
         return { id: `queue:${queueItem.id}`, content: queueItem.content };
+      }
+
+      const display = transitionSnapshot.runDisplay;
+      if (
+        display?.promptContent &&
+        display.phase !== "settled" &&
+        !transitionSnapshot.messages.some(
+          (message) =>
+            message.role === "user" &&
+            message.id >= display.afterMessageId &&
+            message.content === display.promptContent,
+        )
+      ) {
+        return {
+          id: `run-prompt:${display.runId}`,
+          content: display.promptContent,
+        };
       }
 
       const submission = pendingSubmissions.find(

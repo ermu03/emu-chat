@@ -5,6 +5,9 @@ export interface ToolCallItem {
   name: string;
   callContent?: string | undefined;
   resultContent?: string | undefined;
+  resultPreview?: string | undefined;
+  status?: "running" | "completed" | "failed" | undefined;
+  ambiguous?: boolean | undefined;
   isError: boolean;
 }
 
@@ -18,6 +21,7 @@ export interface AssistantTurn {
   id: string;
   role: "assistant";
   timestamp: number;
+  blocks: TurnStep[];
   steps: TurnStep[];
   tools: ToolCallItem[];
   reasonings: string[];
@@ -191,6 +195,18 @@ function buildAssistantTurn(chunk: MessageItem[]): AssistantTurn {
       id: turnId,
       role: "assistant",
       timestamp,
+      blocks: [
+        ...steps,
+        ...(contents.length > 0
+          ? [
+              {
+                kind: "text" as const,
+                id: `step_final_${lastMsg?.id ?? firstMsg.id}`,
+                content: contents.join("\n\n"),
+              },
+            ]
+          : []),
+      ],
       steps,
       tools: [],
       reasonings,
@@ -286,7 +302,7 @@ function buildAssistantTurn(chunk: MessageItem[]): AssistantTurn {
       }
 
       // 2. Match by tool_name (backwards)
-      if (!matchedToolStep && msg.tool_name) {
+      if (!matchedToolStep && !msg.tool_call_id && msg.tool_name) {
         for (let j = steps.length - 1; j >= 0; j--) {
           const s = steps[j];
           if (
@@ -302,7 +318,7 @@ function buildAssistantTurn(chunk: MessageItem[]): AssistantTurn {
       }
 
       // 3. Fallback: last unmatched tool
-      if (!matchedToolStep) {
+      if (!matchedToolStep && !msg.tool_call_id) {
         for (let j = steps.length - 1; j >= 0; j--) {
           const s = steps[j];
           if (s && s.kind === "tool" && s.tool.resultContent === undefined) {
@@ -353,6 +369,18 @@ function buildAssistantTurn(chunk: MessageItem[]): AssistantTurn {
     id: turnId,
     role: "assistant",
     timestamp,
+    blocks: [
+      ...steps,
+      ...(finalContents.length > 0
+        ? [
+            {
+              kind: "text" as const,
+              id: `step_final_${lastMsg?.id ?? firstMsg.id}`,
+              content: finalContents.join("\n\n"),
+            },
+          ]
+        : []),
+    ],
     steps,
     tools,
     reasonings,

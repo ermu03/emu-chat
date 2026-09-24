@@ -27,9 +27,11 @@ import type { MessageItem } from "../../../shared/api-schemas.js";
 import {
   type AssistantTurn,
   type ToolCallItem,
+  type TurnStep,
   getToolResultContent,
   groupMessagesIntoTurns,
 } from "./message-display.js";
+import type { RunDisplay } from "./run-display.js";
 
 export interface MessageViewProps {
   messages: MessageItem[];
@@ -39,7 +41,8 @@ export interface MessageViewProps {
   onLoadEarlier?: (() => void) | undefined;
   pendingUserMessage?: PendingUserMessage | null;
   isGenerating?: boolean;
-  streamingContent?: string;
+  runDisplay?: RunDisplay | null;
+  activeRunId?: string | null;
   onStopGenerating?: (() => void) | undefined;
   onReconcile?: (() => void) | undefined;
   onSelectPrompt?: ((prompt: string) => void) | undefined;
@@ -81,7 +84,8 @@ export const MessageView: React.FC<MessageViewProps> = ({
   onLoadEarlier,
   pendingUserMessage = null,
   isGenerating = false,
-  streamingContent = "",
+  runDisplay = null,
+  activeRunId = null,
   onStopGenerating,
   onReconcile,
   onSelectPrompt,
@@ -90,6 +94,72 @@ export const MessageView: React.FC<MessageViewProps> = ({
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
   const previousScrollHeightRef = useRef<number | null>(null);
+  const canonicalTurnId = runDisplay?.canonicalTurnId;
+  const liveTurn =
+    runDisplay && runDisplay.phase !== "settled"
+      ? {
+          timestamp: 0,
+          blocks: runDisplay.blocks.map((block): TurnStep => {
+            if (block.kind !== "tool") return block;
+            return {
+              kind: "tool",
+              id: block.id,
+              tool: {
+                id: block.id,
+                name: block.name,
+                callContent: block.callContent,
+                resultContent: block.resultContent,
+                resultPreview: block.resultPreview,
+                status: block.status,
+                ambiguous: block.ambiguous,
+                isError: block.status === "failed",
+              },
+            };
+          }),
+        }
+      : null;
+  const displayRows: React.ReactNode[] = turns.flatMap((turn) => {
+    if (
+      turn.kind === "assistant_turn" &&
+      runDisplay &&
+      runDisplay.phase !== "settled" &&
+      runDisplay.afterMessageId > 0 &&
+      turn.rawMessages.some((message) => message.id > runDisplay.afterMessageId)
+    ) {
+      return [];
+    }
+    if (turn.kind === "user") {
+      return [<UserTurnRow key={turn.id} message={turn.message} />];
+    }
+    if (turn.kind === "system") {
+      return [<SystemTurnRow key={turn.id} message={turn.message} />];
+    }
+    return [
+      <AssistantTurnRow
+        key={turn.id === canonicalTurnId ? `run:${runDisplay?.runId}` : turn.id}
+        turn={turn}
+      />,
+    ];
+  });
+  if (pendingUserMessage) {
+    displayRows.push(
+      <PendingUserRow
+        key={pendingUserMessage.id}
+        message={pendingUserMessage}
+      />,
+    );
+  }
+  if (liveTurn || (isGenerating && runDisplay?.phase !== "settled")) {
+    displayRows.push(
+      <AssistantTurnRow
+        key={`run:${runDisplay?.runId ?? activeRunId ?? "pending"}`}
+        turn={liveTurn ?? { timestamp: 0, blocks: [] }}
+        livePhase={runDisplay?.phase === "syncing" ? "syncing" : "streaming"}
+        onStopGenerating={onStopGenerating}
+        onReconcile={onReconcile}
+      />,
+    );
+  }
 
   // Preserve scroll offset when earlier messages are loaded prepended to the top
   useEffect(() => {
@@ -109,7 +179,7 @@ export const MessageView: React.FC<MessageViewProps> = ({
     const scroller = scrollRef.current;
     if (!scroller || !stickToBottomRef.current) return;
     scroller.scrollTop = scroller.scrollHeight;
-  }, [isGenerating, pendingUserMessage?.id, streamingContent, turns.length]);
+  }, [isGenerating, pendingUserMessage?.id, runDisplay, turns.length]);
 
   const handleLoadEarlier = () => {
     if (scrollRef.current) {
@@ -118,7 +188,13 @@ export const MessageView: React.FC<MessageViewProps> = ({
     onLoadEarlier?.();
   };
 
-  if (loading && turns.length === 0 && !pendingUserMessage && !isGenerating) {
+  if (
+    loading &&
+    turns.length === 0 &&
+    !pendingUserMessage &&
+    !isGenerating &&
+    !runDisplay
+  ) {
     return (
       <div className="message-scroll">
         <div className="message-empty">正在加载会话历史</div>
@@ -126,7 +202,12 @@ export const MessageView: React.FC<MessageViewProps> = ({
     );
   }
 
-  if (turns.length === 0 && !pendingUserMessage && !isGenerating) {
+  if (
+    turns.length === 0 &&
+    !pendingUserMessage &&
+    !isGenerating &&
+    !runDisplay
+  ) {
     return (
       <div className="message-scroll">
         <div className="message-empty">
@@ -194,23 +275,7 @@ export const MessageView: React.FC<MessageViewProps> = ({
             </button>
           </div>
         )}
-        {turns.map((turn) => {
-          if (turn.kind === "user") {
-            return <UserTurnRow key={turn.id} message={turn.message} />;
-          }
-          if (turn.kind === "system") {
-            return <SystemTurnRow key={turn.id} message={turn.message} />;
-          }
-          return <AssistantTurnRow key={turn.id} turn={turn} />;
-        })}
-        {pendingUserMessage && <PendingUserRow message={pendingUserMessage} />}
-        {isGenerating && (
-          <LiveAssistantRow
-            content={streamingContent}
-            onStopGenerating={onStopGenerating}
-            onReconcile={onReconcile}
-          />
-        )}
+        {displayRows}
       </div>
     </div>
   );
@@ -268,222 +333,39 @@ const SystemTurnRow = memo(function SystemTurnRow({
 
 const AssistantTurnRow = memo(function AssistantTurnRow({
   turn,
-}: {
-  turn: AssistantTurn;
-}) {
-  const hasTools = turn.tools.length > 0;
-  const hasReasonings = turn.reasonings.length > 0;
-  const anyToolFailed = turn.tools.some((t) => t.isError);
-  const allToolsCompleted =
-    hasTools && turn.tools.every((t) => t.resultContent !== undefined);
-
-  const processSummaryLabel = hasTools
-    ? hasReasonings
-      ? `思考与工具调用 (${turn.tools.length} 个工具)`
-      : `工具调用 (${turn.tools.length} 个工具)`
-    : "思考过程";
-
-  const processStatusLabel = anyToolFailed
-    ? "存在失败"
-    : allToolsCompleted
-      ? "已完成"
-      : "执行中";
-
-  return (
-    <article className="message-row assistant">
-      <div className="message-avatar" aria-hidden="true">
-        <Bot size={14} strokeWidth={1.8} />
-      </div>
-      <div className="message-content-wrap">
-        <div className="message-meta">
-          <span className="message-role">Hermes</span>
-          <span className="message-timestamp">
-            {formatTimestamp(turn.timestamp)}
-          </span>
-        </div>
-
-        {/* Consolidated turn process card when tools are present */}
-        {hasTools && (
-          <details
-            className="tool-call-card turn-process-card"
-            open={!turn.finalContent ? true : undefined}
-          >
-            <summary className="tool-call-summary turn-process-summary">
-              <Terminal size={14} strokeWidth={1.8} />
-              <strong>{processSummaryLabel}</strong>
-              <span
-                className={`tool-call-status ${anyToolFailed ? "danger" : ""}`}
-              >
-                {processStatusLabel}
-              </span>
-              <ChevronDown
-                size={14}
-                strokeWidth={1.8}
-                className="tool-call-chevron"
-              />
-            </summary>
-            <div className="tool-call-details turn-process-details">
-              <div className="turn-steps-list">
-                {turn.steps.map((step) => {
-                  if (step.kind === "reasoning") {
-                    return (
-                      <div
-                        key={step.id}
-                        className="turn-step turn-step-reasoning"
-                      >
-                        <div className="turn-step-header">
-                          <Bot size={13} strokeWidth={1.8} />
-                          <span>思考过程</span>
-                        </div>
-                        <div className="turn-step-body message-body">
-                          <MarkdownContent text={step.content} />
-                        </div>
-                      </div>
-                    );
-                  }
-                  if (step.kind === "text") {
-                    return (
-                      <div key={step.id} className="turn-step turn-step-text">
-                        <div className="turn-step-body message-body">
-                          <MarkdownContent text={step.content} />
-                        </div>
-                      </div>
-                    );
-                  }
-                  return <ToolStepItem key={step.id} tool={step.tool} />;
-                })}
-              </div>
-            </div>
-          </details>
-        )}
-
-        {/* Collapsible reasoning card when no tools are present */}
-        {!hasTools && hasReasonings && (
-          <details
-            className="tool-call-card reasoning-card"
-            open={!turn.finalContent ? true : undefined}
-          >
-            <summary className="tool-call-summary reasoning-summary">
-              <Sparkles
-                size={14}
-                strokeWidth={1.8}
-                className="reasoning-spark-icon"
-              />
-              <strong>思考过程</strong>
-              <ChevronDown
-                size={14}
-                strokeWidth={1.8}
-                className="tool-call-chevron"
-              />
-            </summary>
-            <div className="tool-call-details reasoning-details">
-              <div className="reasoning-trace-line" aria-hidden="true" />
-              <div className="reasoning-content-flow">
-                {turn.reasonings.map((reasoning, idx) => (
-                  <div key={idx} className="message-body reasoning-text">
-                    <MarkdownContent text={reasoning} />
-                  </div>
-                ))}
-              </div>
-            </div>
-          </details>
-        )}
-
-        {/* Final response markdown content */}
-        {turn.finalContent && (
-          <div className="message-body">
-            <MarkdownContent text={turn.finalContent} />
-          </div>
-        )}
-      </div>
-    </article>
-  );
-});
-
-const ToolStepItem = memo(function ToolStepItem({
-  tool,
-}: {
-  tool: ToolCallItem;
-}) {
-  const isCompleted = tool.resultContent !== undefined;
-  const statusLabel = tool.isError ? "失败" : isCompleted ? "已完成" : "已调用";
-
-  return (
-    <details
-      className="tool-call-card tool-item-card"
-      open={tool.isError ? true : undefined}
-    >
-      <summary className="tool-call-summary">
-        <Terminal size={13} strokeWidth={1.8} />
-        <strong>{tool.name}</strong>
-        <span className={`tool-call-status ${tool.isError ? "danger" : ""}`}>
-          {statusLabel}
-        </span>
-        <ChevronDown
-          size={13}
-          strokeWidth={1.8}
-          className="tool-call-chevron"
-        />
-      </summary>
-      <div className="tool-call-details">
-        {tool.callContent && (
-          <div className="tool-io-section">
-            <span className="tool-io-label">输入</span>
-            <pre>{tool.callContent}</pre>
-          </div>
-        )}
-        {tool.resultContent && (
-          <div className="tool-io-section">
-            <span className="tool-io-label">输出</span>
-            <pre>{getToolResultContent(tool.resultContent)}</pre>
-          </div>
-        )}
-        {!tool.callContent && !tool.resultContent && <pre>没有内容</pre>}
-      </div>
-    </details>
-  );
-});
-
-const PendingUserRow = memo(function PendingUserRow({
-  message,
-}: {
-  message: PendingUserMessage;
-}) {
-  return (
-    <article
-      className="message-row user message-pending"
-      data-message-id={message.id}
-    >
-      <div className="message-avatar" aria-hidden="true">
-        <UserRound size={14} strokeWidth={1.8} />
-      </div>
-      <div className="message-content-wrap">
-        <div className="message-meta">
-          <span className="message-role">你</span>
-        </div>
-        <div className="message-body">{message.content}</div>
-      </div>
-    </article>
-  );
-});
-
-function LiveAssistantRow({
-  content,
+  livePhase,
   onStopGenerating,
   onReconcile,
 }: {
-  content: string;
+  turn: Pick<AssistantTurn, "timestamp" | "blocks">;
+  livePhase?: "streaming" | "syncing" | undefined;
   onStopGenerating?: (() => void) | undefined;
   onReconcile?: (() => void) | undefined;
 }) {
+  const [expandedTools, setExpandedTools] = useState<Record<number, boolean>>(
+    {},
+  );
+  const hasText = turn.blocks.some((block) => block.kind === "text");
+  let toolOrdinal = -1;
+
   return (
-    <article className="message-row assistant assistant-live" role="status">
+    <article
+      className={`message-row assistant ${livePhase ? "assistant-live" : ""}`}
+      role={livePhase ? "status" : undefined}
+    >
       <div className="message-avatar" aria-hidden="true">
         <Bot size={14} strokeWidth={1.8} />
       </div>
       <div className="message-content-wrap">
-        <div className="message-meta assistant-live-meta">
+        <div
+          className={`message-meta ${livePhase ? "assistant-live-meta" : ""}`}
+        >
           <span className="message-role">Hermes</span>
+          {turn.timestamp > 0 && (
+            <span className="message-timestamp">
+              {formatTimestamp(turn.timestamp)}
+            </span>
+          )}
           {(onStopGenerating || onReconcile) && (
             <div className="assistant-live-actions">
               {onReconcile && (
@@ -511,20 +393,152 @@ function LiveAssistantRow({
             </div>
           )}
         </div>
-        {content ? (
-          <div className="message-body is-streaming">
-            <MarkdownContent text={content} />
-          </div>
-        ) : (
+
+        {turn.blocks.map((block, index) => {
+          if (block.kind === "tool") {
+            toolOrdinal += 1;
+            const ordinal = toolOrdinal;
+            return (
+              <ToolStepItem
+                key={block.id}
+                tool={block.tool}
+                open={expandedTools[ordinal] ?? block.tool.isError}
+                onToggle={(open) =>
+                  setExpandedTools((current) => ({
+                    ...current,
+                    [ordinal]: open,
+                  }))
+                }
+              />
+            );
+          }
+          if (block.kind === "reasoning") {
+            return (
+              <details
+                key={block.id}
+                className="tool-call-card reasoning-card"
+                open={!hasText ? true : undefined}
+              >
+                <summary className="tool-call-summary reasoning-summary">
+                  <Sparkles size={14} className="reasoning-spark-icon" />
+                  <strong>思考过程</strong>
+                  <ChevronDown size={14} className="tool-call-chevron" />
+                </summary>
+                <div className="tool-call-details reasoning-details message-body">
+                  <MarkdownContent text={block.content} />
+                </div>
+              </details>
+            );
+          }
+          return (
+            <div
+              key={block.id}
+              className={`message-body ${livePhase === "streaming" && index === turn.blocks.length - 1 ? "is-streaming" : ""}`}
+            >
+              <MarkdownContent text={block.content} />
+            </div>
+          );
+        })}
+        {livePhase && turn.blocks.length === 0 && (
           <div className="assistant-thinking" aria-label="Hermes 正在生成">
             <LoaderCircle size={16} strokeWidth={1.9} />
             <span className="assistant-stream-cursor" aria-hidden="true" />
           </div>
         )}
+        {livePhase === "syncing" && (
+          <span className="assistant-syncing">正在核对回复…</span>
+        )}
       </div>
     </article>
   );
-}
+});
+
+const ToolStepItem = memo(function ToolStepItem({
+  tool,
+  open,
+  onToggle,
+}: {
+  tool: ToolCallItem;
+  open: boolean;
+  onToggle: (open: boolean) => void;
+}) {
+  const isCompleted =
+    tool.status === "completed" || tool.resultContent !== undefined;
+  const statusLabel = tool.isError
+    ? "失败"
+    : tool.ambiguous && tool.status === "running"
+      ? "待核对"
+      : tool.status === "running"
+        ? "执行中"
+        : isCompleted
+          ? "已完成"
+          : "已调用";
+  const result =
+    tool.resultContent !== undefined
+      ? getToolResultContent(tool.resultContent)
+      : tool.resultPreview?.trim();
+  const preview = result?.slice(0, 180);
+
+  return (
+    <details
+      className="tool-call-card tool-item-card"
+      open={open}
+      onToggle={(event) => onToggle(event.currentTarget.open)}
+    >
+      <summary className="tool-call-summary">
+        <Terminal size={13} strokeWidth={1.8} />
+        <strong>{tool.name}</strong>
+        {preview && <span className="tool-call-preview">{preview}</span>}
+        <span className={`tool-call-status ${tool.isError ? "danger" : ""}`}>
+          {statusLabel}
+        </span>
+        <ChevronDown
+          size={13}
+          strokeWidth={1.8}
+          className="tool-call-chevron"
+        />
+      </summary>
+      <div className="tool-call-details">
+        {tool.callContent && (
+          <div className="tool-io-section">
+            <span className="tool-io-label">输入</span>
+            <pre>{tool.callContent}</pre>
+          </div>
+        )}
+        {result && (
+          <div className="tool-io-section">
+            <span className="tool-io-label">输出</span>
+            <pre>{result}</pre>
+          </div>
+        )}
+        {!tool.callContent && !result && <pre>等待结果…</pre>}
+      </div>
+    </details>
+  );
+});
+
+const PendingUserRow = memo(function PendingUserRow({
+  message,
+}: {
+  message: PendingUserMessage;
+}) {
+  return (
+    <article
+      className="message-row user message-pending"
+      data-message-id={message.id}
+    >
+      <div className="message-avatar" aria-hidden="true">
+        <UserRound size={14} strokeWidth={1.8} />
+      </div>
+      <div className="message-content-wrap">
+        <div className="message-meta">
+          <span className="message-role">你</span>
+        </div>
+        <div className="message-body">{message.content}</div>
+      </div>
+    </article>
+  );
+});
 
 const CodeBlock = memo(function CodeBlock({
   className,

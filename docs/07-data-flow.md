@@ -40,16 +40,22 @@ sequenceDiagram
     Coord->>Coord: consume (streamEvents)
     Coord->>Coord: handleEvent & reconcileById
 
-    Coord->>SSE: 推送 run.event (携带 message.delta)
+    Coord->>SSE: 推送 run.event (message.delta / tool.started)
     SSE-->>Runtime: useStreamEvents 接收 run.event
-    Runtime->>View: 增量拼接流式文本
+    Runtime->>View: 按 local_seq 追加文字段或执行中工具卡片
+    Coord->>SSE: 推送 tool.completed (状态和脱敏结果预览)
+    Runtime->>View: 更新单工具卡片，立即显示结果预览
+    Runtime->>View: 合并短时间内的工具完成读取
+    View->>API: 增量读取 Hermes 消息
+    API-->>View: Hermes 历史中的 tool_call_id、完整输入输出
+    View->>View: 仅在唯一可对应时补齐卡片
     Coord->>SSE: 推送 run.event (run.completed / run.reconciled)
     SSE-->>Runtime: 转发终态事件
-    Runtime->>View: 请求刷新已加载的消息
+    Runtime->>View: 保留实时回合并标记正在核对
     View->>API: 拉取最新页，必要时逐页补齐至已知消息
     API-->>View: 返回消息页
-    View->>View: 按 ID 合并去重
-    Runtime->>View: 清除流式占位
+    View->>View: 按 ID 合并去重，同步结算权威回合
+    View-->>Messages: 在同一助手行交接内容与工具展开状态
 ```
 
 ## 2. 工具审批流程
@@ -176,7 +182,7 @@ flowchart TD
     Crash(进程崩溃/重启) --> MarkTruncate[启动时标记活跃 Run 的 events_truncated]
     MarkTruncate --> NewHub[新进程记录 process_restarted 缺口]
     NewHub --> Reconnect[浏览器重新连接 SSE]
-    Reconnect --> ClientREST[收到 stream.gap 后刷新队列和 Run；若已对账则合并最新消息]
+    Reconnect --> ClientREST[收到 stream.gap 后提示过程缺口并刷新队列和 Run；终态时合并最新消息]
 
     NetDrop(SSE 客户端断线) --> ExpBackoff[客户端指数退避重连 1s→15s]
     ExpBackoff --> SendCursor[带上 lastEventId （cursor） 发起连接]

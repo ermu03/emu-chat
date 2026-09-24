@@ -1,6 +1,7 @@
 # Agent Note: 按助手回合折叠工具调用与思考过程
 
 Status: implemented
+Archived: 2026-09-24
 
 ## Problem
 

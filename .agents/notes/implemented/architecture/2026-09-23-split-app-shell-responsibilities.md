@@ -10,7 +10,7 @@ Status: implemented
 
 按业务生命周期拆分为 `useConversationView`、`useRunRuntime`、`useMessageSend`。视图 Hook 独占当前会话、消息、草稿、队列、Run 快照和缓存，并提供定向更新方法；Run Hook 管理 SSE、轮询、终态对账和 Run/队列操作；发送 Hook 管理发送 UUID、乐观占位及提交后的状态更新。`AppShell` 保留路由、全局连接/偏好状态、会话列表操作和页面组合，不按固定行数拆分。
 
-会话切换立即使旧加载代数失效，缓存命中先恢复快照；发送、Run 和历史消息请求返回时确认目标会话仍然选中。跨 Hook 只通过视图 Hook 提供的方法更新共享队列、Run、消息和流式文本，避免重复状态所有权。
+会话切换立即使旧加载代数失效，缓存命中先恢复快照；发送、Run 和历史消息请求返回时确认目标会话仍然选中。跨 Hook 只通过视图 Hook 提供的方法更新共享队列、Run、消息和有序实时回合，避免重复状态所有权。
 
 ## Alternatives considered
 

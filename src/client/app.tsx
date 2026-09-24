@@ -147,7 +147,7 @@ export function AppShell() {
     draft,
     queueOpen,
     setQueueOpen,
-    streamedAssistantContent,
+    runDisplay,
     hasTargetMessages,
     hasActiveConversationView,
     transitionSnapshot,
@@ -565,16 +565,31 @@ export function AppShell() {
                   ? isAssistantReplying
                   : transitionIsAssistantReplying
               }
-              streamingContent={
+              runDisplay={
                 hasTargetMessages
-                  ? streamedAssistantContent
-                  : (transitionSnapshot?.streamedContent ?? "")
+                  ? runDisplay
+                  : (transitionSnapshot?.runDisplay ?? null)
+              }
+              activeRunId={
+                hasTargetMessages
+                  ? (visibleRun?.id ?? null)
+                  : (transitionSnapshot?.activeRun?.id ?? null)
               }
               onStopGenerating={
                 showStop ? () => void handleStopRun() : undefined
               }
               onReconcile={
-                showReconcile ? () => void handleReconcile() : undefined
+                showReconcile
+                  ? () => void handleReconcile()
+                  : hasTargetMessages &&
+                      runDisplay?.phase === "syncing" &&
+                      activeConversationId
+                    ? () =>
+                        void runtime.refreshRuntime(
+                          activeConversationId,
+                          runDisplay.runId,
+                        )
+                    : undefined
               }
               onSelectPrompt={
                 hasActiveConversationView && draft && !composerDisabled

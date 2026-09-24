@@ -19,14 +19,25 @@ import type {
   RunResponse,
 } from "../../shared/api-schemas.js";
 import { ConversationViewCache } from "../features/conversations/conversation-view-cache.js";
-import { mergeMessages } from "../features/messages/message-display.js";
-import { StreamedAssistantCache } from "../features/messages/streamed-assistant-cache.js";
+import {
+  groupMessagesIntoTurns,
+  mergeMessages,
+} from "../features/messages/message-display.js";
+import {
+  applyRunDisplayEvent,
+  createRunDisplay,
+  hydrateRunDisplay,
+  markRunDisplaySettled,
+  markRunDisplaySyncing,
+  type RunDisplay,
+} from "../features/messages/run-display.js";
 import { LIMITS } from "../../shared/limits.js";
 import {
   getCurrentRunId,
   getPrimaryQueueItem,
   getQueuedFollowUps,
   isAgentGenerating,
+  isLiveRun,
 } from "../features/queue/queue-state.js";
 import {
   getErrorMessage,
@@ -43,8 +54,7 @@ type ConversationViewSnapshot = {
   queue: QueueListResponse;
   activeRun: RunResponse | null;
   queueOpen: boolean;
-  streamedContent: string;
-  streamedRunId: string | null;
+  runDisplay: RunDisplay | null;
 };
 
 type OlderMessagesCursor = {
@@ -53,6 +63,18 @@ type OlderMessagesCursor = {
 };
 
 const MESSAGE_PAGE_SIZE = LIMITS.MESSAGES_PAGE_DEFAULT;
+
+function runHistoryAnchor(
+  messages: MessageItem[],
+  prompt: string | null,
+): number {
+  const promptMessage = prompt
+    ? messages.findLast(
+        (message) => message.role === "user" && message.content === prompt,
+      )
+    : null;
+  return promptMessage?.id ?? messages.at(-1)?.id ?? 0;
+}
 
 async function fetchLatestThroughAnchor(
   conversationId: string,
@@ -107,7 +129,7 @@ export type RetainedConversationView = {
   messages: MessageItem[];
   queue: QueueListResponse | null;
   activeRun: RunResponse | null;
-  streamedContent: string;
+  runDisplay: RunDisplay | null;
 };
 
 function retainConversationView(
@@ -119,11 +141,11 @@ function retainConversationView(
     messages: snapshot.messages,
     queue: snapshot.queue,
     activeRun: snapshot.activeRun,
-    streamedContent: snapshot.streamedContent,
+    runDisplay: snapshot.runDisplay,
   };
 }
 
-/** Owns the selected conversation snapshot, cache, draft, queue and visible stream text. */
+/** Owns the selected conversation snapshot, cache, draft, queue and Run display. */
 export function useConversationView(
   activeConversationId: string | null,
   conversations: ConversationSummary[],
@@ -156,13 +178,77 @@ export function useConversationView(
   const activeRunRef = useRef<RunResponse | null>(null);
   const queueRef = useRef<QueueListResponse | null>(null);
   const previousQueuedMessageCountRef = useRef(0);
-  const streamedAssistantRunIdRef = useRef<string | null>(null);
-  const streamedAssistantCacheRef = useRef(new StreamedAssistantCache());
+  const runDisplayRef = useRef<RunDisplay | null>(null);
+  const runDisplaysRef = useRef(new Map<string, RunDisplay>());
   const conversationViewCacheRef = useRef(
     new ConversationViewCache<ConversationViewSnapshot>(),
   );
   const currentViewSnapshotRef = useRef<RetainedConversationView | null>(null);
-  const [streamedAssistantContent, setStreamedAssistantContent] = useState("");
+  const [runDisplay, setRunDisplay] = useState<RunDisplay | null>(null);
+
+  const commitRunDisplay = useCallback((next: RunDisplay | null) => {
+    runDisplayRef.current = next;
+    if (next) {
+      runDisplaysRef.current.delete(next.runId);
+      runDisplaysRef.current.set(next.runId, next);
+      if (runDisplaysRef.current.size > 24) {
+        runDisplaysRef.current.delete(
+          runDisplaysRef.current.keys().next().value!,
+        );
+      }
+    }
+    setRunDisplay(next);
+  }, []);
+
+  const restoreRunDisplay = useCallback(
+    (snapshot: ConversationViewSnapshot) => {
+      const runId = snapshot.runDisplay?.runId ?? snapshot.activeRun?.id;
+      const recent = runId ? runDisplaysRef.current.get(runId) : null;
+      commitRunDisplay(recent ?? snapshot.runDisplay);
+    },
+    [commitRunDisplay],
+  );
+
+  const activateRunDisplay = useCallback(
+    (runId: string, prompt: string | null = null) => {
+      const existing = runDisplaysRef.current.get(runId);
+      const next = existing
+        ? prompt && !existing.promptContent
+          ? { ...existing, promptContent: prompt }
+          : existing
+        : createRunDisplay(
+            runId,
+            messagesRef.current.conversationId ===
+              activeConversationIdRef.current
+              ? runHistoryAnchor(messagesRef.current.items, prompt)
+              : 0,
+            prompt,
+          );
+      commitRunDisplay(next);
+      return next;
+    },
+    [commitRunDisplay],
+  );
+
+  const settleDisplayWithMessages = useCallback(
+    (runId: string, nextMessages: MessageItem[]) => {
+      const display = runDisplayRef.current;
+      if (display?.runId !== runId || display.phase === "settled") return;
+      const canonicalTurn = groupMessagesIntoTurns(nextMessages).findLast(
+        (turn) =>
+          turn.kind === "assistant_turn" &&
+          turn.rawMessages.some(
+            (message) => message.id > display.afterMessageId,
+          ),
+      );
+      if (canonicalTurn) {
+        commitRunDisplay(markRunDisplaySettled(display, canonicalTurn.id));
+      } else if (display.blocks.length === 0) {
+        commitRunDisplay(null);
+      }
+    },
+    [commitRunDisplay],
+  );
 
   useEffect(() => {
     activeConversationIdRef.current = activeConversationId;
@@ -184,17 +270,12 @@ export function useConversationView(
   }, [queue]);
 
   useEffect(() => {
-    setStreamedAssistantContent("");
-    streamedAssistantRunIdRef.current = null;
-  }, [activeConversationId]);
-
-  useEffect(() => {
-    if (!activeRun?.id) return;
-    streamedAssistantRunIdRef.current = activeRun.id;
-    setStreamedAssistantContent(
-      streamedAssistantCacheRef.current.get(activeRun.id),
-    );
-  }, [activeRun?.id]);
+    if (!activeRun?.id || !isLiveRun(activeRun)) return;
+    if (runDisplayRef.current?.runId === activeRun.id) return;
+    const prompt =
+      getPrimaryQueueItem(queueRef.current, activeRun)?.content ?? null;
+    activateRunDisplay(activeRun.id, prompt);
+  }, [activeRun?.id, activateRunDisplay]);
 
   useEffect(() => {
     if (
@@ -220,7 +301,7 @@ export function useConversationView(
       messages,
       queue: currentQueue,
       activeRun: currentRun,
-      streamedContent: streamedAssistantContent,
+      runDisplay,
     };
 
     if (
@@ -240,8 +321,7 @@ export function useConversationView(
       queue: currentQueue,
       activeRun: currentRun,
       queueOpen,
-      streamedContent: streamedAssistantContent,
-      streamedRunId: streamedAssistantRunIdRef.current,
+      runDisplay,
     };
     conversationViewCacheRef.current.set(activeConversationId, snapshot);
   }, [
@@ -255,200 +335,228 @@ export function useConversationView(
     hasMoreEarlier,
     queue,
     queueOpen,
-    streamedAssistantContent,
+    runDisplay,
   ]);
 
-  const loadActiveConversation = useCallback(async (conversationId: string) => {
-    const loadId = ++activeLoadRef.current;
-    const snapshot = conversationViewCacheRef.current.get(conversationId);
-    const useCachedView = snapshot !== undefined;
-    setConversationLoadError(null);
-    setWorkspaceError(null);
+  const loadActiveConversation = useCallback(
+    async (conversationId: string) => {
+      const loadId = ++activeLoadRef.current;
+      const snapshot = conversationViewCacheRef.current.get(conversationId);
+      const useCachedView = snapshot !== undefined;
+      setConversationLoadError(null);
+      setWorkspaceError(null);
 
-    if (snapshot) {
-      currentViewSnapshotRef.current = retainConversationView(snapshot);
-      setActiveConversation(snapshot.conversation);
-      setMessages(snapshot.messages);
-      setMessagesConversationId(conversationId);
-      setHasMoreEarlier(snapshot.hasMoreEarlier);
-      olderMessagesCursorRef.current = snapshot.olderMessagesCursor;
-      setDraft(snapshot.draft);
-      setQueue(snapshot.queue);
-      queueRef.current = snapshot.queue;
-      setActiveRun(snapshot.activeRun);
-      setQueueOpen(snapshot.queueOpen);
-      previousQueuedMessageCountRef.current = getQueuedFollowUps(
-        snapshot.queue,
-        snapshot.activeRun,
-      ).length;
-      streamedAssistantRunIdRef.current = snapshot.streamedRunId;
-      setStreamedAssistantContent(snapshot.streamedContent);
-    } else {
-      setActiveConversation(null);
-      setMessages([]);
-      setMessagesConversationId(null);
-      setHasMoreEarlier(false);
-      olderMessagesCursorRef.current = null;
-      setDraft(null);
-      setQueue(null);
-      queueRef.current = null;
-      setActiveRun(null);
-      setQueueOpen(false);
-      streamedAssistantRunIdRef.current = null;
-      setStreamedAssistantContent("");
-    }
-    setLoadingEarlier(false);
-
-    const reportLoadError = (error: unknown, fallback: string) => {
-      if (!useCachedView && loadId === activeLoadRef.current) {
-        const message = getErrorMessage(error, fallback);
-        setWorkspaceError(message);
-        setConversationLoadError({ conversationId, message });
+      if (snapshot) {
+        currentViewSnapshotRef.current = retainConversationView(snapshot);
+        setActiveConversation(snapshot.conversation);
+        setMessages(snapshot.messages);
+        setMessagesConversationId(conversationId);
+        setHasMoreEarlier(snapshot.hasMoreEarlier);
+        olderMessagesCursorRef.current = snapshot.olderMessagesCursor;
+        setDraft(snapshot.draft);
+        setQueue(snapshot.queue);
+        queueRef.current = snapshot.queue;
+        setActiveRun(snapshot.activeRun);
+        setQueueOpen(snapshot.queueOpen);
+        previousQueuedMessageCountRef.current = getQueuedFollowUps(
+          snapshot.queue,
+          snapshot.activeRun,
+        ).length;
+        restoreRunDisplay(snapshot);
+      } else {
+        setActiveConversation(null);
+        setMessages([]);
+        setMessagesConversationId(null);
+        setHasMoreEarlier(false);
+        olderMessagesCursorRef.current = null;
+        setDraft(null);
+        setQueue(null);
+        queueRef.current = null;
+        setActiveRun(null);
+        setQueueOpen(false);
+        commitRunDisplay(null);
       }
-    };
+      setLoadingEarlier(false);
 
-    const loadConversationContent = async () => {
-      const loadConversation = async () => {
-        try {
-          const conversation = await apiClient.getConversation(conversationId);
-          if (loadId !== activeLoadRef.current) return;
-          setActiveConversation(conversation);
-        } catch (error) {
-          if (loadId !== activeLoadRef.current) return;
-          if (!useCachedView) setActiveConversation(null);
-          reportLoadError(error, "无法加载会话详情");
+      const reportLoadError = (error: unknown, fallback: string) => {
+        if (!useCachedView && loadId === activeLoadRef.current) {
+          const message = getErrorMessage(error, fallback);
+          setWorkspaceError(message);
+          setConversationLoadError({ conversationId, message });
         }
       };
 
-      const loadMessages = async () => {
-        const latestLoadSeq = ++latestLoadSeqRef.current;
-        try {
-          const anchorId = snapshot?.messages.at(-1)?.id ?? null;
-          const result = await fetchLatestThroughAnchor(
-            conversationId,
-            anchorId,
-          );
-          if (
-            loadId !== activeLoadRef.current ||
-            latestLoadSeq !== latestLoadSeqRef.current
-          )
-            return;
-          if (snapshot?.olderMessagesCursor && result.reachedAnchor) {
-            setMessages((prev) => mergeMessages(prev, result.items));
-          } else {
-            setMessages(mergeMessages([], result.items));
-            olderMessagesCursorRef.current = result.cursor;
-            setHasMoreEarlier(result.hasMoreEarlier);
+      const loadConversationContent = async () => {
+        const loadConversation = async () => {
+          try {
+            const conversation =
+              await apiClient.getConversation(conversationId);
+            if (loadId !== activeLoadRef.current) return;
+            setActiveConversation(conversation);
+          } catch (error) {
+            if (loadId !== activeLoadRef.current) return;
+            if (!useCachedView) setActiveConversation(null);
+            reportLoadError(error, "无法加载会话详情");
           }
-          setMessagesConversationId(conversationId);
-        } catch (error) {
-          if (
-            loadId !== activeLoadRef.current ||
-            latestLoadSeq !== latestLoadSeqRef.current ||
-            useCachedView
-          )
-            return;
-          setMessages([]);
-          setMessagesConversationId(null);
-          setHasMoreEarlier(false);
-          olderMessagesCursorRef.current = null;
-          reportLoadError(error, "无法从 Hermes 加载消息");
-        }
+        };
+
+        const loadMessages = async () => {
+          const latestLoadSeq = ++latestLoadSeqRef.current;
+          try {
+            const anchorId = snapshot?.messages.at(-1)?.id ?? null;
+            const result = await fetchLatestThroughAnchor(
+              conversationId,
+              anchorId,
+            );
+            if (
+              loadId !== activeLoadRef.current ||
+              latestLoadSeq !== latestLoadSeqRef.current
+            )
+              return;
+            const nextMessages =
+              snapshot?.olderMessagesCursor && result.reachedAnchor
+                ? mergeMessages(snapshot.messages, result.items)
+                : mergeMessages([], result.items);
+            setMessages(nextMessages);
+            messagesRef.current = { conversationId, items: nextMessages };
+            if (!(snapshot?.olderMessagesCursor && result.reachedAnchor)) {
+              olderMessagesCursorRef.current = result.cursor;
+              setHasMoreEarlier(result.hasMoreEarlier);
+            }
+            setMessagesConversationId(conversationId);
+            const display = runDisplayRef.current;
+            if (display?.afterMessageId === 0) {
+              commitRunDisplay({
+                ...display,
+                afterMessageId: runHistoryAnchor(
+                  nextMessages,
+                  display.promptContent,
+                ),
+              });
+            }
+            if (display?.phase === "syncing") {
+              settleDisplayWithMessages(display.runId, nextMessages);
+            }
+          } catch (error) {
+            if (
+              loadId !== activeLoadRef.current ||
+              latestLoadSeq !== latestLoadSeqRef.current ||
+              useCachedView
+            )
+              return;
+            setMessages([]);
+            setMessagesConversationId(null);
+            setHasMoreEarlier(false);
+            olderMessagesCursorRef.current = null;
+            reportLoadError(error, "无法从 Hermes 加载消息");
+          }
+        };
+
+        const loadDraft = async () => {
+          try {
+            const nextDraft = await apiClient.getDraft(conversationId);
+            if (loadId !== activeLoadRef.current) return;
+            setDraft(nextDraft);
+          } catch (error) {
+            if (loadId !== activeLoadRef.current || useCachedView) return;
+            setDraft(null);
+            reportLoadError(error, "无法加载草稿");
+          }
+        };
+
+        await Promise.all([loadConversation(), loadMessages(), loadDraft()]);
       };
 
-      const loadDraft = async () => {
+      if (snapshot && isAgentGenerating(snapshot.activeRun, snapshot.queue)) {
         try {
-          const nextDraft = await apiClient.getDraft(conversationId);
+          const nextQueue = await apiClient.getQueue(conversationId);
           if (loadId !== activeLoadRef.current) return;
-          setDraft(nextDraft);
+
+          setQueue(nextQueue);
+          queueRef.current = nextQueue;
+          const runId = getCurrentRunId(nextQueue);
+          if (runId) {
+            const run = await apiClient.getRun(runId);
+            if (loadId !== activeLoadRef.current) return;
+            setActiveRun(run);
+            const display = activateRunDisplay(
+              run.id,
+              getPrimaryQueueItem(nextQueue, run)?.content ?? null,
+            );
+            if (run.local_state === "reconciled") {
+              commitRunDisplay(markRunDisplaySyncing(display));
+              await loadConversationContent();
+            }
+          } else {
+            setActiveRun(null);
+            const display = runDisplayRef.current;
+            if (display && display.phase !== "settled") {
+              commitRunDisplay(markRunDisplaySyncing(display));
+            }
+            await loadConversationContent();
+          }
         } catch (error) {
-          if (loadId !== activeLoadRef.current || useCachedView) return;
-          setDraft(null);
-          reportLoadError(error, "无法加载草稿");
+          reportLoadError(error, "无法刷新运行状态");
         }
-      };
+        return;
+      }
 
-      await Promise.all([loadConversation(), loadMessages(), loadDraft()]);
-    };
-
-    if (snapshot && isAgentGenerating(snapshot.activeRun, snapshot.queue)) {
-      try {
-        const nextQueue = await apiClient.getQueue(conversationId);
+      const loadQueue = async () => {
+        let nextQueue: QueueListResponse;
+        try {
+          nextQueue = await apiClient.getQueue(conversationId);
+        } catch (error) {
+          if (loadId !== activeLoadRef.current) return;
+          if (!useCachedView) {
+            setQueue(null);
+            queueRef.current = null;
+            setActiveRun(null);
+            setQueueOpen(false);
+          }
+          reportLoadError(error, "无法加载消息队列");
+          return;
+        }
         if (loadId !== activeLoadRef.current) return;
 
         setQueue(nextQueue);
         queueRef.current = nextQueue;
         const runId = getCurrentRunId(nextQueue);
         if (runId) {
-          const run = await apiClient.getRun(runId);
-          if (loadId !== activeLoadRef.current) return;
-          setActiveRun(run);
-          streamedAssistantRunIdRef.current = run.id;
-          setStreamedAssistantContent(
-            streamedAssistantCacheRef.current.get(run.id),
-          );
+          try {
+            const run = await apiClient.getRun(runId);
+            if (loadId === activeLoadRef.current) {
+              setActiveRun(run);
+              const display = activateRunDisplay(
+                run.id,
+                getPrimaryQueueItem(nextQueue, run)?.content ?? null,
+              );
+              if (run.local_state === "reconciled") {
+                commitRunDisplay(markRunDisplaySyncing(display));
+              }
+            }
+          } catch (error) {
+            if (loadId === activeLoadRef.current) {
+              reportLoadError(error, "无法加载运行状态");
+            }
+          }
         } else {
           setActiveRun(null);
-          if (snapshot.streamedRunId) {
-            streamedAssistantCacheRef.current.clear(snapshot.streamedRunId);
-          }
-          streamedAssistantRunIdRef.current = null;
-          setStreamedAssistantContent("");
-          await loadConversationContent();
-        }
-      } catch (error) {
-        reportLoadError(error, "无法刷新运行状态");
-      }
-      return;
-    }
-
-    const loadQueue = async () => {
-      let nextQueue: QueueListResponse;
-      try {
-        nextQueue = await apiClient.getQueue(conversationId);
-      } catch (error) {
-        if (loadId !== activeLoadRef.current) return;
-        if (!useCachedView) {
-          setQueue(null);
-          queueRef.current = null;
-          setActiveRun(null);
-          setQueueOpen(false);
-        }
-        reportLoadError(error, "无法加载消息队列");
-        return;
-      }
-      if (loadId !== activeLoadRef.current) return;
-
-      setQueue(nextQueue);
-      queueRef.current = nextQueue;
-      const runId = getCurrentRunId(nextQueue);
-      if (runId) {
-        try {
-          const run = await apiClient.getRun(runId);
-          if (loadId === activeLoadRef.current) {
-            setActiveRun(run);
-            streamedAssistantRunIdRef.current = run.id;
-            setStreamedAssistantContent(
-              streamedAssistantCacheRef.current.get(run.id),
-            );
-          }
-        } catch (error) {
-          if (loadId === activeLoadRef.current) {
-            reportLoadError(error, "无法加载运行状态");
+          const display = runDisplayRef.current;
+          if (display && display.phase !== "settled") {
+            commitRunDisplay(markRunDisplaySyncing(display));
           }
         }
-      } else {
-        setActiveRun(null);
-        if (snapshot?.streamedRunId) {
-          streamedAssistantCacheRef.current.clear(snapshot.streamedRunId);
-        }
-        streamedAssistantRunIdRef.current = null;
-        setStreamedAssistantContent("");
-      }
-    };
+      };
 
-    await Promise.all([loadConversationContent(), loadQueue()]);
-  }, []);
+      await Promise.all([loadConversationContent(), loadQueue()]);
+    },
+    [
+      activateRunDisplay,
+      commitRunDisplay,
+      restoreRunDisplay,
+      settleDisplayWithMessages,
+    ],
+  );
 
   const restoreConversationView = useCallback(
     (snapshot: ConversationViewSnapshot) => {
@@ -467,10 +575,9 @@ export function useConversationView(
         snapshot.queue,
         snapshot.activeRun,
       ).length;
-      streamedAssistantRunIdRef.current = snapshot.streamedRunId;
-      setStreamedAssistantContent(snapshot.streamedContent);
+      restoreRunDisplay(snapshot);
     },
-    [],
+    [restoreRunDisplay],
   );
 
   const hasTargetMessages =
@@ -536,9 +643,10 @@ export function useConversationView(
     setQueue(null);
     queueRef.current = null;
     setActiveRun(null);
+    commitRunDisplay(null);
     setQueueOpen(false);
     previousQueuedMessageCountRef.current = 0;
-  }, [activeConversationId, loadActiveConversation]);
+  }, [activeConversationId, commitRunDisplay, loadActiveConversation]);
 
   const handleSaveDraft = async (content: string, expectedRevision: number) => {
     if (!activeConversationId) throw new Error("请先选择会话");
@@ -610,29 +718,84 @@ export function useConversationView(
     }
   }, [activeConversationId, hasMoreEarlier, loadingEarlier]);
 
-  const refreshLatestMessages = useCallback(async (conversationId: string) => {
-    const loadId = activeLoadRef.current;
-    const latestLoadSeq = ++latestLoadSeqRef.current;
-    const anchorId =
-      messagesRef.current.conversationId === conversationId
-        ? (messagesRef.current.items.at(-1)?.id ?? null)
-        : null;
-    const result = await fetchLatestThroughAnchor(conversationId, anchorId);
-    if (
-      activeConversationIdRef.current !== conversationId ||
-      activeLoadRef.current !== loadId ||
-      latestLoadSeq !== latestLoadSeqRef.current
-    )
-      return;
-    if (anchorId !== null && result.reachedAnchor) {
-      setMessages((prev) => mergeMessages(prev, result.items));
-    } else {
-      setMessages(mergeMessages([], result.items));
-      olderMessagesCursorRef.current = result.cursor;
-      setHasMoreEarlier(result.hasMoreEarlier);
-    }
-    setMessagesConversationId(conversationId);
-  }, []);
+  const refreshLatestMessages = useCallback(
+    async (conversationId: string, runId?: string) => {
+      const loadId = activeLoadRef.current;
+      const latestLoadSeq = ++latestLoadSeqRef.current;
+      const anchorId =
+        messagesRef.current.conversationId === conversationId
+          ? (messagesRef.current.items.at(-1)?.id ?? null)
+          : null;
+      const result = await fetchLatestThroughAnchor(conversationId, anchorId);
+      if (
+        activeConversationIdRef.current !== conversationId ||
+        activeLoadRef.current !== loadId ||
+        latestLoadSeq !== latestLoadSeqRef.current
+      )
+        return false;
+      const nextMessages =
+        anchorId !== null && result.reachedAnchor
+          ? mergeMessages(messagesRef.current.items, result.items)
+          : mergeMessages([], result.items);
+      setMessages(nextMessages);
+      if (!(anchorId !== null && result.reachedAnchor)) {
+        olderMessagesCursorRef.current = result.cursor;
+        setHasMoreEarlier(result.hasMoreEarlier);
+      }
+      messagesRef.current = { conversationId, items: nextMessages };
+      setMessagesConversationId(conversationId);
+      if (runId) settleDisplayWithMessages(runId, nextMessages);
+      return true;
+    },
+    [settleDisplayWithMessages],
+  );
+
+  const applyRunStreamEvent = useCallback(
+    (
+      runId: string,
+      sequence: number | null,
+      type: string,
+      payload: Record<string, unknown>,
+    ) => {
+      const current =
+        runDisplayRef.current?.runId === runId
+          ? runDisplayRef.current
+          : activateRunDisplay(
+              runId,
+              getPrimaryQueueItem(queueRef.current, activeRunRef.current)
+                ?.content ?? null,
+            );
+      const next = applyRunDisplayEvent(current, sequence, type, payload);
+      if (next !== current) commitRunDisplay(next);
+    },
+    [activateRunDisplay, commitRunDisplay],
+  );
+
+  const markRunSyncing = useCallback(
+    (runId: string) => {
+      const current = runDisplayRef.current;
+      if (current?.runId === runId) {
+        commitRunDisplay(markRunDisplaySyncing(current));
+      }
+    },
+    [commitRunDisplay],
+  );
+
+  const hydrateRunTools = useCallback(
+    async (conversationId: string, runId: string) => {
+      const display = runDisplayRef.current;
+      if (display?.runId !== runId || display.phase === "settled") return;
+      const result = await fetchLatestThroughAnchor(
+        conversationId,
+        display.afterMessageId || null,
+      );
+      if (activeConversationIdRef.current !== conversationId) return;
+      const latest = runDisplayRef.current;
+      if (latest?.runId !== runId || latest.phase === "settled") return;
+      commitRunDisplay(hydrateRunDisplay(latest, result.items));
+    },
+    [commitRunDisplay],
+  );
 
   const applyQueue = useCallback((nextQueue: QueueListResponse | null) => {
     queueRef.current = nextQueue;
@@ -659,30 +822,8 @@ export function useConversationView(
   );
 
   const clearStreamForNewSend = useCallback(() => {
-    setStreamedAssistantContent("");
-    streamedAssistantRunIdRef.current = null;
-  }, []);
-
-  const appendStreamDelta = useCallback(
-    (runId: string, sequence: number | null, delta: string) => {
-      streamedAssistantRunIdRef.current = runId;
-      const content = streamedAssistantCacheRef.current.append(
-        runId,
-        sequence,
-        delta,
-      );
-      if (content !== null) setStreamedAssistantContent(content);
-    },
-    [],
-  );
-
-  const clearStreamAfterReconcile = useCallback((runId: string) => {
-    if (streamedAssistantRunIdRef.current === runId) {
-      setStreamedAssistantContent("");
-      streamedAssistantRunIdRef.current = null;
-    }
-    streamedAssistantCacheRef.current.clear(runId);
-  }, []);
+    commitRunDisplay(null);
+  }, [commitRunDisplay]);
 
   const restoreCachedView = useCallback(
     (conversationId: string) => {
@@ -712,7 +853,7 @@ export function useConversationView(
     activeRun,
     queueOpen,
     setQueueOpen,
-    streamedAssistantContent,
+    runDisplay,
     activeConversationIdRef,
     activeRunRef,
     queueRef,
@@ -736,8 +877,9 @@ export function useConversationView(
     upsertQueueItemInView,
     replaceQueueItemInView,
     clearStreamForNewSend,
-    appendStreamDelta,
-    clearStreamAfterReconcile,
+    applyRunStreamEvent,
+    markRunSyncing,
+    hydrateRunTools,
     restoreCachedView,
     dropCachedView,
   };
