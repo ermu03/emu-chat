@@ -1,4 +1,10 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+} from "react";
 import { LoaderCircle, Send } from "lucide-react";
 import { LIMITS } from "../../../shared/limits.js";
 
@@ -9,6 +15,10 @@ export interface DraftSnapshot {
 
 export interface DraftSendResult {
   draft: DraftSnapshot;
+}
+
+export interface DraftComposerHandle {
+  selectPrompt: (prompt: string) => void;
 }
 
 export interface DraftComposerProps {
@@ -28,16 +38,22 @@ export interface DraftComposerProps {
   sendDisabled?: boolean;
 }
 
-export const DraftComposer: React.FC<DraftComposerProps> = ({
-  conversationId,
-  initialDraft = "",
-  initialRevision = 0,
-  sendShortcut,
-  onSaveDraft,
-  onSend,
-  disabled = false,
-  sendDisabled = false,
-}) => {
+export const DraftComposer = React.forwardRef<
+  DraftComposerHandle,
+  DraftComposerProps
+>(function DraftComposer(
+  {
+    conversationId,
+    initialDraft = "",
+    initialRevision = 0,
+    sendShortcut,
+    onSaveDraft,
+    onSend,
+    disabled = false,
+    sendDisabled = false,
+  },
+  ref,
+) {
   const [content, setContent] = useState(initialDraft);
   const [, setRevision] = useState(initialRevision);
   const [isSending, setIsSending] = useState(false);
@@ -52,6 +68,7 @@ export const DraftComposer: React.FC<DraftComposerProps> = ({
   const generationRef = useRef(0);
   const savePromiseRef = useRef<Promise<void> | null>(null);
   const conversationRef = useRef(conversationId);
+  const selectedPromptRef = useRef<string | null>(null);
 
   const resizeTextarea = useCallback(() => {
     const textarea = textareaRef.current;
@@ -76,6 +93,8 @@ export const DraftComposer: React.FC<DraftComposerProps> = ({
     conversationRef.current = conversationId;
     generationRef.current += 1;
     clearDebounce();
+    savePromiseRef.current = null;
+    selectedPromptRef.current = null;
     contentRef.current = initialDraft;
     savedContentRef.current = initialDraft;
     revisionRef.current = initialRevision;
@@ -98,6 +117,7 @@ export const DraftComposer: React.FC<DraftComposerProps> = ({
     }
     contentRef.current = initialDraft;
     savedContentRef.current = initialDraft;
+    selectedPromptRef.current = null;
     revisionRef.current = initialRevision;
     setContent(initialDraft);
     setRevision(initialRevision);
@@ -134,7 +154,11 @@ export const DraftComposer: React.FC<DraftComposerProps> = ({
 
   const flushDraft = useCallback(async () => {
     clearDebounce();
-    while (savedContentRef.current !== contentRef.current) {
+    const generation = generationRef.current;
+    while (
+      generation === generationRef.current &&
+      savedContentRef.current !== contentRef.current
+    ) {
       if (savePromiseRef.current) {
         await savePromiseRef.current;
         continue;
@@ -158,8 +182,33 @@ export const DraftComposer: React.FC<DraftComposerProps> = ({
     }, 500);
   }, [clearDebounce, flushDraft]);
 
+  const selectPrompt = useCallback(
+    (prompt: string) => {
+      if (disabled || sendingRef.current) return;
+      if (
+        contentRef.current &&
+        contentRef.current !== selectedPromptRef.current
+      ) {
+        setSendError("输入框已有内容，请先清空后再选择建议");
+        textareaRef.current?.focus();
+        return;
+      }
+      selectedPromptRef.current = prompt;
+      contentRef.current = prompt;
+      setContent(prompt);
+      setSaveError(null);
+      setSendError(null);
+      scheduleSave();
+      textareaRef.current?.focus();
+    },
+    [disabled, scheduleSave],
+  );
+
+  useImperativeHandle(ref, () => ({ selectPrompt }), [selectPrompt]);
+
   const handleChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
     const nextContent = event.target.value;
+    selectedPromptRef.current = null;
     contentRef.current = nextContent;
     setContent(nextContent);
     setSendError(null);
@@ -190,6 +239,7 @@ export const DraftComposer: React.FC<DraftComposerProps> = ({
       if (generation !== generationRef.current) return;
       contentRef.current = result.draft.content;
       savedContentRef.current = result.draft.content;
+      selectedPromptRef.current = null;
       revisionRef.current = result.draft.revision;
       setContent(result.draft.content);
       setRevision(result.draft.revision);
@@ -262,7 +312,9 @@ export const DraftComposer: React.FC<DraftComposerProps> = ({
             )}
           </span>
           {saveError && <span className="error">{saveError}</span>}
-          {sendError && <span className="error">{sendError}</span>}
+          {sendError && sendError !== saveError && (
+            <span className="error">{sendError}</span>
+          )}
         </div>
         <div className="composer-actions">
           {isSending && (
@@ -288,4 +340,4 @@ export const DraftComposer: React.FC<DraftComposerProps> = ({
       </div>
     </div>
   );
-};
+});

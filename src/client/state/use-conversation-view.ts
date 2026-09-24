@@ -551,24 +551,6 @@ export function useConversationView(
     return { revision: saved.revision };
   };
 
-  const handleSelectPrompt = useCallback(
-    (prompt: string) => {
-      if (!activeConversationId) return;
-      setDraft((prev) =>
-        prev
-          ? { ...prev, content: prompt }
-          : {
-              object: "emu_chat.draft",
-              conversation_id: activeConversationId,
-              content: prompt,
-              revision: 0,
-              updated_at: null,
-            },
-      );
-    },
-    [activeConversationId],
-  );
-
   const handleLoadEarlier = useCallback(async () => {
     const cursor = olderMessagesCursorRef.current;
     if (!activeConversationId || loadingEarlier || !hasMoreEarlier || !cursor)
@@ -749,7 +731,6 @@ export function useConversationView(
     handleLoadEarlier,
     refreshLatestMessages,
     handleSaveDraft,
-    handleSelectPrompt,
     applyQueue,
     applyRun,
     upsertQueueItemInView,

@@ -9,7 +9,10 @@ import type {
 import { StatusBar } from "./features/status/status-bar.js";
 import { ConversationList } from "./features/conversations/conversation-list.js";
 import { MessageView } from "./features/messages/message-view.js";
-import { DraftComposer } from "./features/composer/draft-composer.js";
+import {
+  DraftComposer,
+  type DraftComposerHandle,
+} from "./features/composer/draft-composer.js";
 import { QueuePanel } from "./features/queue/queue-panel.js";
 import { isLiveRun } from "./features/queue/queue-state.js";
 import { ApprovalDialog } from "./features/approval/approval-dialog.js";
@@ -66,11 +69,14 @@ export function AppShell() {
     null,
   );
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [sidebarWidth, setSidebarWidth] = useState<number>(getStoredSidebarWidth);
+  const [sidebarWidth, setSidebarWidth] = useState<number>(
+    getStoredSidebarWidth,
+  );
   const [isSidebarResizing, setIsSidebarResizing] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
   const routeConversationIdRef = useRef(routeConversationId);
+  const composerRef = useRef<DraftComposerHandle | null>(null);
   routeConversationIdRef.current = routeConversationId;
 
   const loadStatus = useCallback(async (recheck = false) => {
@@ -154,7 +160,6 @@ export function AppShell() {
     loadActiveConversation,
     handleLoadEarlier,
     handleSaveDraft,
-    handleSelectPrompt,
   } = view;
   const {
     stream,
@@ -571,7 +576,11 @@ export function AppShell() {
               onReconcile={
                 showReconcile ? () => void handleReconcile() : undefined
               }
-              onSelectPrompt={handleSelectPrompt}
+              onSelectPrompt={
+                hasActiveConversationView && draft && !composerDisabled
+                  ? (prompt) => composerRef.current?.selectPrompt(prompt)
+                  : undefined
+              }
             />
 
             <div className="composer-shell">
@@ -590,6 +599,7 @@ export function AppShell() {
                   )}
                 {hasActiveConversationView && draft ? (
                   <DraftComposer
+                    ref={composerRef}
                     conversationId={activeConversationId}
                     initialDraft={draft.content}
                     initialRevision={draft.revision}

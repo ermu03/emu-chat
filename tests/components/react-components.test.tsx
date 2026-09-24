@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { createRef } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -9,7 +10,10 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { ConversationList } from "../../src/client/features/conversations/conversation-list";
-import { DraftComposer } from "../../src/client/features/composer/draft-composer";
+import {
+  DraftComposer,
+  type DraftComposerHandle,
+} from "../../src/client/features/composer/draft-composer";
 
 afterEach(() => {
   cleanup();
@@ -161,5 +165,59 @@ describe("high-risk component interactions", () => {
     await act(async () => {
       resolveSecondSave({ revision: 2 });
     });
+  });
+
+  it("keeps user edits when a prompt save finishes and another suggestion is clicked", async () => {
+    vi.useFakeTimers();
+    const composerRef = createRef<DraftComposerHandle>();
+    let resolvePromptSave!: (value: { revision: number }) => void;
+    const promptSave = new Promise<{ revision: number }>((resolve) => {
+      resolvePromptSave = resolve;
+    });
+    const onSaveDraft = vi
+      .fn()
+      .mockImplementationOnce(() => promptSave)
+      .mockResolvedValueOnce({ revision: 2 });
+    const onSend = vi.fn();
+    const view = render(
+      <DraftComposer
+        ref={composerRef}
+        conversationId="cv_test"
+        initialDraft=""
+        initialRevision={0}
+        sendShortcut="mod_enter"
+        onSaveDraft={onSaveDraft}
+        onSend={onSend}
+      />,
+    );
+    const textarea = screen.getByRole("textbox", {
+      name: "消息输入框",
+    }) as HTMLTextAreaElement;
+
+    act(() => composerRef.current!.selectPrompt("建议内容"));
+    await act(async () => vi.advanceTimersByTimeAsync(500));
+    expect(onSaveDraft).toHaveBeenCalledWith("建议内容", 0);
+
+    fireEvent.change(textarea, { target: { value: "建议内容 + 自己补充" } });
+    act(() => composerRef.current!.selectPrompt("另一条建议"));
+    expect(textarea.value).toBe("建议内容 + 自己补充");
+    expect(
+      screen.getByText("输入框已有内容，请先清空后再选择建议"),
+    ).toBeDefined();
+
+    await act(async () => resolvePromptSave({ revision: 1 }));
+    expect(onSaveDraft).toHaveBeenNthCalledWith(2, "建议内容 + 自己补充", 1);
+    view.rerender(
+      <DraftComposer
+        ref={composerRef}
+        conversationId="cv_test"
+        initialDraft="建议内容"
+        initialRevision={1}
+        sendShortcut="mod_enter"
+        onSaveDraft={onSaveDraft}
+        onSend={onSend}
+      />,
+    );
+    expect(textarea.value).toBe("建议内容 + 自己补充");
   });
 });

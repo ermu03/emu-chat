@@ -132,7 +132,7 @@ sequenceDiagram
     Composer->>Composer: 更新本地 revision，解锁单飞状态
 ```
 
-上述流程适用于用户在输入框中手工输入。空状态建议卡片只更新 React 草稿状态，当前不会触发这条保存链路；直接发送可能使用服务端旧草稿，详见[建议卡片草稿提案](../.agents/notes/proposed/bug-fix/2026-09-24-save-prompt-starter-draft.md)。
+上述流程同时适用于手工输入和空状态建议卡片。建议卡片把文本交给 `DraftComposer` 后进入同一防抖、单飞保存队列；直接发送会先等待 `flushDraft` 完成，再以最新草稿 revision 入队。保存失败时保留文本并停止发送，详见[建议卡片草稿修正决定](../.agents/notes/implemented/bug-fix/2026-09-24-save-prompt-starter-draft.md)。
 
 ## 5. 会话删除两阶段流程
 

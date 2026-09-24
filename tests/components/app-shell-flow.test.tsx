@@ -118,10 +118,12 @@ function messageList(
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((complete) => {
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((complete, fail) => {
     resolve = complete;
+    reject = fail;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 function mockCommonApi(summaries: ConversationSummary[]) {
@@ -194,6 +196,91 @@ afterEach(() => {
 });
 
 describe("AppShell async flows", () => {
+  it("saves a selected prompt before sending and keeps it available after a failed save", async () => {
+    const summary = conversation("cv_prompt", "Prompt");
+    const prompt = "请帮我梳理当前系统的核心分层、模块职责与数据流向。";
+    const firstSave = deferred<DraftResponse>();
+    let serverDraft = draft(summary.conversation_id);
+    mockCommonApi([summary]);
+    vi.spyOn(apiClient, "getDraft").mockImplementation(async () => serverDraft);
+    vi.spyOn(apiClient, "getQueue").mockResolvedValue(
+      queue(summary.conversation_id),
+    );
+    vi.spyOn(apiClient, "listMessages").mockImplementation(async (id) =>
+      messageList(id, []),
+    );
+    const putDraft = vi
+      .spyOn(apiClient, "putDraft")
+      .mockImplementationOnce(() => firstSave.promise)
+      .mockImplementationOnce(async () => {
+        serverDraft = draft(summary.conversation_id, prompt, 1);
+        return serverDraft;
+      });
+    const queueItem: QueueItemResponse = {
+      object: "emu_chat.queue_item",
+      id: "qi_prompt",
+      conversation_id: summary.conversation_id,
+      operation_id: "op_prompt",
+      fifo_seq: 1,
+      state: "queued",
+      content: prompt,
+      payload_bytes: new TextEncoder().encode(prompt).length,
+      payload_available: true,
+      recovery_expires_at: null,
+      payload_expired_at: null,
+      local_run_id: null,
+      revision: 1,
+      created_at: "2026-09-23T00:00:00Z",
+      updated_at: "2026-09-23T00:00:00Z",
+      last_error_code: null,
+    };
+    const sendMessage = vi
+      .spyOn(apiClient, "sendMessage")
+      .mockImplementation(async (id, body) => {
+        expect(id).toBe(summary.conversation_id);
+        expect(body.expected_draft_revision).toBe(1);
+        expect(serverDraft.content).toBe(prompt);
+        serverDraft = draft(summary.conversation_id, "", 2);
+        return {
+          object: "emu_chat.message_submission",
+          replayed: false,
+          queue_item: queueItem,
+          draft: serverDraft,
+        };
+      });
+
+    render(
+      <MemoryRouter initialEntries={["/conversations/cv_prompt"]}>
+        <AppShell />
+      </MemoryRouter>,
+    );
+    const input = (await screen.findByRole("textbox", {
+      name: "消息输入框",
+    })) as HTMLTextAreaElement;
+    fireEvent.click(screen.getByRole("button", { name: /分析系统架构/ }));
+    expect(input.value).toBe(prompt);
+    fireEvent.keyDown(input, { key: "Enter", ctrlKey: true });
+    await waitFor(() => expect(putDraft).toHaveBeenCalledOnce());
+    expect(putDraft).toHaveBeenCalledWith(summary.conversation_id, {
+      content: prompt,
+      expected_revision: 0,
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+
+    await act(async () => firstSave.reject(new Error("保存失败，请重试")));
+    expect(input.value).toBe(prompt);
+    expect(screen.getByText("保存失败，请重试")).toBeDefined();
+    expect(sendMessage).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(input, { key: "Enter", ctrlKey: true });
+    await waitFor(() => expect(sendMessage).toHaveBeenCalledOnce());
+    expect(putDraft).toHaveBeenNthCalledWith(2, summary.conversation_id, {
+      content: prompt,
+      expected_revision: 0,
+    });
+    await waitFor(() => expect(input.value).toBe(""));
+  });
+
   it("restores the cached conversation immediately and ignores a late response from the previous selection", async () => {
     const alpha = conversation("cv_alpha", "Alpha");
     const beta = conversation("cv_beta", "Beta");
