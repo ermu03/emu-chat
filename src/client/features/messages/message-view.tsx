@@ -216,7 +216,7 @@ export const MessageView: React.FC<MessageViewProps> = ({
               <Sparkles size={24} strokeWidth={2} />
             </div>
             <h2>准备好开始工作</h2>
-            <p>发送一条消息或选择快捷建议，Hermes 会在当前会话中继续处理。</p>
+            <p>发送一条消息或选择快捷建议，小H会在当前会话中继续处理。</p>
             {onSelectPrompt && (
               <div className="prompt-starters-grid">
                 {PROMPT_STARTERS.map((starter, index) => (
@@ -293,7 +293,7 @@ const UserTurnRow = memo(function UserTurnRow({
       </div>
       <div className="message-content-wrap">
         <div className="message-meta">
-          <span className="message-role">你</span>
+          <span className="message-role">MuMu</span>
           <span className="message-timestamp">
             {formatTimestamp(message.timestamp)}
           </span>
@@ -359,7 +359,7 @@ const AssistantTurnRow = memo(function AssistantTurnRow({
         <div
           className={`message-meta ${livePhase ? "assistant-live-meta" : ""}`}
         >
-          <span className="message-role">Hermes</span>
+          <span className="message-role">小H</span>
           {turn.timestamp > 0 && (
             <span className="message-timestamp">
               {formatTimestamp(turn.timestamp)}
@@ -435,7 +435,7 @@ const AssistantTurnRow = memo(function AssistantTurnRow({
           );
         })}
         {livePhase && turn.blocks.length === 0 && (
-          <div className="assistant-thinking" aria-label="Hermes 正在生成">
+          <div className="assistant-thinking" aria-label="小H正在生成">
             <LoaderCircle size={16} strokeWidth={1.9} />
             <span className="assistant-stream-cursor" aria-hidden="true" />
           </div>
@@ -524,7 +524,7 @@ const PendingUserRow = memo(function PendingUserRow({
       </div>
       <div className="message-content-wrap">
         <div className="message-meta">
-          <span className="message-role">你</span>
+          <span className="message-role">MuMu</span>
         </div>
         <div className="message-body">{message.content}</div>
       </div>

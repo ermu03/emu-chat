@@ -668,7 +668,7 @@ textarea:focus-visible {
   max-width: min(52vw, 520px);
   overflow: hidden;
   color: var(--ink);
-  font-size: 15px;
+  font-size: 18px;
   font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2066,7 +2066,7 @@ details[open] > summary .tool-call-chevron {
 
   .main-toolbar-title {
     max-width: 50vw;
-    font-size: 14px;
+    font-size: 18px;
   }
 
   .message-list {
