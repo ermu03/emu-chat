@@ -2052,6 +2052,7 @@ details[open] > summary .tool-call-chevron {
   }
 
   .conversation-sidebar.is-mobile-open {
+    z-index: 50;
     transform: translateX(0);
   }
 

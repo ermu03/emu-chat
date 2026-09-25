@@ -214,6 +214,7 @@ export function AppShell() {
     setIsEditingTitle(false);
     view.restoreCachedView(conversationId);
     setActiveConversationId(conversationId);
+    setSidebarOpen(false);
     navigate(`/conversations/${encodeURIComponent(conversationId)}`);
   };
 
