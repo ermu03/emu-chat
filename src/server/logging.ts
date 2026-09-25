@@ -107,6 +107,10 @@ export class SafeLogger {
 
   constructor(private currentLevel: LogLevel = "info") {}
 
+  setLevel(level: LogLevel): void {
+    this.currentLevel = level;
+  }
+
   private shouldLog(level: LogLevel): boolean {
     return this.levelOrder[level] >= this.levelOrder[this.currentLevel];
   }
@@ -149,14 +153,6 @@ export class SafeLogger {
     } else {
       process.stdout.write(serialized + "\n");
     }
-  }
-
-  trace(message: string, meta?: Partial<StructuredLogRecord>): void {
-    this.write("trace", message, meta);
-  }
-
-  debug(message: string, meta?: Partial<StructuredLogRecord>): void {
-    this.write("debug", message, meta);
   }
 
   info(message: string, meta?: Partial<StructuredLogRecord>): void {

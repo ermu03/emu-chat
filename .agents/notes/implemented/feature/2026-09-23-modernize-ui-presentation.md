@@ -17,7 +17,7 @@ emu-chat 作为 Hermes Agent 的单用户 Web 工作台，核心状态机与后�
 1. **升级现代 Design Tokens 与层次体系**（[src/client/index.css](../../../../src/client/index.css)）：
    - 优化深/浅双轨调色板，强调色（`--accent`）采用深邃青碧与鲜亮青碧色调，搭配纯净背景层级（`--canvas`、`--surface`、`--surface-subtle`、`--surface-raised`）。
    - 建立四级微阴影体系（`--shadow-sm`、`--shadow-soft`、`--shadow-float`、`--shadow-glow`），强化元素悬浮深度。
-   - 顶部工具栏（`.main-toolbar`）与弹窗遮罩（`.confirmation-backdrop`、`.drawer-backdrop`）引入 `backdrop-filter: blur(...)` 毛玻璃质感。
+   - 顶部工具栏（`.main-toolbar`）与弹窗遮罩（`.confirmation-backdrop`）引入 `backdrop-filter: blur(...)` 毛玻璃质感。
    - 全局引入纤细半透明圆角药丸滚动条及平滑贝塞尔曲线微动效（`cubic-bezier(0.16, 1, 0.3, 1)`）。
 
 2. **代码块顶栏与一键复制功能**（[src/client/features/messages/message-view.tsx](../../../../src/client/features/messages/message-view.tsx)）：

@@ -16,7 +16,6 @@ import {
 import { QueuePanel } from "./features/queue/queue-panel.js";
 import { isLiveRun } from "./features/queue/queue-state.js";
 import { ApprovalDialog } from "./features/approval/approval-dialog.js";
-import { type PreferencesState } from "./features/preferences/preferences-drawer.js";
 import {
   Check,
   Menu,
@@ -31,12 +30,9 @@ import { useConversationView } from "./state/use-conversation-view.js";
 import { useRunRuntime } from "./state/use-run-runtime.js";
 import { useMessageSend } from "./state/use-message-send.js";
 
-const DEFAULT_PREFERENCES: PreferencesState = {
-  theme: "system",
-  sidebar_width: 320,
-  send_shortcut: "mod_enter",
-  revision: 0,
-};
+type PreferencePatch = Partial<
+  Pick<PreferencesResponse, "theme" | "sidebar_width">
+>;
 
 function getStoredSidebarWidth(): number {
   try {
@@ -317,12 +313,12 @@ export function AppShell() {
     }
   };
 
-  const handleUpdatePreferences = async (patch: Partial<PreferencesState>) => {
+  const handleUpdatePreferences = async (patch: PreferencePatch) => {
     if (!preferences) throw new Error("偏好设置尚未加载");
     const next = await apiClient.putPreferences({
       theme: patch.theme ?? preferences.theme,
       sidebar_width: patch.sidebar_width ?? preferences.sidebar_width,
-      send_shortcut: patch.send_shortcut ?? preferences.send_shortcut,
+      send_shortcut: preferences.send_shortcut,
       expected_revision: preferences.revision,
     });
     setPreferences(next);
@@ -350,7 +346,6 @@ export function AppShell() {
   const composerDisabled =
     !hasActiveConversationView || activeConversation?.delete_state !== "none";
   const sendDisabled = status?.status !== "healthy" || composerDisabled;
-  const effectivePreferences = preferences ?? DEFAULT_PREFERENCES;
   const currentSidebarWidth = sidebarCollapsed ? 64 : sidebarWidth;
   const showStop =
     isLiveRun(visibleRun) &&
@@ -618,7 +613,7 @@ export function AppShell() {
                     conversationId={activeConversationId}
                     initialDraft={draft.content}
                     initialRevision={draft.revision}
-                    sendShortcut={effectivePreferences.send_shortcut}
+                    sendShortcut={preferences?.send_shortcut ?? "mod_enter"}
                     onSaveDraft={handleSaveDraft}
                     onSend={async (content, revision) => {
                       const result = await handleSend(content, revision);

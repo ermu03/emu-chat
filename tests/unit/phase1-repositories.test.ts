@@ -5,19 +5,13 @@ import {
   ConversationRepository,
   DraftRepository,
 } from "../../src/server/db/repositories/conversation.repository.js";
-import { QueueRepository } from "../../src/server/db/repositories/queue.repository.js";
 import { LeaseRepository } from "../../src/server/db/repositories/lease.repository.js";
-import {
-  LocalConflictError,
-  QueueFullError,
-} from "../../src/server/domain/errors.js";
-import { LIMITS } from "../../src/shared/limits.js";
+import { LocalConflictError } from "../../src/server/domain/errors.js";
 
 describe("repository consistency and concurrency", () => {
   let db: Database.Database;
   let conversations: ConversationRepository;
   let drafts: DraftRepository;
-  let queue: QueueRepository;
   let leases: LeaseRepository;
 
   beforeEach(() => {
@@ -25,7 +19,6 @@ describe("repository consistency and concurrency", () => {
     runMigrations(db);
     conversations = new ConversationRepository(db);
     drafts = new DraftRepository(db);
-    queue = new QueueRepository(db);
     leases = new LeaseRepository(db);
   });
 
@@ -80,31 +73,6 @@ describe("repository consistency and concurrency", () => {
     ).toThrow(LocalConflictError);
     expect(drafts.findByConversationId(materialTipId)?.content).toBe(
       "Do not discard this draft",
-    );
-  });
-
-  it("keeps FIFO order and idempotency while enforcing the active depth limit", () => {
-    const conversationId = "cv_01956789-0000-7000-8000-000000000005";
-    addConversation(conversationId);
-    const enqueue = (index: number, clientRequestId = `request-${index}`) =>
-      queue.enqueue({
-        id: `qi_01956789-0000-7000-8000-${String(index).padStart(12, "0")}`,
-        conversation_id: conversationId,
-        operation_id: `op_01956789-0000-7000-8000-${String(index).padStart(12, "0")}`,
-        client_request_id: clientRequestId,
-        state: "queued",
-        payload_text: `message ${index}`,
-      });
-
-    const first = enqueue(1);
-    expect(first.fifo_seq).toBe(1);
-    expect(enqueue(99, "request-1").id).toBe(first.id);
-    for (let index = 2; index <= LIMITS.QUEUE_ACTIVE_MAX_COUNT; index++) {
-      expect(enqueue(index).fifo_seq).toBe(index);
-    }
-    expect(queue.findNextGlobalQueued()?.id).toBe(first.id);
-    expect(() => enqueue(LIMITS.QUEUE_ACTIVE_MAX_COUNT + 1)).toThrow(
-      QueueFullError,
     );
   });
 

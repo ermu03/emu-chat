@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { generateId, ID_PREFIXES } from "../../shared/ids.js";
 import { LIMITS } from "../../shared/limits.js";
 import type { QueueItemEntity, RunEntity } from "../db/schema-types.js";
@@ -9,14 +8,7 @@ import { RunRepository } from "../db/repositories/run.repository.js";
 import { HermesAdapter, type HermesRunEvent } from "../hermes/adapter.js";
 import { SSEHub } from "../sse/sse-hub.js";
 import { maskDisplaySensitiveText } from "../display-masking.js";
-import {
-  ApprovalNotPendingError,
-  LocalConflictError,
-  HermesNotReadyError,
-  HermesProtocolError,
-  LocalNotFoundError,
-  StateConflictError,
-} from "../domain/errors.js";
+import { HermesProtocolError, LocalNotFoundError } from "../domain/errors.js";
 
 type LeasePair = { global: string; conversation: string };
 
@@ -72,167 +64,6 @@ export class AdmissionCoordinator {
     const run = this.runRepo.findById(localRunId);
     if (!run) throw new LocalNotFoundError(`Run ${localRunId} not found`);
     await this.reconcileById(localRunId, run.conversation_id);
-  }
-
-  async enqueueMessage(input: {
-    conversation_id: string;
-    client_request_id: string;
-    text: string;
-  }): Promise<{
-    queue_item_id: string;
-    operation_id: string;
-    state: QueueItemEntity["state"];
-    position: number;
-    replayed?: boolean;
-  }> {
-    const conversation = this.conversationRepo.findById(input.conversation_id);
-    if (!conversation)
-      throw new LocalNotFoundError(
-        `Conversation ${input.conversation_id} not found`,
-      );
-    if (conversation.delete_state !== "none") {
-      throw new StateConflictError(
-        "Conversation is unavailable while deletion is pending or failed",
-        { current_state: conversation.delete_state },
-      );
-    }
-    if (!input.text || input.text.trim().length === 0)
-      throw new StateConflictError("Message content cannot be empty");
-    const payloadBytes = Buffer.byteLength(input.text, "utf8");
-    if (payloadBytes > LIMITS.INPUT_MAX_BYTES)
-      throw new StateConflictError(
-        `Message exceeds ${LIMITS.INPUT_MAX_BYTES} bytes`,
-      );
-
-    const existing = this.queueRepo.findByClientRequestId(
-      input.client_request_id,
-    );
-    if (existing) {
-      if (existing.conversation_id !== input.conversation_id)
-        throw new LocalConflictError(
-          "client_request_id is already used by another conversation",
-        );
-      return {
-        queue_item_id: existing.id,
-        operation_id: existing.operation_id,
-        state: existing.state,
-        position: this.position(existing),
-        replayed: true,
-      };
-    }
-
-    try {
-      await this.hermesAdapter.assertReady();
-    } catch (error) {
-      if (error instanceof HermesNotReadyError) throw error;
-      throw new HermesNotReadyError(
-        "Hermes is not ready to accept a new message",
-      );
-    }
-
-    const item = this.queueRepo.enqueue({
-      id: generateId(ID_PREFIXES.queueItem),
-      conversation_id: input.conversation_id,
-      operation_id: generateId(ID_PREFIXES.operation),
-      client_request_id: input.client_request_id,
-      state: "queued",
-      payload_text: input.text,
-      payload_sha256: createHash("sha256")
-        .update(input.text, "utf8")
-        .digest("hex"),
-      payload_bytes: payloadBytes,
-      idempotency_key: generateId(ID_PREFIXES.idempotency),
-      dispatch_session_id: null,
-      first_attempt_at: null,
-      admission_deadline_at: null,
-      recovery_expires_at: null,
-      payload_expired_at: null,
-      payload_discarded_at: null,
-      last_error_code: null,
-    });
-    void this.tick();
-    return {
-      queue_item_id: item.id,
-      operation_id: item.operation_id,
-      state: item.state,
-      position: this.position(item),
-    };
-  }
-
-  async cancelQueueItem(
-    conversationId: string,
-    queueItemId: string,
-  ): Promise<QueueItemEntity> {
-    const item = this.queueRepo.findById(queueItemId);
-    if (!item || item.conversation_id !== conversationId)
-      throw new LocalNotFoundError(`Queue item ${queueItemId} not found`);
-    if (item.state !== "queued")
-      throw new StateConflictError(
-        `Cannot cancel queue item in state ${item.state}`,
-      );
-    const conversation = this.conversationRepo.findById(conversationId);
-    if (!conversation)
-      throw new LocalNotFoundError(`Conversation ${conversationId} not found`);
-    if (conversation.delete_state !== "none") {
-      throw new StateConflictError(
-        "Conversation is unavailable while deletion is pending or failed",
-        { current_state: conversation.delete_state },
-      );
-    }
-    const updated = this.queueRepo.updateState(queueItemId, item.revision, {
-      state: "cancelled",
-      payload_text: null,
-    });
-    return updated;
-  }
-
-  async getQueue(conversationId: string): Promise<QueueItemEntity[]> {
-    if (!this.conversationRepo.findById(conversationId))
-      throw new LocalNotFoundError(`Conversation ${conversationId} not found`);
-    return this.queueRepo.listByConversation(conversationId);
-  }
-
-  async getRun(conversationId: string, runId: string): Promise<RunEntity> {
-    const run = this.runRepo.findById(runId);
-    if (!run || run.conversation_id !== conversationId)
-      throw new LocalNotFoundError(`Run ${runId} not found`);
-    return run;
-  }
-
-  async cancelRun(conversationId: string, runId: string): Promise<RunEntity> {
-    const run = await this.getRun(conversationId, runId);
-    if (
-      !run.hermes_run_id ||
-      ["reconciled", "rejected"].includes(run.local_state)
-    )
-      return run;
-    if (run.upstream_status === "stopping") return run;
-    const updated = this.runRepo.update(run.id, {
-      upstream_status: "stopping",
-    });
-    this.conversationRepo.setQueuePaused(conversationId, true, "user_stopped");
-    try {
-      await this.hermesAdapter.stopRun(run.hermes_run_id);
-    } finally {
-      this.emitRunEvent(run.id, "run.stopping", {});
-    }
-    return updated;
-  }
-
-  async submitApproval(
-    conversationId: string,
-    runId: string,
-    decision: "once" | "deny",
-  ): Promise<RunEntity> {
-    const run = await this.getRun(conversationId, runId);
-    if (run.upstream_status !== "waiting_for_approval" || !run.hermes_run_id)
-      throw new ApprovalNotPendingError(
-        `Run ${runId} is not waiting for approval`,
-      );
-    await this.hermesAdapter.submitApproval(run.hermes_run_id, decision);
-    const updated = this.runRepo.update(run.id, { upstream_status: "running" });
-    this.emitRunEvent(run.id, "approval.submitted", { choice: decision });
-    return updated;
   }
 
   async tick(): Promise<void> {
@@ -654,14 +485,6 @@ export class AdmissionCoordinator {
         pair.conversation,
       );
     this.leases.delete(runId);
-  }
-
-  private position(item: QueueItemEntity): number {
-    const candidates = this.queueRepo
-      .listByConversation(item.conversation_id)
-      .filter((entry) => entry.state === "queued" || entry.id === item.id);
-    const index = candidates.findIndex((entry) => entry.id === item.id);
-    return index < 0 ? 0 : index + 1;
   }
 
   private errorCode(error: unknown): string {

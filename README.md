@@ -35,7 +35,7 @@ emu-chat/
 │   ├── server/              # Fastify HTTP 服务、Hermes 适配器和队列协调器
 │   └── shared/              # 前后端共用的 schema、类型、枚举和限制
 ├── tests/                   # 单元、组件和集成测试
-├── public/                  # PWA manifest 和静态图标
+├── public/                  # 静态图标和 Web App Manifest
 ├── docs/                    # 当前架构、API 与决策笔记规则
 ├── .agents/notes/           # 待处理提案与四状态工程决策笔记
 ├── .agents/skills/          # 项目开发 Skill 的唯一正文

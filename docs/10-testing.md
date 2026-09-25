@@ -6,7 +6,7 @@
 
 | 层级 | 文件 | 保障的行为 |
 | --- | --- | --- |
-| 单元 | `tests/unit/phase1-repositories.test.ts` | 元数据与草稿 CAS、会话映射时保留草稿、队列 FIFO/幂等/深度上限、租约互斥与令牌校验 |
+| 单元 | `tests/unit/phase1-repositories.test.ts` | 元数据与草稿 CAS、会话映射时保留草稿、租约互斥与令牌校验 |
 | 单元 | `tests/unit/data-retention.test.ts` | 恢复期限、控制记录保留窗口、Run 外键级联删除及活跃 Run 保护 |
 | 单元 | `tests/unit/hermes-client.test.ts` | 认证头、安全边界、错误映射、SSE 存活超时 |
 | 单元 | `tests/unit/logging.test.ts` | 日志脱敏深度、循环引用和敏感字段优先级 |

@@ -59,7 +59,7 @@ JSON 接口返回 JSON；运行事件订阅返回 text/event-stream。服务端�
 | POST | /conversations/:conversation_id/queue/resume | 可省略请求体或传空对象 | 200 QueueListResponseSchema |
 | PATCH | /queue-items/:queue_item_id | PatchQueueItemRequestSchema | 200 QueueItemResponseSchema |
 | POST | /queue-items/:queue_item_id/cancel | CancelQueueItemRequestSchema | 200 QueueItemResponseSchema |
-| POST | /queue-items/:queue_item_id/copy-to-draft | CopyToDraftRequestSchema | 200 CopyToDraftResponseSchema |
+| POST | /queue-items/:queue_item_id/copy-to-draft | CopyToDraftRequestSchema | 200 `{ object: "emu_chat.recovery_copy", draft: DraftResponse, duplicate_risk: true }` |
 | POST | /queue-items/:queue_item_id/discard-recovery | 可省略请求体或传空对象 | 200 QueueItemResponseSchema |
 
 include_terminal 只接受字符串 true 或 false，省略时按 false 处理。修改或取消队列项需要 expected_revision；复制恢复内容到草稿需要 expected_draft_revision，可选 overwrite_nonempty。失败项的恢复正文在 `recovery_expires_at` 到达时即停止返回和复制；后台随后清除正文并设置 `payload_expired_at`。

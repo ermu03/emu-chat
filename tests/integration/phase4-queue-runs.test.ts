@@ -65,7 +65,6 @@ describe("Phase 4: Queue and runs HTTP integration", () => {
       hermesBaseUrl,
       hermesApiKey: "test-token",
       logLevel: "error",
-      nodeEnv: "test",
       isProduction: false,
     };
     app = buildServer(config, { db });

@@ -20,7 +20,7 @@
 
 ### 前端生态
 - **框架与视图**: React 19 + React Router DOM v7
-- **构建与工程化**: Vite 7 + PWA (通过 vite-plugin-pwa 支持)
+- **构建与工程化**: Vite 7；静态 Web App Manifest 提供安装元数据
 - **其他**: Lucide React 图标、React Markdown（渲染 Agent 消息）
 
 ### 后端生态
@@ -46,7 +46,7 @@ emu-chat/
 │   ├── server/              # 后端源码：Fastify HTTP 服务、业务服务、协调器与 Hermes 的集成适配
 │   └── shared/              # 前后端共用的 API Schema、枚举和限制常量
 ├── tests/                   # 单元测试、组件测试和集成测试目录
-├── public/                  # 静态资源，如 PWA manifest 和系统图标
+├── public/                  # 静态资源，如系统图标和 Web App Manifest
 ├── docs/                    # 项目现状、API 参考与决策笔记规则
 ├── .agents/notes/           # 待处理提案与工程决策笔记
 ├── .agents/skills/          # 项目开发 Skill 的正文
@@ -101,7 +101,7 @@ HTTP 端点见 [API 参考](08-api-reference.md)，重要技术取舍见 [决策
 
 ## 7. PWA 支持
 
-前端构建通过 `vite-plugin-pwa` 生成 manifest 和 Service Worker；当前设置了 `injectRegister: null`，客户端入口也没有注册 Service Worker。因此目前只有 manifest 与构建产物，离线缓存功能尚未启用；聊天和状态 API 仍需要连接后端与 Hermes。
+`public/manifest.webmanifest` 提供安装元数据，开发和生产环境使用同一文件。当前没有注册 Service Worker，也没有离线缓存；聊天和状态 API 仍需要连接后端与 Hermes。
 
 ## 8. 当前界面入口
 

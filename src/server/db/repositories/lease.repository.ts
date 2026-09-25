@@ -99,11 +99,4 @@ export class LeaseRepository {
 
     return res.changes > 0;
   }
-
-  releaseAllByOwner(ownerId: string): number {
-    const res = this.db
-      .prepare("DELETE FROM coordinator_leases WHERE owner_id = ?")
-      .run(ownerId);
-    return res.changes;
-  }
 }

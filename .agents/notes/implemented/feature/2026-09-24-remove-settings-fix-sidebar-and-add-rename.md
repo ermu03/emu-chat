@@ -21,7 +21,7 @@ Status: implemented
 
 ### 1. 移除页面右上角的设置入口与抽屉绑定 ([src/client/app.tsx](../../../../src/client/app.tsx))
 - **移除设置按钮**：从顶部工具栏的两个渲染分支（有选中会话与未选中会话）中，彻底移除 `<Settings2 />` 设置图标按钮，右上角仅保留优雅的一键明暗主题切换按钮；
-- **清理抽屉调用**：移除 `preferencesOpen` 状态与 `<PreferencesDrawer />` 组件渲染（保留 `loadPreferences` 和主题偏好同步逻辑，确保主题状态在刷新后仍然持久生效）。
+- **清理抽屉调用和残留**：移除 `preferencesOpen` 状态、`<PreferencesDrawer />` 组件渲染，以及不再使用的组件文件和样式；保留 `loadPreferences` 和主题偏好同步逻辑，确保主题状态在刷新后仍然持久生效。
 
 ### 2. 侧栏右边界支持鼠标拖拽动态调宽 ([src/client/features/conversations/conversation-list.tsx](../../../../src/client/features/conversations/conversation-list.tsx) & [src/client/app.tsx](../../../../src/client/app.tsx) & [src/client/index.css](../../../../src/client/index.css))
 - **交互与把手设计 (Resizer Handle)**：

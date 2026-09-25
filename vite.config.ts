@@ -1,6 +1,5 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
-import { VitePWA } from "vite-plugin-pwa";
 
 const apiProxyTarget =
   process.env["EMU_CHAT_SERVER_URL"] ?? "http://127.0.0.1:3104";
@@ -10,34 +9,7 @@ export default defineConfig({
     outDir: "dist/client",
     emptyOutDir: true,
   },
-  plugins: [
-    react(),
-    VitePWA({
-      registerType: "autoUpdate",
-      injectRegister: null, // Register conditionally in code only in secure context
-      manifest: {
-        name: "emu-chat",
-        short_name: "emu-chat",
-        description: "Lightweight workspace for Hermes Agent",
-        theme_color: "#1a1a1a",
-        background_color: "#121212",
-        display: "standalone",
-        start_url: "/",
-        icons: [
-          {
-            src: "/icons/icon.svg",
-            sizes: "any",
-            type: "image/svg+xml",
-          },
-        ],
-      },
-      workbox: {
-        globPatterns: ["**/*.{js,css,html,ico,png,svg}"],
-        navigateFallback: "/index.html",
-        navigateFallbackDenylist: [/^\/api\//],
-      },
-    }),
-  ],
+  plugins: [react()],
   server: {
     port: 5173,
     host: "0.0.0.0",

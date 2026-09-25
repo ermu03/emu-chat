@@ -18,13 +18,6 @@ export class RunRepository {
     return row ?? null;
   }
 
-  findByHermesRunId(hermesRunId: string): RunEntity | null {
-    const row = this.db
-      .prepare("SELECT * FROM runs WHERE hermes_run_id = ?")
-      .get(hermesRunId) as RunEntity | undefined;
-    return row ?? null;
-  }
-
   findActiveByConversation(conversationId: string): RunEntity | null {
     const row = this.db
       .prepare(

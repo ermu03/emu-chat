@@ -16,7 +16,7 @@
 - **stream SSE管道**:
   - **握手超时**: 限制 10s 内必须完成连接。
   - **readSseChunk竞速**: 利用 `Promise.race` 检查网络活跃度（Liveness 保活上限 30s）。
-  - **行解析状态机**: `HermesClient` 自行按行增量解析 SSE 帧；当前源码没有调用已安装的 `eventsource-parser` 包。
+  - **行解析状态机**: `HermesClient` 自行按行增量解析 SSE 帧。
   - **接收缓冲限制**: 每次读取 chunk 后、分行前检查当前字符串缓冲区是否超过 256 KiB；当前实现并未累计限制多行组成的整帧大小。
   - **输出**: 解析完成即 `yield HermesSseEvent` 对象供外层使用。
 

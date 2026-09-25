@@ -174,7 +174,7 @@ flowchart TD
     Overlay --> ApprovalDialog["ApprovalDialog<br/>(需要用户介入批准的流程)"]
 ```
 
-`PreferencesDrawer` 组件文件仍在仓库中，但 `AppShell` 不再挂载它；当前页面只提供主题快捷切换和侧栏拖拽调宽。主题、侧栏宽度与发送快捷键的持久化接口仍由 `DraftPreferencesService` 提供。
+页面没有设置抽屉；当前提供主题快捷切换和侧栏拖拽调宽。主题、侧栏宽度与发送快捷键的持久化接口仍由 `DraftPreferencesService` 提供。
 
 ## 5. 前后端共享层 (`src/shared/`)
 

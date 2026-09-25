@@ -94,8 +94,7 @@ body {
 
 button,
 input,
-textarea,
-select {
+textarea {
   font: inherit;
 }
 
@@ -111,8 +110,7 @@ button:disabled {
 
 button:focus-visible,
 input:focus-visible,
-textarea:focus-visible,
-select:focus-visible {
+textarea:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -730,14 +728,12 @@ select:focus-visible {
     box-shadow var(--transition-fast);
 }
 
-.status-dot.healthy,
-.status-dot.running {
+.status-dot.healthy {
   background: var(--success);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 22%, transparent);
 }
 
-.status-dot.degraded,
-.status-dot.waiting {
+.status-dot.degraded {
   background: var(--warning);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning) 22%, transparent);
 }
@@ -1817,8 +1813,7 @@ details[open] > summary .tool-call-chevron {
 }
 
 /* Modals & Dialogs */
-.confirmation-backdrop,
-.drawer-backdrop {
+.confirmation-backdrop {
   position: fixed;
   z-index: 100;
   inset: 0;
@@ -1833,7 +1828,6 @@ details[open] > summary .tool-call-chevron {
 }
 
 .confirmation-card,
-.preferences-drawer,
 .approval-card {
   width: min(480px, 100%);
   padding: 24px;
@@ -1846,8 +1840,7 @@ details[open] > summary .tool-call-chevron {
 }
 
 .confirmation-card h3,
-.approval-card h3,
-.preferences-drawer h2 {
+.approval-card h3 {
   margin: 0;
   font-size: 18px;
   font-weight: 700;
@@ -1952,73 +1945,6 @@ details[open] > summary .tool-call-chevron {
   opacity: 0.45;
 }
 
-/* Preferences Drawer */
-.drawer-backdrop {
-  align-items: stretch;
-  justify-content: flex-end;
-  padding: 0;
-}
-
-.preferences-drawer {
-  width: min(390px, 100%);
-  height: 100%;
-  overflow-y: auto;
-  border-width: 0 0 0 1px;
-  border-radius: 0;
-  box-shadow: var(--shadow-float);
-  animation: slide-in-right 200ms ease-out;
-}
-
-.preferences-drawer-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 28px;
-}
-
-.preference-field {
-  margin-bottom: 24px;
-}
-
-.preference-field label {
-  display: block;
-  margin-bottom: 8px;
-  color: var(--ink);
-  font-size: 13px;
-  font-weight: 650;
-}
-
-.preference-field select {
-  width: 100%;
-  height: 38px;
-  padding: 0 10px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  color: var(--ink);
-  background: var(--surface);
-  font-size: 13px;
-  transition:
-    border-color var(--transition-fast),
-    box-shadow var(--transition-fast);
-}
-
-.preference-field select:focus {
-  border-color: var(--accent);
-  box-shadow: var(--shadow-glow);
-}
-
-.preference-field input[type="range"] {
-  width: 100%;
-  accent-color: var(--accent);
-}
-
-.preference-note {
-  margin-top: 32px;
-  color: var(--ink-faint);
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-}
-
 .approval-card {
   width: min(520px, 100%);
 }
@@ -2107,15 +2033,6 @@ details[open] > summary .tool-call-chevron {
   to {
     transform: scale(1);
     opacity: 1;
-  }
-}
-
-@keyframes slide-in-right {
-  from {
-    transform: translateX(100%);
-  }
-  to {
-    transform: translateX(0);
   }
 }
 

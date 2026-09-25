@@ -7,8 +7,6 @@ export const ConnectionStatusHermesValues = [
   "incompatible",
   "config_error",
 ] as const;
-export type ConnectionStatusHermes =
-  (typeof ConnectionStatusHermesValues)[number];
 
 export const PauseReasonValues = [
   "run_failed",
@@ -34,7 +32,6 @@ export const QueueItemStateValues = [
   "rejected",
   "cancelled",
 ] as const;
-export type QueueItemState = (typeof QueueItemStateValues)[number];
 
 export const RunLocalStateValues = [
   "submitting",
@@ -44,7 +41,6 @@ export const RunLocalStateValues = [
   "rejected",
   "review_required",
 ] as const;
-export type RunLocalState = (typeof RunLocalStateValues)[number];
 
 export const UpstreamRunStatusValues = [
   "queued",
@@ -56,20 +52,14 @@ export const UpstreamRunStatusValues = [
   "cancelled",
   "interrupted",
 ] as const;
-export type UpstreamRunStatus = (typeof UpstreamRunStatusValues)[number];
 
 export const DeleteStateValues = ["none", "pending", "failed"] as const;
-export type DeleteState = (typeof DeleteStateValues)[number];
 
 export const ApprovalChoiceValues = ["once", "deny"] as const;
-export type ApprovalChoice = (typeof ApprovalChoiceValues)[number];
 
 export const ThemePreferenceValues = ["system", "light", "dark"] as const;
-export type ThemePreference = (typeof ThemePreferenceValues)[number];
 
 export const SendShortcutPreferenceValues = ["enter", "mod_enter"] as const;
-export type SendShortcutPreference =
-  (typeof SendShortcutPreferenceValues)[number];
 
 export const ErrorCodeValues = [
   "INVALID_REQUEST",
@@ -109,4 +99,3 @@ export const MessageRoleValues = [
   "tool",
   "system",
 ] as const;
-export type MessageRole = (typeof MessageRoleValues)[number];

@@ -21,7 +21,6 @@ export type AppConfig = {
   hermesBaseUrl: string;
   hermesApiKey: string;
   logLevel: "trace" | "debug" | "info" | "warn" | "error" | "fatal";
-  nodeEnv: string;
   isProduction: boolean;
 };
 
@@ -49,7 +48,6 @@ export function loadConfig(
     hermesBaseUrl: parsed.hermesBaseUrl.replace(/\/+$/, ""),
     hermesApiKey: parsed.hermesApiKey,
     logLevel: parsed.logLevel,
-    nodeEnv: parsed.nodeEnv,
     isProduction: parsed.nodeEnv === "production",
   };
 }

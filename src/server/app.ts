@@ -50,6 +50,7 @@ export function buildServer(
   config: AppConfig,
   dependencies: ServerDependencies = {},
 ): FastifyInstance {
+  logger.setLevel(config.logLevel);
   const server = Fastify({
     logger: false,
     bodyLimit: LIMITS.JSON_BODY_MAX_BYTES,

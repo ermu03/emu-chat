@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import Database from "better-sqlite3";
+import { createHash } from "node:crypto";
 import { runMigrations } from "../../src/server/db/migrate.js";
 import { ConversationRepository } from "../../src/server/db/repositories/conversation.repository.js";
 import { QueueRepository } from "../../src/server/db/repositories/queue.repository.js";
@@ -32,15 +33,32 @@ describe("data retention across queue and run states", () => {
     const now = new Date();
     const age = (durationMs: number) =>
       new Date(now.getTime() - durationMs).toISOString();
-    const enqueue = (suffix: string) =>
-      queue.enqueue({
-        id: `qi_retention_${suffix}`,
-        conversation_id: "cv_retention",
-        operation_id: `op_retention_${suffix}`,
-        client_request_id: `request-retention-${suffix}`,
-        state: "queued",
-        payload_text: `payload ${suffix}`,
-      });
+    let sequence = 0;
+    const enqueue = (suffix: string) => {
+      const id = `qi_retention_${suffix}`;
+      const payload = `payload ${suffix}`;
+      const createdAt = now.toISOString();
+      db.prepare(
+        `INSERT INTO queue_items (
+          id, conversation_id, operation_id, client_request_id, fifo_seq,
+          state, payload_text, payload_sha256, payload_bytes,
+          idempotency_key, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        id,
+        "cv_retention",
+        `op_retention_${suffix}`,
+        `request-retention-${suffix}`,
+        ++sequence,
+        payload,
+        createHash("sha256").update(payload).digest("hex"),
+        Buffer.byteLength(payload, "utf8"),
+        `idempotency-retention-${suffix}`,
+        createdAt,
+        createdAt,
+      );
+      return queue.findById(id)!;
+    };
     const markDone = (suffix: string, updatedAt: string) => {
       const item = enqueue(suffix);
       queue.updateState(item.id, item.revision, {

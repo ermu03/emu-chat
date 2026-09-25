@@ -35,7 +35,6 @@ export const ApiErrorPayloadSchema = z.object({
   upstream_status: z.number().int().optional(),
   details: z.record(z.string(), z.unknown()).optional(),
 });
-export type ApiErrorPayload = z.infer<typeof ApiErrorPayloadSchema>;
 
 export const ApiErrorEnvelopeSchema = z.object({
   error: ApiErrorPayloadSchema,
@@ -67,7 +66,6 @@ export const GetConversationsQuerySchema = z
     offset: z.coerce.number().int().min(0).default(0),
   })
   .strict();
-export type GetConversationsQuery = z.infer<typeof GetConversationsQuerySchema>;
 
 export const GetMessagesQuerySchema = z
   .object({
@@ -81,7 +79,6 @@ export const GetMessagesQuerySchema = z
     order: z.enum(["oldest", "latest"]).default("oldest"),
   })
   .strict();
-export type GetMessagesQuery = z.infer<typeof GetMessagesQuerySchema>;
 
 // --- Conversation Schemas ---
 export const ConversationSummarySchema = z.object({
@@ -135,9 +132,6 @@ export type CreateConversationRequest = z.infer<
 export const ResetConversationRequestSchema = z.object({
   title: z.string().max(LIMITS.TITLE_MAX_CHARS).optional(),
 });
-export type ResetConversationRequest = z.infer<
-  typeof ResetConversationRequestSchema
->;
 
 export const ForkConversationRequestSchema = z.object({
   title: z.string().max(LIMITS.TITLE_MAX_CHARS).optional(),
@@ -298,7 +292,6 @@ export const GetQueueQuerySchema = z
       .transform((value) => value === "true"),
   })
   .strict();
-export type GetQueueQuery = z.infer<typeof GetQueueQuerySchema>;
 
 export const PatchQueueItemRequestSchema = z
   .object({
@@ -317,12 +310,6 @@ export type CancelQueueItemRequest = z.infer<
   typeof CancelQueueItemRequestSchema
 >;
 
-export const ResumeQueueRequestSchema = z.object({}).strict();
-export type ResumeQueueRequest = z.infer<typeof ResumeQueueRequestSchema>;
-
-export const ResumeQueueResponseSchema = QueueListResponseSchema;
-export type ResumeQueueResponse = z.infer<typeof ResumeQueueResponseSchema>;
-
 export const CopyToDraftRequestSchema = z
   .object({
     expected_draft_revision: z.number().int().nonnegative(),
@@ -330,18 +317,6 @@ export const CopyToDraftRequestSchema = z
   })
   .strict();
 export type CopyToDraftRequest = z.infer<typeof CopyToDraftRequestSchema>;
-
-export const CopyToDraftResponseSchema = z.object({
-  object: z.literal("emu_chat.recovery_copy"),
-  draft: DraftResponseSchema,
-  duplicate_risk: z.literal(true),
-});
-export type CopyToDraftResponse = z.infer<typeof CopyToDraftResponseSchema>;
-
-export const DiscardRecoveryRequestSchema = z.object({}).strict();
-export type DiscardRecoveryRequest = z.infer<
-  typeof DiscardRecoveryRequestSchema
->;
 
 // --- Runs ---
 export const RunApprovalSchema = z.object({
@@ -351,7 +326,6 @@ export const RunApprovalSchema = z.object({
   choices: z.array(z.enum(ApprovalChoiceValues)),
   deadline_at: z.string().optional(),
 });
-export type RunApproval = z.infer<typeof RunApprovalSchema>;
 
 export const RunResponseSchema = z.object({
   object: z.literal("emu_chat.run"),

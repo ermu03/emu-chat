@@ -4,10 +4,8 @@ import type {
   ConversationDetailResponse,
   ConversationListResponse,
   CreateConversationRequest,
-  ResetConversationRequest,
   ForkConversationRequest,
   PatchHermesMetadataRequest,
-  PatchLocalMetadataRequest,
   DeleteConversationRequest,
   DeleteConversationResponse,
   MessageListResponse,
@@ -36,22 +34,8 @@ export class ApiClientError extends Error {
   }
 }
 
-export interface ClientConfig {
-  baseUrl?: string;
-  fetchFn?: typeof fetch;
-}
-
-export class EmuChatApiClient {
-  private baseUrl: string;
-  private fetchFn: typeof fetch;
-
-  constructor(config: ClientConfig = {}) {
-    this.baseUrl = config.baseUrl || "";
-    this.fetchFn = config.fetchFn || globalThis.fetch.bind(globalThis);
-  }
-
+class EmuChatApiClient {
   private async request<T>(path: string, init?: RequestInit): Promise<T> {
-    const url = `${this.baseUrl}${path}`;
     const headers = new Headers(init?.headers);
     if (!headers.has("Accept")) {
       headers.set("Accept", "application/json");
@@ -60,7 +44,7 @@ export class EmuChatApiClient {
       headers.set("Content-Type", "application/json");
     }
 
-    const res = await this.fetchFn(url, {
+    const res = await fetch(path, {
       ...init,
       headers,
     });
@@ -126,19 +110,6 @@ export class EmuChatApiClient {
     );
   }
 
-  resetConversation(
-    conversationId: string,
-    data?: ResetConversationRequest,
-  ): Promise<ConversationDetailResponse> {
-    return this.request<ConversationDetailResponse>(
-      `/api/v1/conversations/${conversationId}/reset`,
-      {
-        method: "POST",
-        body: JSON.stringify(data || {}),
-      },
-    );
-  }
-
   forkConversation(
     conversationId: string,
     data?: ForkConversationRequest,
@@ -158,19 +129,6 @@ export class EmuChatApiClient {
   ): Promise<ConversationDetailResponse> {
     return this.request<ConversationDetailResponse>(
       `/api/v1/conversations/${conversationId}/hermes-metadata`,
-      {
-        method: "PATCH",
-        body: JSON.stringify(data),
-      },
-    );
-  }
-
-  patchLocalMetadata(
-    conversationId: string,
-    data: PatchLocalMetadataRequest,
-  ): Promise<ConversationDetailResponse> {
-    return this.request<ConversationDetailResponse>(
-      `/api/v1/conversations/${conversationId}/local-metadata`,
       {
         method: "PATCH",
         body: JSON.stringify(data),
