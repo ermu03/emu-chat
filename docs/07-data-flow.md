@@ -38,23 +38,23 @@ sequenceDiagram
     Runtime->>SSE: Run 可见后订阅事件流
     SSE-->>Runtime: 发送 stream.ready
     Coord->>Coord: consume (streamEvents)
-    Coord->>Coord: handleEvent & reconcileById
+    Coord->>Coord: handleEvent & reconcileById (在 emitRunEvent 时由服务端遮盖 tool.started/completed preview)
 
-    Coord->>SSE: 推送 run.event (message.delta / tool.started)
+    Coord->>SSE: 推送 run.event (message.delta / tool.started，后者 preview 已脱敏)
     SSE-->>Runtime: useStreamEvents 接收 run.event
-    Runtime->>View: 按 local_seq 追加文字段或执行中工具卡片
-    Coord->>SSE: 推送 tool.completed (状态和脱敏结果预览)
-    Runtime->>View: 更新单工具卡片，立即显示结果预览
+    Runtime->>View: 工具卡片折叠标题显示工具名和执行状态
+    Coord->>SSE: 推送 tool.completed (状态及脱敏结果预览)
+    Runtime->>View: 状态转为已完成/失败，结果预览置入展开区
     Runtime->>View: 合并短时间内的工具完成读取
-    View->>API: 增量读取 Hermes 消息
-    API-->>View: Hermes 历史中的 tool_call_id、完整输入输出
-    View->>View: 仅在唯一可对应时补齐卡片
+    View->>API: 增量读取 Hermes 消息 (含服务端已脱敏的 tool_calls[] 权威参数与输出)
+    API-->>View: 返回包含脱敏 tool_calls 的消息
+    View->>View: 唯一可配对的实时卡片补齐输入与输出；历史卡片按 tool_call_id 精确配对
     Coord->>SSE: 推送 run.event (run.completed / run.reconciled)
     SSE-->>Runtime: 转发终态事件
     Runtime->>View: 保留实时回合并标记正在核对
     View->>API: 拉取最新页，必要时逐页补齐至已知消息
     API-->>View: 返回消息页
-    View->>View: 按 ID 合并去重，同步结算权威回合
+    View->>View: 按 ID 合并去重，同步结算权威回合，平滑保留卡片展开状态
     View-->>Messages: 在同一助手行交接内容与工具展开状态
 ```
 

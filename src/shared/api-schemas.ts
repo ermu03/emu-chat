@@ -190,6 +190,13 @@ export type DeleteConversationResponse = z.infer<
 >;
 
 // --- Messages ---
+export const ToolCallDisplayItemSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  display_args: z.string().optional(),
+});
+export type ToolCallDisplayItem = z.infer<typeof ToolCallDisplayItemSchema>;
+
 export const MessageItemSchema = z.object({
   id: z.number().int().positive(),
   session_id: z.string(),
@@ -197,6 +204,7 @@ export const MessageItemSchema = z.object({
   content: z.string(),
   tool_call_id: z.string().nullable(),
   tool_name: z.string().nullable(),
+  tool_calls: z.array(ToolCallDisplayItemSchema).optional(),
   timestamp: z.number().nonnegative(),
   token_count: z.number().int().nonnegative().nullable(),
   finish_reason: z.string().nullable(),

@@ -42,7 +42,7 @@ JSON 接口返回 JSON；运行事件订阅返回 text/event-stream。服务端�
 | PATCH | /conversations/:conversationId/local-metadata | PatchLocalMetadataRequestSchema | 200 ConversationDetailResponseSchema |
 | POST | /conversations/:conversationId/delete | DeleteConversationRequestSchema | 200 DeleteConversationResponseSchema |
 
-会话列表的 limit、offset 默认分别为 50、0；消息列表的 limit、offset、order 默认分别为 100、0、oldest。客户端加载会话消息时显式使用 `order=latest`，首次请求最新 100 条，随后按独立历史游标请求更早的页。发送消息需要 client_request_id 和 expected_draft_revision；202 响应返回入队结果和草稿状态，不直接返回一条已完成的助手消息。相同 client_request_id 在控制记录保留期间返回原结果；`done`、`cancelled` 记录在最后更新后保留 7 天，期满后再提交同一 ID 不保证重放。删除会话需传 expected_hermes_session_id 与 confirmed。
+会话列表的 limit、offset 默认分别为 50、0；消息列表的 limit、offset、order 默认分别为 100、0、oldest。客户端加载会话消息时显式使用 `order=latest`，首次请求最新 100 条，随后按独立历史游标请求更早的页。`MessageItemSchema` 扩展包含经过服务端展示脱敏的 `tool_calls` 列表（`{ id, name, display_args }`），供工具卡片在展开后显示对应调用的完整输入。发送消息需要 client_request_id 和 expected_draft_revision；202 响应返回入队结果和草稿状态，不直接返回一条已完成的助手消息。相同 client_request_id 在控制记录保留期间返回原结果；`done`、`cancelled` 记录在最后更新后保留 7 天，期满后再提交同一 ID 不保证重放。删除会话需传 expected_hermes_session_id 与 confirmed。
 
 ## 草稿
 

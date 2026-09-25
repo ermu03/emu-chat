@@ -383,6 +383,95 @@ describe("Phase 4: Queue and runs HTTP integration", () => {
     ).toContain("Run this through Fake Hermes");
   });
 
+  it("returns masked tool calls and results through the message API", async () => {
+    const conversationId = await createMappedConversation();
+    const detail = await app!.inject({
+      method: "GET",
+      url: `/api/v1/conversations/${conversationId}`,
+    });
+    const sessionId = (detail.json() as { hermes_session_id: string })
+      .hermes_session_id;
+    const session = fakeHermes.sessions.get(sessionId)!;
+    const secret = "SENTINEL123";
+    session.messages.push(
+      {
+        id: 1,
+        session_id: sessionId,
+        role: "assistant",
+        content: `TOKEN=${secret} before call`,
+        reasoning: `password=${secret}`,
+        tool_calls: [
+          {
+            id: "call_1",
+            type: "function",
+            function: {
+              name: "terminal",
+              arguments: JSON.stringify({
+                command: `TOKEN=${secret} curl 'https://example.com/?token=${secret}'; echo done`,
+              }),
+            },
+          },
+          {
+            id: "call_2",
+            type: "function",
+            function: {
+              name: "read_file",
+              arguments: JSON.stringify({
+                path: "/tmp/notes.txt",
+                password: secret,
+              }),
+            },
+          },
+        ],
+        timestamp: 1,
+      },
+      {
+        id: 2,
+        session_id: sessionId,
+        role: "tool",
+        content: JSON.stringify({
+          output: `Authorization: Bearer ${secret}\nnormal line`,
+        }),
+        tool_call_id: "call_1",
+        tool_name: "terminal",
+        timestamp: 2,
+      },
+    );
+
+    const response = await app!.inject({
+      method: "GET",
+      url: `/api/v1/conversations/${conversationId}/messages`,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.body).not.toContain(secret);
+    const items = (
+      response.json() as {
+        items: Array<{
+          content: string;
+          reasoning: string | null;
+          tool_calls?: Array<{
+            name: string;
+            display_args?: string;
+          }>;
+        }>;
+      }
+    ).items;
+    expect(items[0]?.content).toBe("TOKEN=[已隐藏] before call");
+    expect(items[0]?.reasoning).toBe("password=[已隐藏]");
+    expect(items[0]?.tool_calls?.[0]).toMatchObject({
+      name: "terminal",
+      display_args:
+        "TOKEN=[已隐藏] curl 'https://example.com/?token=[已隐藏]'; echo done",
+    });
+    expect(items[0]?.tool_calls?.[1]?.name).toBe("read_file");
+    expect(items[0]?.tool_calls?.[1]?.display_args).toContain(
+      '"path": "/tmp/notes.txt"',
+    );
+    expect(JSON.parse(items[1]!.content)).toEqual({
+      output: "Authorization: [已隐藏]\nnormal line",
+    });
+  });
+
   it("forwards tool approval through the run API and reconciles its terminal result", async () => {
     const conversationId = await createMappedConversation();
     fakeHermes.pauseNextRun = true;

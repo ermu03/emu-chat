@@ -8,6 +8,7 @@ import { QueueRepository } from "../db/repositories/queue.repository.js";
 import { RunRepository } from "../db/repositories/run.repository.js";
 import { HermesAdapter, type HermesRunEvent } from "../hermes/adapter.js";
 import { SSEHub } from "../sse/sse-hub.js";
+import { maskDisplaySensitiveText } from "../display-masking.js";
 import {
   ApprovalNotPendingError,
   LocalConflictError,
@@ -587,8 +588,29 @@ export class AdmissionCoordinator {
     payload: Record<string, unknown>,
   ): void {
     if (this.stopped) return;
+    const maskedPayload = this.maskEventPayload(type, payload);
     const run = this.runRepo.appendEvent(localRunId, type);
-    this.sseHub.publishRunEvent(run.id, run.last_event_seq, type, payload);
+    this.sseHub.publishRunEvent(
+      run.id,
+      run.last_event_seq,
+      type,
+      maskedPayload,
+    );
+  }
+
+  private maskEventPayload(
+    type: string,
+    payload: Record<string, unknown>,
+  ): Record<string, unknown> {
+    if (type === "tool.started" || type === "tool.completed") {
+      if (typeof payload.preview === "string") {
+        return {
+          ...payload,
+          preview: maskDisplaySensitiveText(payload.preview),
+        };
+      }
+    }
+    return payload;
   }
 
   private heartbeatLeases(): void {

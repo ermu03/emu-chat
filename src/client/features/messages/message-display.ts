@@ -45,6 +45,7 @@ export function getRenderableMessages(messages: MessageItem[]): MessageItem[] {
       Boolean(message.content.trim()) ||
       Boolean(message.tool_name) ||
       Boolean(message.tool_call_id) ||
+      Boolean(message.tool_calls && message.tool_calls.length > 0) ||
       Boolean(message.reasoning?.trim()),
   );
 }
@@ -173,7 +174,28 @@ function buildAssistantTurn(chunk: MessageItem[]): AssistantTurn {
         });
       }
 
-      if (msg.tool_name || msg.tool_call_id) {
+      if (msg.tool_calls && msg.tool_calls.length > 0) {
+        if (msg.content.trim()) {
+          blocks.push({
+            kind: "text",
+            id: `step_text_${msg.id}`,
+            content: msg.content.trim(),
+          });
+        }
+        for (const call of msg.tool_calls) {
+          const toolItem: ToolCallItem = {
+            id: call.id,
+            name: call.name,
+            callContent: call.display_args,
+            isError: false,
+          };
+          blocks.push({
+            kind: "tool",
+            id: `step_tool_${call.id}`,
+            tool: toolItem,
+          });
+        }
+      } else if (msg.tool_name || msg.tool_call_id) {
         const toolId = msg.tool_call_id || `call_${msg.id}`;
         const toolItem: ToolCallItem = {
           id: toolId,
@@ -207,30 +229,27 @@ function buildAssistantTurn(chunk: MessageItem[]): AssistantTurn {
         );
       }
 
-      // 2. Match by tool_name (backwards)
+      // 2. Match by tool_name only if exactly one unmatched candidate exists (do not guess for concurrent calls)
       if (!matchedToolStep && !msg.tool_call_id && msg.tool_name) {
-        for (let j = blocks.length - 1; j >= 0; j--) {
-          const s = blocks[j];
-          if (
-            s &&
+        const candidates = blocks.filter(
+          (s): s is { kind: "tool"; id: string; tool: ToolCallItem } =>
             s.kind === "tool" &&
             s.tool.resultContent === undefined &&
-            s.tool.name === msg.tool_name
-          ) {
-            matchedToolStep = s;
-            break;
-          }
+            s.tool.name === msg.tool_name,
+        );
+        if (candidates.length === 1) {
+          matchedToolStep = candidates[0];
         }
       }
 
-      // 3. Fallback: last unmatched tool
+      // 3. Fallback: only if exactly one unmatched tool exists overall
       if (!matchedToolStep && !msg.tool_call_id) {
-        for (let j = blocks.length - 1; j >= 0; j--) {
-          const s = blocks[j];
-          if (s && s.kind === "tool" && s.tool.resultContent === undefined) {
-            matchedToolStep = s;
-            break;
-          }
+        const candidates = blocks.filter(
+          (s): s is { kind: "tool"; id: string; tool: ToolCallItem } =>
+            s.kind === "tool" && s.tool.resultContent === undefined,
+        );
+        if (candidates.length === 1) {
+          matchedToolStep = candidates[0];
         }
       }
 

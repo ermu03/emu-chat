@@ -86,7 +86,8 @@
 
 ### ConversationViewCache 与 RunDisplay
 - **ConversationViewCache**: 容量为 12 的 LRU 缓存，利用 JS 原生 `Map` 对插入顺序的保持特性实现 `get`/`set`/`delete`。
-- **RunDisplay**: 按 Run ID 保存文字和工具事件的有序块；`local_seq` 去重，最多保留近期 24 个 Run 的临时视图。`tool.completed` 先显示脱敏预览，再合并读取 Hermes 历史消息；只有工具名与结果唯一可对应时才补齐完整输入输出，同名并发调用保持待核对。SSE 缺口提示用户部分过程不可恢复。
+- **RunDisplay**: 按 Run ID 保存文字和工具事件的有序块；`local_seq` 去重，最多保留近期 24 个 Run 的临时视图。收到 `tool.started` 时创建只有工具名和执行状态的卡片；`tool.completed` 将结果预览置入展开区。后续合并读取 Hermes 历史消息；只有工具名与结果唯一可对应（或以 `tool_call_id` 精确配对）时才补齐完整输入输出，同名并发调用缺失 ID 时保持待核对。SSE 缺口提示用户部分过程不可恢复。
+- **工具卡片与展示脱敏**: 折叠卡片左侧只显示工具名，右侧显示状态；展开区展示完整的脱敏参数/命令及工具输出。服务端在 API 消息和 SSEHub 事件分发前对凭据实施展示脱敏。
 - **终态交接**: Run 已对账但历史读取未成功时继续显示实时回合，并以轮询或手动核对重试。消息合并与 RunDisplay 结算在同一次 React 更新中提交；历史来源始终是 Hermes。
 
 ## 6. CSS 设计系统
@@ -95,3 +96,4 @@
 - **层次与质感**: 顶部导航工具栏与模态弹窗遮罩启用 `backdrop-filter: blur(...)` 毛玻璃模糊。
 - **响应式布局**: 以 `760px` 为断点，移动端触发全屏抽屉式的侧边栏模式。
 - **交互与无障碍**: 实现流式光标动画 (`cursor-blink`)，并通过 `@media (prefers-reduced-motion)` 禁用不必要的动画效果。
+- **数学公式**: 前端入口加载 KaTeX 样式，保证 MathML 仅供辅助阅读且公式结构正确排版；过长的块级公式在自身区域横向滚动。

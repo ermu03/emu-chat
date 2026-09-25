@@ -1014,6 +1014,11 @@ select:focus-visible {
   letter-spacing: -0.005em;
 }
 
+.message-body .katex-display {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
 .message-row.assistant .message-content-wrap > .message-body + .message-body {
   margin-top: 14px;
 }
@@ -1209,16 +1214,6 @@ select:focus-visible {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 600;
-}
-
-.tool-call-preview {
-  overflow: hidden;
-  flex: 1 1 auto;
-  min-width: 0;
-  color: var(--ink-soft);
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .tool-call-summary .tool-call-status {

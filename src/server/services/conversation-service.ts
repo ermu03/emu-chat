@@ -8,7 +8,12 @@ import type {
   MessageListResponse,
   PatchHermesMetadataRequest,
   PatchLocalMetadataRequest,
+  ToolCallDisplayItem,
 } from "../../shared/api-schemas.js";
+import {
+  maskToolArgumentsForDisplay,
+  maskDisplaySensitiveText,
+} from "../display-masking.js";
 import type { PauseReason } from "../../shared/domain-enums.js";
 import { generateConversationId } from "../../shared/ids.js";
 import type {
@@ -498,17 +503,88 @@ export class ConversationService {
   }
 
   private toMessageItem(message: HermesMessageItem): MessageItem {
+    let toolCalls: ToolCallDisplayItem[] | undefined = undefined;
+
+    if (
+      message.role === "assistant" &&
+      Array.isArray(message.tool_calls) &&
+      message.tool_calls.length > 0
+    ) {
+      toolCalls = [];
+      for (const [index, call] of message.tool_calls.entries()) {
+        const callObj =
+          call && typeof call === "object" && !Array.isArray(call)
+            ? (call as Record<string, unknown>)
+            : {};
+        const id =
+          typeof callObj.id === "string" && callObj.id.trim()
+            ? callObj.id.trim()
+            : `call_${message.id}_${index}`;
+        const func =
+          callObj.function &&
+          typeof callObj.function === "object" &&
+          !Array.isArray(callObj.function)
+            ? (callObj.function as Record<string, unknown>)
+            : null;
+        const name =
+          func && typeof func.name === "string" && func.name.trim()
+            ? func.name.trim()
+            : typeof callObj.name === "string" && callObj.name.trim()
+              ? callObj.name.trim()
+              : typeof callObj.tool_name === "string" &&
+                  callObj.tool_name.trim()
+                ? callObj.tool_name.trim()
+                : "tool";
+        const rawArgs = func?.arguments ?? callObj.arguments ?? callObj.args;
+        const displayArgs = maskToolArgumentsForDisplay(name, rawArgs);
+        toolCalls.push({
+          id,
+          name,
+          ...(displayArgs ? { display_args: displayArgs } : {}),
+        });
+      }
+    } else if (
+      message.role === "assistant" &&
+      (message.tool_name || message.tool_call_id)
+    ) {
+      const name = message.tool_name || "tool";
+      const id = message.tool_call_id || `call_${message.id}`;
+      const displayArgs = maskToolArgumentsForDisplay(name, message.content);
+      toolCalls = [
+        {
+          id,
+          name,
+          ...(displayArgs ? { display_args: displayArgs } : {}),
+        },
+      ];
+    }
+
+    const isToolCallMessage =
+      message.role === "assistant" &&
+      (Boolean(toolCalls?.length) ||
+        Boolean(message.tool_name) ||
+        Boolean(message.tool_call_id));
+    const content =
+      message.role === "tool" || isToolCallMessage
+        ? maskDisplaySensitiveText(message.content)
+        : message.content;
+    const reasoning = message.reasoning ?? message.reasoning_content ?? null;
+
     return {
       id: message.id,
       session_id: message.session_id,
       role: message.role,
-      content: message.content,
+      content,
       tool_call_id: message.tool_call_id ?? null,
       tool_name: message.tool_name ?? null,
+      ...(toolCalls && toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
       timestamp: message.timestamp,
       token_count: message.token_count ?? null,
       finish_reason: message.finish_reason ?? null,
-      reasoning: message.reasoning ?? message.reasoning_content ?? null,
+      reasoning:
+        isToolCallMessage && reasoning !== null
+          ? maskDisplaySensitiveText(reasoning)
+          : reasoning,
       display_kind: message.display_kind ?? null,
     };
   }

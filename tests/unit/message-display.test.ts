@@ -224,6 +224,102 @@ describe("message-display turn aggregation", () => {
     expect(tools[1]?.tool.resultContent).toBe("second result");
   });
 
+  it("handles assistant messages with multiple tool_calls and matches results by tool_call_id", () => {
+    const messages: MessageItem[] = [
+      { id: 1, role: "user", content: "Check two things", timestamp: 1 },
+      {
+        id: 2,
+        role: "assistant",
+        content: "I will check both files.",
+        tool_calls: [
+          {
+            id: "call_a",
+            name: "terminal",
+            display_args: "ls -la",
+          },
+          {
+            id: "call_b",
+            name: "read_file",
+            display_args: '{"path": "package.json"}',
+          },
+        ],
+        timestamp: 2,
+      },
+      {
+        id: 3,
+        role: "tool",
+        content: JSON.stringify({ output: "total 10\nfile.txt" }),
+        tool_call_id: "call_a",
+        tool_name: "terminal",
+        timestamp: 3,
+      },
+      {
+        id: 4,
+        role: "tool",
+        content: JSON.stringify({ output: '{"name": "emu-chat"}' }),
+        tool_call_id: "call_b",
+        tool_name: "read_file",
+        timestamp: 4,
+      },
+    ];
+
+    const turns = groupMessagesIntoTurns(messages);
+    expect(turns).toHaveLength(2);
+    const assistantTurn = turns[1] as AssistantTurn;
+    expect(assistantTurn.blocks[0]).toMatchObject({
+      kind: "text",
+      content: "I will check both files.",
+    });
+    const tools = assistantTurn.blocks.filter((block) => block.kind === "tool");
+    expect(tools).toHaveLength(2);
+
+    expect(tools[0]?.tool.name).toBe("terminal");
+    expect(tools[0]?.tool.callContent).toBe("ls -la");
+    expect(tools[0]?.tool.resultContent).toContain("total 10");
+
+    expect(tools[1]?.tool.name).toBe("read_file");
+    expect(tools[1]?.tool.callContent).toBe('{"path": "package.json"}');
+    expect(tools[1]?.tool.resultContent).toContain("emu-chat");
+  });
+
+  it("does not guess when multiple concurrent calls with the same name miss tool_call_id", () => {
+    const messages: MessageItem[] = [
+      { id: 1, role: "user", content: "Run parallel", timestamp: 1 },
+      {
+        id: 2,
+        role: "assistant",
+        content: "",
+        tool_calls: [
+          {
+            id: "call_1",
+            name: "terminal",
+          },
+          {
+            id: "call_2",
+            name: "terminal",
+          },
+        ],
+        timestamp: 2,
+      },
+      {
+        id: 3,
+        role: "tool",
+        content: JSON.stringify({ output: "done" }),
+        // Missing tool_call_id for concurrent同名 tools
+        tool_name: "terminal",
+        timestamp: 3,
+      },
+    ];
+
+    const turns = groupMessagesIntoTurns(messages);
+    const assistantTurn = turns[1] as AssistantTurn;
+    const tools = assistantTurn.blocks.filter((block) => block.kind === "tool");
+    expect(tools).toHaveLength(3);
+    // The two original calls should not be arbitrarily matched
+    expect(tools[0]?.tool.resultContent).toBeUndefined();
+    expect(tools[1]?.tool.resultContent).toBeUndefined();
+  });
+
   it("merges messages, deduplicates by id, and sorts in ascending chronological order", () => {
     const existing: MessageItem[] = [
       { id: 1, role: "user", content: "first", timestamp: 100 },

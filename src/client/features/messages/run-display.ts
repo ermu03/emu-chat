@@ -8,7 +8,7 @@ export type RunDisplayBlock =
       name: string;
       status: "running" | "completed" | "failed";
       resultPreview: string;
-      callContent?: string;
+      callContent?: string | undefined;
       resultContent?: string;
       toolCallId?: string;
       ambiguous: boolean;
@@ -156,14 +156,21 @@ export function hydrateRunDisplay(
     const call = newMessages.find(
       (message) =>
         message.role === "assistant" &&
-        message.tool_call_id === result.tool_call_id,
+        (message.tool_call_id === result.tool_call_id ||
+          message.tool_calls?.some((c) => c.id === result.tool_call_id)),
+    );
+    const matchingToolCall = call?.tool_calls?.find(
+      (c) => c.id === result.tool_call_id,
     );
     blocks = blocks.map((block) =>
       block === pendingForName[0]
         ? {
             ...block,
             ...(result.tool_call_id ? { toolCallId: result.tool_call_id } : {}),
-            ...(call?.content ? { callContent: call.content } : {}),
+            callContent:
+              matchingToolCall?.display_args ??
+              call?.content ??
+              block.callContent,
             resultContent: result.content,
           }
         : block,

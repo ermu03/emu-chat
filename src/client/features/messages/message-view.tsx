@@ -472,7 +472,6 @@ const ToolStepItem = memo(function ToolStepItem({
     tool.resultContent !== undefined
       ? getToolResultContent(tool.resultContent)
       : tool.resultPreview?.trim();
-  const preview = result?.slice(0, 180);
 
   return (
     <details
@@ -481,9 +480,7 @@ const ToolStepItem = memo(function ToolStepItem({
       onToggle={(event) => onToggle(event.currentTarget.open)}
     >
       <summary className="tool-call-summary">
-        <Terminal size={13} strokeWidth={1.8} />
         <strong>{tool.name}</strong>
-        {preview && <span className="tool-call-preview">{preview}</span>}
         <span className={`tool-call-status ${tool.isError ? "danger" : ""}`}>
           {statusLabel}
         </span>

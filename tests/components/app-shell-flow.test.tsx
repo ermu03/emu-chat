@@ -635,9 +635,6 @@ describe("AppShell async flows", () => {
       });
     });
     expect(screen.getByText("已完成")).toBeDefined();
-    expect(document.querySelector(".tool-call-preview")?.textContent).toBe(
-      "file1.txt",
-    );
     await waitFor(() => expect(screen.getByText("输入")).toBeDefined(), {
       timeout: 2_000,
     });
@@ -692,7 +689,6 @@ describe("AppShell async flows", () => {
         payload: { tool: "read_file", preview: "file content", error: false },
       });
     });
-    expect(document.querySelectorAll(".tool-call-preview")).toHaveLength(2);
     await waitFor(
       () =>
         expect(
