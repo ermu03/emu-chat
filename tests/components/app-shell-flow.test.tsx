@@ -80,6 +80,52 @@ function queue(
   };
 }
 
+function acceptedItem(
+  conversationId: string,
+  id: string,
+  runId: string,
+  content: string,
+): QueueItemResponse {
+  return {
+    object: "emu_chat.queue_item",
+    id,
+    conversation_id: conversationId,
+    operation_id: `op_${id}`,
+    fifo_seq: 1,
+    state: "accepted",
+    content,
+    payload_bytes: content.length,
+    payload_available: true,
+    recovery_expires_at: null,
+    payload_expired_at: null,
+    local_run_id: runId,
+    revision: 1,
+    created_at: "2026-09-23T00:00:00Z",
+    updated_at: "2026-09-23T00:00:00Z",
+    last_error_code: null,
+  };
+}
+
+function runningRun(item: QueueItemResponse): RunResponse {
+  return {
+    object: "emu_chat.run",
+    id: item.local_run_id!,
+    conversation_id: item.conversation_id,
+    queue_item_id: item.id,
+    hermes_run_id: `hermes_${item.local_run_id}`,
+    local_state: "accepted",
+    upstream_status: "running",
+    partial: false,
+    last_event_seq: 0,
+    events_truncated: false,
+    approval: null,
+    last_error_code: null,
+    started_at: "2026-09-23T00:00:00Z",
+    terminal_at: null,
+    updated_at: "2026-09-23T00:00:00Z",
+  };
+}
+
 function message(
   id: number,
   sessionId: string,
@@ -341,6 +387,169 @@ describe("AppShell async flows", () => {
         ]),
       );
     });
+  });
+
+  it("keeps the new conversation editable when an old rename completes and restores the renamed cache", async () => {
+    const alpha = conversation("cv_rename_alpha", "Alpha");
+    const beta = conversation("cv_rename_beta", "Beta");
+    const rename = deferred<ConversationDetailResponse>();
+    mockCommonApi([alpha, beta]);
+    vi.spyOn(apiClient, "getQueue").mockImplementation(async (id) => queue(id));
+    vi.spyOn(apiClient, "listMessages").mockImplementation(async (id) =>
+      messageList(id, [message(1, `session_${id}`, "user", `${id} message`)]),
+    );
+    vi.spyOn(apiClient, "putDraft").mockImplementation(async (id, body) =>
+      draft(id, body.content, body.expected_revision + 1),
+    );
+    const patch = vi
+      .spyOn(apiClient, "patchHermesMetadata")
+      .mockImplementation(async (id, body) => {
+        expect(id).toBe(alpha.conversation_id);
+        if (body.field === "title") return rename.promise;
+        alpha.pinned = body.value as boolean;
+        return detail(alpha);
+      });
+
+    render(
+      <MemoryRouter initialEntries={["/conversations/cv_rename_alpha"]}>
+        <AppShell />
+      </MemoryRouter>,
+    );
+    await screen.findByRole("textbox", { name: "消息输入框" });
+    fireEvent.click(
+      screen.getByText("Alpha", { selector: ".main-toolbar-title" }),
+    );
+    fireEvent.change(screen.getByRole("textbox", { name: "编辑会话标题" }), {
+      target: { value: "Alpha renamed" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存标题" }));
+    await waitFor(() => expect(patch).toHaveBeenCalledOnce());
+
+    fireEvent.click(
+      screen.getByText("Beta", { selector: ".conversation-title" }),
+    );
+    await screen.findByText("cv_rename_beta message");
+    const betaInput = (await screen.findByRole("textbox", {
+      name: "消息输入框",
+    })) as HTMLTextAreaElement;
+    fireEvent.change(betaInput, { target: { value: "Unsent text in Beta" } });
+
+    alpha.title = "Alpha renamed";
+    await act(async () => rename.resolve(detail(alpha)));
+    expect(screen.getByText("cv_rename_beta message")).toBeDefined();
+    expect(betaInput.isConnected).toBe(true);
+    expect(betaInput.value).toBe("Unsent text in Beta");
+    fireEvent.change(betaInput, {
+      target: { value: "Unsent text in Beta, still editable" },
+    });
+    expect(betaInput.value).toBe("Unsent text in Beta, still editable");
+    await screen.findByText("Alpha renamed", {
+      selector: ".conversation-title",
+    });
+
+    fireEvent.click(
+      screen.getByText("Alpha renamed", { selector: ".conversation-title" }),
+    );
+    await screen.findByText("Alpha renamed", {
+      selector: ".main-toolbar-title",
+    });
+    expect(screen.getByText("cv_rename_alpha message")).toBeDefined();
+    expect(screen.getByRole("textbox", { name: "消息输入框" })).toBeDefined();
+
+    fireEvent.click(
+      screen.getByText("Beta", { selector: ".conversation-title" }),
+    );
+    await screen.findByText("cv_rename_beta message");
+    const alphaRow = screen
+      .getByText("Alpha renamed", { selector: ".conversation-title" })
+      .closest(".conversation-row")!;
+    fireEvent.click(
+      alphaRow.querySelector('button[aria-label="更多会话操作"]')!,
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "置顶会话" }));
+    await waitFor(() => expect(alpha.pinned).toBe(true));
+    fireEvent.click(
+      screen.getByText("Alpha renamed", { selector: ".conversation-title" }),
+    );
+    await screen.findByText("cv_rename_alpha message");
+    expect(patch).toHaveBeenCalledWith(alpha.conversation_id, {
+      field: "pinned",
+      value: true,
+    });
+    const renamedRow = screen
+      .getByText("Alpha renamed", { selector: ".conversation-title" })
+      .closest(".conversation-row")!;
+    fireEvent.click(
+      renamedRow.querySelector('button[aria-label="更多会话操作"]')!,
+    );
+    await screen.findByRole("menuitem", { name: "取消置顶" });
+  });
+
+  it("keeps the second A visit's Run when the first A visit returns late", async () => {
+    const alpha = conversation("cv_repeat_alpha", "Alpha");
+    const beta = conversation("cv_repeat_beta", "Beta");
+    const oldItem = acceptedItem(
+      alpha.conversation_id,
+      "qi_old",
+      "run_old",
+      "Old prompt",
+    );
+    const newItem = acceptedItem(
+      alpha.conversation_id,
+      "qi_new",
+      "run_new",
+      "New prompt",
+    );
+    const oldRun = deferred<RunResponse>();
+    mockCommonApi([alpha, beta]);
+    vi.stubGlobal("EventSource", FakeEventSource);
+    let alphaQueueLoads = 0;
+    vi.spyOn(apiClient, "getQueue").mockImplementation(async (id) => {
+      if (id !== alpha.conversation_id) return queue(id);
+      alphaQueueLoads += 1;
+      return queue(id, [alphaQueueLoads === 1 ? oldItem : newItem]);
+    });
+    const getRun = vi
+      .spyOn(apiClient, "getRun")
+      .mockImplementation((id) =>
+        id === "run_old"
+          ? oldRun.promise
+          : Promise.resolve(runningRun(newItem)),
+      );
+    vi.spyOn(apiClient, "listMessages").mockImplementation(async (id) =>
+      messageList(id, [message(1, `session_${id}`, "user", `${id} message`)]),
+    );
+
+    render(
+      <MemoryRouter initialEntries={["/conversations/cv_repeat_alpha"]}>
+        <AppShell />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(getRun).toHaveBeenCalledWith("run_old"));
+    fireEvent.click(
+      screen.getByText("Beta", { selector: ".conversation-title" }),
+    );
+    await screen.findByText("cv_repeat_beta message");
+    fireEvent.click(
+      screen.getByText("Alpha", { selector: ".conversation-title" }),
+    );
+    await waitFor(() => expect(getRun).toHaveBeenCalledWith("run_new"));
+    await waitFor(() =>
+      expect(FakeEventSource.instances.at(-1)?.url).toContain(
+        "/runs/run_new/events",
+      ),
+    );
+
+    await act(async () => oldRun.resolve(runningRun(oldItem)));
+    expect(
+      screen.getByText("New prompt", { selector: ".message-body" }),
+    ).toBeDefined();
+    expect(
+      screen.queryByText("Old prompt", { selector: ".message-body" }),
+    ).toBeNull();
+    expect(FakeEventSource.instances.at(-1)?.url).toContain(
+      "/runs/run_new/events",
+    );
   });
 
   it("loads the newest history first and reaches older messages after terminal reconciliation shifts offsets", async () => {

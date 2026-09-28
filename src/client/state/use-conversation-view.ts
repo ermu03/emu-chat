@@ -39,11 +39,7 @@ import {
   isAgentGenerating,
   isLiveRun,
 } from "../features/queue/queue-state.js";
-import {
-  getErrorMessage,
-  replaceQueueItem,
-  upsertQueueItem,
-} from "./app-shell-utils.js";
+import { getErrorMessage, upsertQueueItem } from "./app-shell-utils.js";
 
 type ConversationViewSnapshot = {
   conversation: ConversationDetailResponse;
@@ -132,6 +128,84 @@ export type RetainedConversationView = {
   runDisplay: RunDisplay | null;
 };
 
+/** A selection, including its visit number so A → B → A invalidates old work. */
+export type ViewTarget = Readonly<{
+  conversationId: string;
+  selection: number;
+}>;
+
+export interface ConversationView {
+  readonly activeConversation: ConversationDetailResponse | null;
+  readonly messages: MessageItem[];
+  readonly hasMoreEarlier: boolean;
+  readonly loadingEarlier: boolean;
+  readonly draft: DraftResponse | null;
+  readonly activeRun: RunResponse | null;
+  readonly queueOpen: boolean;
+  readonly runDisplay: RunDisplay | null;
+  readonly hasTargetMessages: boolean;
+  readonly hasActiveConversationView: boolean;
+  readonly transitionSnapshot: RetainedConversationView | null;
+  readonly activeConversationSummary: ConversationSummary | null;
+  readonly activeConversationTitle: string;
+  readonly currentConversationLoadError: string | null;
+  readonly visibleQueue: QueueListResponse | null;
+  readonly visibleRun: RunResponse | null;
+  readonly activeQueueItem: QueueItemResponse | null;
+  readonly queuedMessages: QueueItemResponse[];
+  readonly agentGenerating: boolean;
+  captureTarget(conversationId?: string): ViewTarget | null;
+  isCurrentTarget(target: ViewTarget): boolean;
+  readRuntime(target: ViewTarget): {
+    queue: QueueListResponse | null;
+    run: RunResponse | null;
+    queueVersion: number;
+  } | null;
+  loadActiveConversation(conversationId: string): Promise<void>;
+  handleLoadEarlier(): Promise<void>;
+  handleSaveDraft(
+    content: string,
+    expectedRevision: number,
+  ): Promise<{ revision: number }>;
+  refreshLatestMessages(target: ViewTarget, runId?: string): Promise<boolean>;
+  applyMetadataField(
+    conversationId: string,
+    field: "title" | "pinned",
+    value: string | boolean,
+  ): void;
+  applyQueue(
+    target: ViewTarget,
+    queue: QueueListResponse,
+    expectedVersion?: number,
+  ): boolean;
+  applyRun(
+    target: ViewTarget,
+    run: RunResponse | null,
+    expectedRunId?: string,
+  ): boolean;
+  applyQueueItem(target: ViewTarget, item: QueueItemResponse): boolean;
+  applySubmissionResult(
+    target: ViewTarget,
+    draft: DraftResponse,
+    item: QueueItemResponse,
+    followUp: boolean,
+  ): boolean;
+  clearStreamForNewSend(target: ViewTarget): void;
+  applyRunStreamEvent(
+    target: ViewTarget,
+    runId: string,
+    sequence: number | null,
+    type: string,
+    payload: Record<string, unknown>,
+  ): void;
+  markRunSyncing(target: ViewTarget, runId: string): void;
+  hydrateRunTools(target: ViewTarget, runId: string): Promise<void>;
+  openQueuePanel(target: ViewTarget): void;
+  closeQueuePanel(): void;
+  restoreCachedView(conversationId: string): void;
+  dropCachedView(conversationId: string): void;
+}
+
 function retainConversationView(
   snapshot: ConversationViewSnapshot,
 ): RetainedConversationView {
@@ -150,7 +224,7 @@ export function useConversationView(
   activeConversationId: string | null,
   conversations: ConversationSummary[],
   setWorkspaceError: Dispatch<SetStateAction<string | null>>,
-) {
+): ConversationView {
   const [activeConversation, setActiveConversation] =
     useState<ConversationDetailResponse | null>(null);
   const [messages, setMessages] = useState<MessageItem[]>([]);
@@ -166,6 +240,7 @@ export function useConversationView(
   const olderMessagesCursorRef = useRef<OlderMessagesCursor | null>(null);
   const latestLoadSeqRef = useRef(0);
   const [draft, setDraft] = useState<DraftResponse | null>(null);
+  const draftRef = useRef<DraftResponse | null>(null);
   const [queue, setQueue] = useState<QueueListResponse | null>(null);
   const [activeRun, setActiveRun] = useState<RunResponse | null>(null);
   const [queueOpen, setQueueOpen] = useState(false);
@@ -177,6 +252,17 @@ export function useConversationView(
   const activeConversationIdRef = useRef<string | null>(null);
   const activeRunRef = useRef<RunResponse | null>(null);
   const queueRef = useRef<QueueListResponse | null>(null);
+  const queueVersionRef = useRef(0);
+  const metadataSequenceRef = useRef(0);
+  const metadataWritesRef = useRef(
+    new Map<
+      string,
+      {
+        title?: { sequence: number; value: string };
+        pinned?: { sequence: number; value: boolean };
+      }
+    >(),
+  );
   const previousQueuedMessageCountRef = useRef(0);
   const runDisplayRef = useRef<RunDisplay | null>(null);
   const runDisplaysRef = useRef(new Map<string, RunDisplay>());
@@ -185,6 +271,199 @@ export function useConversationView(
   );
   const currentViewSnapshotRef = useRef<RetainedConversationView | null>(null);
   const [runDisplay, setRunDisplay] = useState<RunDisplay | null>(null);
+
+  const captureTarget = useCallback(
+    (conversationId?: string): ViewTarget | null => {
+      const currentId = activeConversationIdRef.current;
+      if (!currentId || (conversationId && conversationId !== currentId))
+        return null;
+      return { conversationId: currentId, selection: activeLoadRef.current };
+    },
+    [],
+  );
+
+  const isCurrentTarget = useCallback(
+    (target: ViewTarget) =>
+      activeConversationIdRef.current === target.conversationId &&
+      activeLoadRef.current === target.selection,
+    [],
+  );
+
+  const readRuntime = useCallback(
+    (target: ViewTarget) =>
+      isCurrentTarget(target)
+        ? {
+            queue: queueRef.current,
+            run: activeRunRef.current,
+            queueVersion: queueVersionRef.current,
+          }
+        : null,
+    [isCurrentTarget],
+  );
+
+  const setDraftSnapshot = useCallback((next: DraftResponse | null) => {
+    draftRef.current = next;
+    setDraft(next);
+  }, []);
+
+  const setQueueSnapshot = useCallback((next: QueueListResponse | null) => {
+    queueVersionRef.current += 1;
+    queueRef.current = next;
+    setQueue(next);
+  }, []);
+
+  const setRunSnapshot = useCallback((next: RunResponse | null) => {
+    activeRunRef.current = next;
+    setActiveRun(next);
+  }, []);
+
+  const applyQueue = useCallback(
+    (
+      target: ViewTarget,
+      next: QueueListResponse,
+      expectedVersion?: number,
+    ): boolean => {
+      if (
+        !isCurrentTarget(target) ||
+        next.conversation_id !== target.conversationId ||
+        (expectedVersion !== undefined &&
+          queueVersionRef.current !== expectedVersion)
+      )
+        return false;
+      const current = queueRef.current;
+      if (current?.conversation_id === target.conversationId) {
+        const revisions = new Map(
+          current.data.map((item) => [item.id, item.revision]),
+        );
+        if (
+          next.data.some(
+            (item) => item.revision < (revisions.get(item.id) ?? 0),
+          )
+        )
+          return false;
+      }
+      setQueueSnapshot(next);
+      return true;
+    },
+    [isCurrentTarget, setQueueSnapshot],
+  );
+
+  const applyRun = useCallback(
+    (
+      target: ViewTarget,
+      next: RunResponse | null,
+      expectedRunId?: string,
+    ): boolean => {
+      if (!isCurrentTarget(target)) return false;
+      const current = activeRunRef.current;
+      const queueRunId = queueRef.current && getCurrentRunId(queueRef.current);
+      if (!next) {
+        if (queueRunId || (expectedRunId && current?.id !== expectedRunId))
+          return false;
+        setRunSnapshot(null);
+        return true;
+      }
+      if (
+        next.conversation_id !== target.conversationId ||
+        (expectedRunId && next.id !== expectedRunId) ||
+        (queueRunId && queueRunId !== next.id) ||
+        (current &&
+          current.id !== next.id &&
+          !queueRef.current?.data.some((item) => item.local_run_id === next.id))
+      )
+        return false;
+      if (current?.id === next.id) {
+        if (Date.parse(current.updated_at) > Date.parse(next.updated_at))
+          return false;
+        if (
+          (current.local_state === "reconciled" ||
+            current.local_state === "rejected") &&
+          current.local_state !== next.local_state
+        )
+          return false;
+        if (
+          ["completed", "failed", "cancelled", "interrupted"].includes(
+            current.upstream_status ?? "",
+          ) &&
+          !["completed", "failed", "cancelled", "interrupted"].includes(
+            next.upstream_status ?? "",
+          )
+        )
+          return false;
+      }
+      setRunSnapshot(next);
+      return true;
+    },
+    [isCurrentTarget, setRunSnapshot],
+  );
+
+  const commitDraft = useCallback(
+    (target: ViewTarget, next: DraftResponse): boolean => {
+      if (
+        !isCurrentTarget(target) ||
+        next.conversation_id !== target.conversationId
+      )
+        return false;
+      if (
+        draftRef.current?.conversation_id === target.conversationId &&
+        draftRef.current.revision > next.revision
+      )
+        return false;
+      setDraftSnapshot(next);
+      return true;
+    },
+    [isCurrentTarget, setDraftSnapshot],
+  );
+
+  const applyMetadataField = useCallback(
+    (
+      conversationId: string,
+      field: "title" | "pinned",
+      value: string | boolean,
+    ) => {
+      if (
+        (field === "title" && typeof value !== "string") ||
+        (field === "pinned" && typeof value !== "boolean")
+      )
+        return;
+      const sequence = ++metadataSequenceRef.current;
+      const previous = metadataWritesRef.current.get(conversationId) ?? {};
+      const writes =
+        field === "title"
+          ? { ...previous, title: { sequence, value: value as string } }
+          : { ...previous, pinned: { sequence, value: value as boolean } };
+      metadataWritesRef.current.set(conversationId, writes);
+
+      const patch =
+        field === "title"
+          ? { title: value as string }
+          : { pinned: value as boolean };
+      const cached = conversationViewCacheRef.current.get(conversationId);
+      if (cached) {
+        conversationViewCacheRef.current.set(conversationId, {
+          ...cached,
+          conversation: { ...cached.conversation, ...patch },
+        });
+      }
+      if (
+        currentViewSnapshotRef.current?.conversationId === conversationId &&
+        field === "title"
+      ) {
+        currentViewSnapshotRef.current = {
+          ...currentViewSnapshotRef.current,
+          title: value as string,
+        };
+      }
+      if (activeConversationIdRef.current === conversationId) {
+        setActiveConversation((current) =>
+          current?.conversation_id === conversationId
+            ? { ...current, ...patch }
+            : current,
+        );
+      }
+    },
+    [],
+  );
 
   const commitRunDisplay = useCallback((next: RunDisplay | null) => {
     runDisplayRef.current = next;
@@ -250,7 +529,7 @@ export function useConversationView(
     [commitRunDisplay],
   );
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     activeConversationIdRef.current = activeConversationId;
   }, [activeConversationId]);
 
@@ -260,14 +539,6 @@ export function useConversationView(
       items: messages,
     };
   }, [messages, messagesConversationId]);
-
-  useEffect(() => {
-    activeRunRef.current = activeRun;
-  }, [activeRun]);
-
-  useEffect(() => {
-    queueRef.current = queue;
-  }, [queue]);
 
   useEffect(() => {
     if (!activeRun?.id || !isLiveRun(activeRun)) return;
@@ -340,6 +611,7 @@ export function useConversationView(
 
   const loadActiveConversation = useCallback(
     async (conversationId: string) => {
+      activeConversationIdRef.current = conversationId;
       const loadId = ++activeLoadRef.current;
       const snapshot = conversationViewCacheRef.current.get(conversationId);
       const useCachedView = snapshot !== undefined;
@@ -353,10 +625,9 @@ export function useConversationView(
         setMessagesConversationId(conversationId);
         setHasMoreEarlier(snapshot.hasMoreEarlier);
         olderMessagesCursorRef.current = snapshot.olderMessagesCursor;
-        setDraft(snapshot.draft);
-        setQueue(snapshot.queue);
-        queueRef.current = snapshot.queue;
-        setActiveRun(snapshot.activeRun);
+        setDraftSnapshot(snapshot.draft);
+        setQueueSnapshot(snapshot.queue);
+        setRunSnapshot(snapshot.activeRun);
         setQueueOpen(snapshot.queueOpen);
         previousQueuedMessageCountRef.current = getQueuedFollowUps(
           snapshot.queue,
@@ -369,10 +640,9 @@ export function useConversationView(
         setMessagesConversationId(null);
         setHasMoreEarlier(false);
         olderMessagesCursorRef.current = null;
-        setDraft(null);
-        setQueue(null);
-        queueRef.current = null;
-        setActiveRun(null);
+        setDraftSnapshot(null);
+        setQueueSnapshot(null);
+        setRunSnapshot(null);
         setQueueOpen(false);
         commitRunDisplay(null);
       }
@@ -388,11 +658,21 @@ export function useConversationView(
 
       const loadConversationContent = async () => {
         const loadConversation = async () => {
+          const metadataAtStart = metadataSequenceRef.current;
           try {
             const conversation =
               await apiClient.getConversation(conversationId);
             if (loadId !== activeLoadRef.current) return;
-            setActiveConversation(conversation);
+            const writes = metadataWritesRef.current.get(conversationId);
+            setActiveConversation({
+              ...conversation,
+              ...(writes?.title && writes.title.sequence > metadataAtStart
+                ? { title: writes.title.value }
+                : {}),
+              ...(writes?.pinned && writes.pinned.sequence > metadataAtStart
+                ? { pinned: writes.pinned.value }
+                : {}),
+            });
           } catch (error) {
             if (loadId !== activeLoadRef.current) return;
             if (!useCachedView) setActiveConversation(null);
@@ -456,10 +736,10 @@ export function useConversationView(
           try {
             const nextDraft = await apiClient.getDraft(conversationId);
             if (loadId !== activeLoadRef.current) return;
-            setDraft(nextDraft);
+            commitDraft({ conversationId, selection: loadId }, nextDraft);
           } catch (error) {
             if (loadId !== activeLoadRef.current || useCachedView) return;
-            setDraft(null);
+            setDraftSnapshot(null);
             reportLoadError(error, "无法加载草稿");
           }
         };
@@ -468,27 +748,33 @@ export function useConversationView(
       };
 
       if (snapshot && isAgentGenerating(snapshot.activeRun, snapshot.queue)) {
+        const queueVersion = queueVersionRef.current;
         try {
           const nextQueue = await apiClient.getQueue(conversationId);
-          if (loadId !== activeLoadRef.current) return;
-
-          setQueue(nextQueue);
-          queueRef.current = nextQueue;
+          if (
+            loadId !== activeLoadRef.current ||
+            queueVersion !== queueVersionRef.current
+          )
+            return;
+          const target = { conversationId, selection: loadId };
+          if (!applyQueue(target, nextQueue, queueVersion)) return;
           const runId = getCurrentRunId(nextQueue);
           if (runId) {
             const run = await apiClient.getRun(runId);
             if (loadId !== activeLoadRef.current) return;
-            setActiveRun(run);
+            applyRun(target, run, runId);
+            const committedRun = readRuntime(target)?.run;
+            if (committedRun?.id !== runId) return;
             const display = activateRunDisplay(
-              run.id,
-              getPrimaryQueueItem(nextQueue, run)?.content ?? null,
+              committedRun.id,
+              getPrimaryQueueItem(nextQueue, committedRun)?.content ?? null,
             );
-            if (run.local_state === "reconciled") {
+            if (committedRun.local_state === "reconciled") {
               commitRunDisplay(markRunDisplaySyncing(display));
               await loadConversationContent();
             }
           } else {
-            setActiveRun(null);
+            applyRun(target, null);
             const display = runDisplayRef.current;
             if (display && display.phase !== "settled") {
               commitRunDisplay(markRunDisplaySyncing(display));
@@ -496,6 +782,7 @@ export function useConversationView(
             await loadConversationContent();
           }
         } catch (error) {
+          if (queueVersion !== queueVersionRef.current) return;
           reportLoadError(error, "无法刷新运行状态");
         }
         return;
@@ -503,34 +790,44 @@ export function useConversationView(
 
       const loadQueue = async () => {
         let nextQueue: QueueListResponse;
+        const queueVersion = queueVersionRef.current;
         try {
           nextQueue = await apiClient.getQueue(conversationId);
         } catch (error) {
-          if (loadId !== activeLoadRef.current) return;
+          if (
+            loadId !== activeLoadRef.current ||
+            queueVersion !== queueVersionRef.current
+          )
+            return;
           if (!useCachedView) {
-            setQueue(null);
-            queueRef.current = null;
-            setActiveRun(null);
+            setQueueSnapshot(null);
+            setRunSnapshot(null);
             setQueueOpen(false);
           }
           reportLoadError(error, "无法加载消息队列");
           return;
         }
-        if (loadId !== activeLoadRef.current) return;
+        if (
+          loadId !== activeLoadRef.current ||
+          queueVersion !== queueVersionRef.current
+        )
+          return;
 
-        setQueue(nextQueue);
-        queueRef.current = nextQueue;
+        const target = { conversationId, selection: loadId };
+        if (!applyQueue(target, nextQueue, queueVersion)) return;
         const runId = getCurrentRunId(nextQueue);
         if (runId) {
           try {
             const run = await apiClient.getRun(runId);
             if (loadId === activeLoadRef.current) {
-              setActiveRun(run);
+              applyRun(target, run, runId);
+              const committedRun = readRuntime(target)?.run;
+              if (committedRun?.id !== runId) return;
               const display = activateRunDisplay(
-                run.id,
-                getPrimaryQueueItem(nextQueue, run)?.content ?? null,
+                committedRun.id,
+                getPrimaryQueueItem(nextQueue, committedRun)?.content ?? null,
               );
-              if (run.local_state === "reconciled") {
+              if (committedRun.local_state === "reconciled") {
                 commitRunDisplay(markRunDisplaySyncing(display));
               }
             }
@@ -540,7 +837,7 @@ export function useConversationView(
             }
           }
         } else {
-          setActiveRun(null);
+          applyRun(target, null);
           const display = runDisplayRef.current;
           if (display && display.phase !== "settled") {
             commitRunDisplay(markRunDisplaySyncing(display));
@@ -552,8 +849,15 @@ export function useConversationView(
     },
     [
       activateRunDisplay,
+      applyQueue,
+      applyRun,
+      commitDraft,
       commitRunDisplay,
       restoreRunDisplay,
+      readRuntime,
+      setDraftSnapshot,
+      setQueueSnapshot,
+      setRunSnapshot,
       settleDisplayWithMessages,
     ],
   );
@@ -566,10 +870,9 @@ export function useConversationView(
       setMessagesConversationId(snapshot.conversation.conversation_id);
       setHasMoreEarlier(snapshot.hasMoreEarlier);
       olderMessagesCursorRef.current = snapshot.olderMessagesCursor;
-      setDraft(snapshot.draft);
-      setQueue(snapshot.queue);
-      queueRef.current = snapshot.queue;
-      setActiveRun(snapshot.activeRun);
+      setDraftSnapshot(snapshot.draft);
+      setQueueSnapshot(snapshot.queue);
+      setRunSnapshot(snapshot.activeRun);
       setQueueOpen(snapshot.queueOpen);
       previousQueuedMessageCountRef.current = getQueuedFollowUps(
         snapshot.queue,
@@ -577,7 +880,7 @@ export function useConversationView(
       ).length;
       restoreRunDisplay(snapshot);
     },
-    [restoreRunDisplay],
+    [restoreRunDisplay, setDraftSnapshot, setQueueSnapshot, setRunSnapshot],
   );
 
   const hasTargetMessages =
@@ -631,6 +934,7 @@ export function useConversationView(
     }
 
     activeLoadRef.current += 1;
+    activeConversationIdRef.current = null;
     setActiveConversation(null);
     setMessages([]);
     setMessagesConversationId(null);
@@ -639,23 +943,30 @@ export function useConversationView(
     setConversationLoadError(null);
     setWorkspaceError(null);
     currentViewSnapshotRef.current = null;
-    setDraft(null);
-    setQueue(null);
-    queueRef.current = null;
-    setActiveRun(null);
+    setDraftSnapshot(null);
+    setQueueSnapshot(null);
+    setRunSnapshot(null);
     commitRunDisplay(null);
     setQueueOpen(false);
     previousQueuedMessageCountRef.current = 0;
-  }, [activeConversationId, commitRunDisplay, loadActiveConversation]);
+  }, [
+    activeConversationId,
+    commitRunDisplay,
+    loadActiveConversation,
+    setDraftSnapshot,
+    setQueueSnapshot,
+    setRunSnapshot,
+  ]);
 
   const handleSaveDraft = async (content: string, expectedRevision: number) => {
     if (!activeConversationId) throw new Error("请先选择会话");
+    const target = captureTarget(activeConversationId);
+    if (!target) throw new Error("会话已切换，请重试保存");
     const saved = await apiClient.putDraft(activeConversationId, {
       content,
       expected_revision: expectedRevision,
     });
-    if (activeConversationIdRef.current === activeConversationId)
-      setDraft(saved);
+    commitDraft(target, saved);
     return { revision: saved.revision };
   };
 
@@ -719,8 +1030,9 @@ export function useConversationView(
   }, [activeConversationId, hasMoreEarlier, loadingEarlier]);
 
   const refreshLatestMessages = useCallback(
-    async (conversationId: string, runId?: string) => {
-      const loadId = activeLoadRef.current;
+    async (target: ViewTarget, runId?: string) => {
+      if (!isCurrentTarget(target)) return false;
+      const conversationId = target.conversationId;
       const latestLoadSeq = ++latestLoadSeqRef.current;
       const anchorId =
         messagesRef.current.conversationId === conversationId
@@ -728,8 +1040,7 @@ export function useConversationView(
           : null;
       const result = await fetchLatestThroughAnchor(conversationId, anchorId);
       if (
-        activeConversationIdRef.current !== conversationId ||
-        activeLoadRef.current !== loadId ||
+        !isCurrentTarget(target) ||
         latestLoadSeq !== latestLoadSeqRef.current
       )
         return false;
@@ -747,16 +1058,19 @@ export function useConversationView(
       if (runId) settleDisplayWithMessages(runId, nextMessages);
       return true;
     },
-    [settleDisplayWithMessages],
+    [isCurrentTarget, settleDisplayWithMessages],
   );
 
   const applyRunStreamEvent = useCallback(
     (
+      target: ViewTarget,
       runId: string,
       sequence: number | null,
       type: string,
       payload: Record<string, unknown>,
     ) => {
+      if (!isCurrentTarget(target) || activeRunRef.current?.id !== runId)
+        return;
       const current =
         runDisplayRef.current?.runId === runId
           ? runDisplayRef.current
@@ -768,62 +1082,90 @@ export function useConversationView(
       const next = applyRunDisplayEvent(current, sequence, type, payload);
       if (next !== current) commitRunDisplay(next);
     },
-    [activateRunDisplay, commitRunDisplay],
+    [activateRunDisplay, commitRunDisplay, isCurrentTarget],
   );
 
   const markRunSyncing = useCallback(
-    (runId: string) => {
+    (target: ViewTarget, runId: string) => {
+      if (!isCurrentTarget(target) || activeRunRef.current?.id !== runId)
+        return;
       const current = runDisplayRef.current;
       if (current?.runId === runId) {
         commitRunDisplay(markRunDisplaySyncing(current));
       }
     },
-    [commitRunDisplay],
+    [commitRunDisplay, isCurrentTarget],
   );
 
   const hydrateRunTools = useCallback(
-    async (conversationId: string, runId: string) => {
+    async (target: ViewTarget, runId: string) => {
+      if (!isCurrentTarget(target) || activeRunRef.current?.id !== runId)
+        return;
       const display = runDisplayRef.current;
       if (display?.runId !== runId || display.phase === "settled") return;
       const result = await fetchLatestThroughAnchor(
-        conversationId,
+        target.conversationId,
         display.afterMessageId || null,
       );
-      if (activeConversationIdRef.current !== conversationId) return;
+      if (!isCurrentTarget(target) || activeRunRef.current?.id !== runId)
+        return;
       const latest = runDisplayRef.current;
       if (latest?.runId !== runId || latest.phase === "settled") return;
       commitRunDisplay(hydrateRunDisplay(latest, result.items));
     },
-    [commitRunDisplay],
+    [commitRunDisplay, isCurrentTarget],
   );
 
-  const applyQueue = useCallback((nextQueue: QueueListResponse | null) => {
-    queueRef.current = nextQueue;
-    setQueue(nextQueue);
-  }, []);
-
-  const applyRun = useCallback((nextRun: RunResponse | null) => {
-    activeRunRef.current = nextRun;
-    setActiveRun(nextRun);
-  }, []);
-
-  const upsertQueueItemInView = useCallback(
-    (conversationId: string, item: QueueItemResponse) => {
-      applyQueue(upsertQueueItem(queueRef.current, conversationId, item));
+  const applyQueueItem = useCallback(
+    (target: ViewTarget, item: QueueItemResponse): boolean => {
+      if (
+        !isCurrentTarget(target) ||
+        item.conversation_id !== target.conversationId
+      )
+        return false;
+      const current = queueRef.current?.data.find(
+        (entry) => entry.id === item.id,
+      );
+      if (current && current.revision > item.revision) return false;
+      setQueueSnapshot(
+        upsertQueueItem(queueRef.current, target.conversationId, item),
+      );
+      return true;
     },
-    [applyQueue],
+    [isCurrentTarget, setQueueSnapshot],
   );
 
-  const replaceQueueItemInView = useCallback(
-    (item: QueueItemResponse) => {
-      applyQueue(replaceQueueItem(queueRef.current, item));
+  const applySubmissionResult = useCallback(
+    (
+      target: ViewTarget,
+      nextDraft: DraftResponse,
+      item: QueueItemResponse,
+      followUp: boolean,
+    ): boolean => {
+      if (!isCurrentTarget(target)) return false;
+      commitDraft(target, nextDraft);
+      if (!applyQueueItem(target, item)) return false;
+      if (followUp) setQueueOpen(true);
+      return true;
     },
-    [applyQueue],
+    [applyQueueItem, commitDraft, isCurrentTarget],
   );
 
-  const clearStreamForNewSend = useCallback(() => {
-    commitRunDisplay(null);
-  }, [commitRunDisplay]);
+  const clearStreamForNewSend = useCallback(
+    (target: ViewTarget) => {
+      if (isCurrentTarget(target)) commitRunDisplay(null);
+    },
+    [commitRunDisplay, isCurrentTarget],
+  );
+
+  const openQueuePanel = useCallback(
+    (target: ViewTarget) => {
+      if (isCurrentTarget(target)) setQueueOpen(true);
+    },
+    [isCurrentTarget],
+  );
+
+  const closeQueuePanel = useCallback(() => setQueueOpen(false), []);
 
   const restoreCachedView = useCallback(
     (conversationId: string) => {
@@ -838,25 +1180,18 @@ export function useConversationView(
 
   const dropCachedView = useCallback((conversationId: string) => {
     conversationViewCacheRef.current.delete(conversationId);
+    metadataWritesRef.current.delete(conversationId);
   }, []);
 
   return {
     activeConversation,
-    setActiveConversation,
     messages,
-    setMessages,
     hasMoreEarlier,
     loadingEarlier,
     draft,
-    setDraft,
-    queue,
     activeRun,
     queueOpen,
-    setQueueOpen,
     runDisplay,
-    activeConversationIdRef,
-    activeRunRef,
-    queueRef,
     hasTargetMessages,
     hasActiveConversationView,
     transitionSnapshot,
@@ -868,21 +1203,25 @@ export function useConversationView(
     activeQueueItem,
     queuedMessages,
     agentGenerating,
+    captureTarget,
+    isCurrentTarget,
+    readRuntime,
     loadActiveConversation,
     handleLoadEarlier,
     refreshLatestMessages,
     handleSaveDraft,
+    applyMetadataField,
     applyQueue,
     applyRun,
-    upsertQueueItemInView,
-    replaceQueueItemInView,
+    applyQueueItem,
+    applySubmissionResult,
     clearStreamForNewSend,
     applyRunStreamEvent,
     markRunSyncing,
     hydrateRunTools,
+    openQueuePanel,
+    closeQueuePanel,
     restoreCachedView,
     dropCachedView,
   };
 }
-
-export type ConversationView = ReturnType<typeof useConversationView>;

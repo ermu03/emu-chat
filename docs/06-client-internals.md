@@ -18,9 +18,11 @@
 | `useRunRuntime` | Run 的 SSE 订阅、工具完成后的增量读取、事件缺口提示、运行状态单飞轮询、终态对账，以及队列项和 Run 操作。 |
 | `useMessageSend` | 发送请求 UUID、待确认提交的乐观占位、发送后队列与草稿更新。 |
 
-`AppShell` 将 `useConversationView` 的视图状态传给 Run 和发送 Hook。Run Hook 通过视图提供的更新方法写入队列、Run 和消息；发送 Hook 在 API 接受提交后写入队列项并触发 Run 刷新。共享状态只有一个所有者，避免两条异步流程各维护一份当前队列。
+`AppShell` 将 `useConversationView` 的明确接口传给 Run 和发送 Hook。接口提供只读视图、受限的运行快照读取和按业务含义命名的更新方法，不暴露会话详情、消息、草稿、Queue 或 Run 的底层 setter 和可写 ref。Run Hook 负责请求与事件，发送 Hook 负责请求身份和占位；共享状态仍由视图 Hook 写入。
 
-`useConversationView` 用 `activeLoadRef` 标记每次会话加载。切换时立即使旧请求失效；缓存命中先恢复快照，随后刷新服务端状态。`activeConversationIdRef` 使发送、Run 操作和轮询在网络返回后确认目标会话仍然选中。`currentViewSnapshotRef` 保留正在展示的旧会话；目标消息尚未就绪时不会把它误当成新会话。`useMessageSend` 的 `pendingSendRef` 保存重试所需的发送 UUID。
+`useConversationView` 用 `activeLoadRef` 标记每次会话选择或重新加载，并通过 `ViewTarget { conversationId, selection }` 交给异步调用方。提交 Queue、Run、草稿、SSE 展示或历史刷新时，由视图检查目标仍属于当前选择；A → B → A 时，第一次 A 的目标代数也会失效。Queue 刷新还要匹配请求开始时的本地队列版本，队列项写入核对 revision；Run 写入核对会话、Run ID、`updated_at` 与终态，旧响应不能回退已完成 Run。草稿写入核对 revision，`DraftComposer` 仍独占未保存的输入与保存队列。`currentViewSnapshotRef` 保留正在展示的旧会话；`useMessageSend` 的 `pendingSendRef` 保存重试所需的发送 UUID。
+
+元数据保存按目标会话和字段更新当前详情及对应缓存。切换到其他会话后返回的成功结果仍更新原会话缓存和列表，不回写先前捕获的整份详情；已在途的会话详情读取也保留读取期间确认的新标题或置顶值。会话列表请求只应用最新一次结果。相同字段多次并发修改的服务器提交顺序仍取决于请求完成顺序。
 
 冷缓存切换会在顶部标明目标会话，同时暂时显示当前会话。目标消息请求独立完成后立即切换消息视图，不等待会话详情、草稿或队列请求；其他操作仍会等各自所需数据就绪。消息加载失败时保留当前视图并提供重试。首次打开且没有可保留的会话时显示加载状态。缓存命中仍会立即恢复快照，并继续向服务端刷新状态。
 

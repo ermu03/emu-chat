@@ -8,6 +8,7 @@ import {
 } from "../features/queue/queue-state.js";
 import { getErrorMessage, isRecord } from "./app-shell-utils.js";
 import type { ConversationView } from "./use-conversation-view.js";
+import type { ViewTarget } from "./use-conversation-view.js";
 import { useStreamEvents, type RunStreamEvent } from "./use-stream-events.js";
 
 /** Owns run reconciliation, SSE subscription, polling and queue/run mutations. */
@@ -18,15 +19,16 @@ export function useRunRuntime(
   setWorkspaceError: Dispatch<SetStateAction<string | null>>,
 ) {
   const {
-    activeConversationIdRef,
-    activeRunRef,
+    captureTarget,
+    isCurrentTarget,
+    readRuntime,
     applyQueue,
     applyRun,
     refreshLatestMessages,
     applyRunStreamEvent,
     markRunSyncing,
     hydrateRunTools,
-    replaceQueueItemInView,
+    applyQueueItem,
     activeConversation,
     activeRun,
     visibleRun,
@@ -37,7 +39,7 @@ export function useRunRuntime(
   const [streamNotice, setStreamNotice] = useState<string | null>(null);
   const lastConversationListRefreshRunIdRef = useRef<string | null>(null);
   const refreshFlightRef = useRef<{
-    conversationId: string;
+    target: ViewTarget;
     promise: Promise<void>;
     rerun: boolean;
     reconciling: boolean;
@@ -50,43 +52,39 @@ export function useRunRuntime(
   }, [activeConversationId, activeRun?.id]);
 
   const refreshOnce = useCallback(
-    async (conversationId: string, knownRunId?: string | null) => {
+    async (target: ViewTarget, knownRunId?: string | null) => {
       try {
-        const nextQueue = await apiClient.getQueue(conversationId);
-        if (activeConversationIdRef.current !== conversationId) return;
-        applyQueue(nextQueue);
+        const before = readRuntime(target);
+        if (!before) return;
+        const nextQueue = await apiClient.getQueue(target.conversationId);
+        if (!applyQueue(target, nextQueue, before.queueVersion)) return;
 
+        const currentRun = readRuntime(target)?.run ?? null;
         const activeRunId =
-          activeRunRef.current?.conversation_id === conversationId &&
-          isLiveRun(activeRunRef.current)
-            ? activeRunRef.current.id
+          currentRun?.conversation_id === target.conversationId &&
+          isLiveRun(currentRun)
+            ? currentRun.id
             : null;
         const runId = getCurrentRunId(nextQueue) ?? knownRunId ?? activeRunId;
         if (!runId) {
-          applyRun(null);
+          applyRun(target, null, currentRun?.id);
           return;
         }
 
         const fetchedRun = await apiClient.getRun(runId);
-        if (activeConversationIdRef.current !== conversationId) return;
-        const previous = activeRunRef.current;
-        const run =
-          previous?.id === runId &&
-          previous.local_state === "reconciled" &&
-          fetchedRun.local_state !== "reconciled"
-            ? previous
-            : fetchedRun;
-        applyRun(run);
+        applyRun(target, fetchedRun, runId);
+        const run = readRuntime(target)?.run;
+        if (!run || run.id !== runId) return;
 
         if (run.local_state === "reconciled") {
           const flight = refreshFlightRef.current;
-          if (flight?.conversationId === conversationId) {
+          if (flight?.target === target) {
             flight.reconciling = true;
             flight.rerun = false;
           }
-          markRunSyncing(run.id);
-          await refreshLatestMessages(conversationId, run.id);
-          if (activeConversationIdRef.current === conversationId) {
+          markRunSyncing(target, run.id);
+          await refreshLatestMessages(target, run.id);
+          if (isCurrentTarget(target)) {
             if (lastConversationListRefreshRunIdRef.current !== run.id) {
               lastConversationListRefreshRunIdRef.current = run.id;
               void loadConversations();
@@ -94,7 +92,7 @@ export function useRunRuntime(
           }
         }
       } catch (error) {
-        if (activeConversationIdRef.current === conversationId) {
+        if (isCurrentTarget(target)) {
           setWorkspaceError(getErrorMessage(error, "无法刷新运行状态"));
         }
       }
@@ -102,8 +100,10 @@ export function useRunRuntime(
     [
       applyQueue,
       applyRun,
+      isCurrentTarget,
       loadConversations,
       markRunSyncing,
+      readRuntime,
       refreshLatestMessages,
       setWorkspaceError,
     ],
@@ -111,14 +111,19 @@ export function useRunRuntime(
 
   const refreshRuntime = useCallback(
     (conversationId: string, knownRunId?: string | null): Promise<void> => {
+      const target = captureTarget(conversationId);
+      if (!target) return Promise.resolve();
       const flight = refreshFlightRef.current;
-      if (flight?.conversationId === conversationId) {
+      if (
+        flight?.target.conversationId === target.conversationId &&
+        flight.target.selection === target.selection
+      ) {
         if (!flight.reconciling) flight.rerun = true;
         flight.knownRunId = knownRunId ?? flight.knownRunId;
         return flight.promise;
       }
       const nextFlight = {
-        conversationId,
+        target,
         promise: Promise.resolve(),
         rerun: false,
         reconciling: false,
@@ -128,27 +133,24 @@ export function useRunRuntime(
       nextFlight.promise = (async () => {
         do {
           nextFlight.rerun = false;
-          await refreshOnce(conversationId, nextFlight.knownRunId);
-        } while (
-          nextFlight.rerun &&
-          activeConversationIdRef.current === conversationId
-        );
+          await refreshOnce(target, nextFlight.knownRunId);
+        } while (nextFlight.rerun && isCurrentTarget(target));
         if (refreshFlightRef.current === nextFlight) {
           refreshFlightRef.current = null;
         }
       })();
       return nextFlight.promise;
     },
-    [activeConversationIdRef, refreshOnce],
+    [captureTarget, isCurrentTarget, refreshOnce],
   );
 
   const scheduleToolHydration = useCallback(
-    (conversationId: string, runId: string) => {
+    (target: ViewTarget, runId: string) => {
       if (hydrateTimerRef.current !== null)
         window.clearTimeout(hydrateTimerRef.current);
       hydrateTimerRef.current = window.setTimeout(() => {
         hydrateTimerRef.current = null;
-        void hydrateRunTools(conversationId, runId).catch(() => {
+        void hydrateRunTools(target, runId).catch(() => {
           // The event preview stays visible; a later completion or terminal refresh retries.
         });
       }, 120);
@@ -170,20 +172,20 @@ export function useRunRuntime(
         typeof event.data.local_run_id === "string"
           ? event.data.local_run_id
           : null;
-      const conversationId = activeConversationIdRef.current;
-      const run = activeRunRef.current;
+      const target = captureTarget();
+      const run = target && readRuntime(target)?.run;
       if (
-        !conversationId ||
+        !target ||
         !eventRunId ||
         run?.id !== eventRunId ||
-        run.conversation_id !== conversationId
+        run.conversation_id !== target.conversationId
       ) {
         return;
       }
 
       if (event.event === "stream.gap") {
         setStreamNotice("最终状态可恢复，部分实时过程事件不可恢复。");
-        void refreshRuntime(conversationId, eventRunId);
+        void refreshRuntime(target.conversationId, eventRunId);
         return;
       }
 
@@ -191,10 +193,11 @@ export function useRunRuntime(
         return;
       const type = event.data.type;
       if (type === "run.review_required") {
-        void refreshLatestMessages(conversationId, eventRunId).catch(() => {
-          setStreamNotice("运行提交结果未确认，请手动刷新会话历史。");
+        void refreshLatestMessages(target, eventRunId).catch(() => {
+          if (isCurrentTarget(target))
+            setStreamNotice("运行提交结果未确认，请手动刷新会话历史。");
         });
-        void refreshRuntime(conversationId, eventRunId);
+        void refreshRuntime(target.conversationId, eventRunId);
         return;
       }
       // Hermes can emit reasoning.available from ordinary assistant content;
@@ -209,9 +212,9 @@ export function useRunRuntime(
             ? event.data.local_seq
             : null;
         const payload = isRecord(event.data.payload) ? event.data.payload : {};
-        applyRunStreamEvent(eventRunId, sequence, type, payload);
+        applyRunStreamEvent(target, eventRunId, sequence, type, payload);
         if (type === "tool.completed") {
-          scheduleToolHydration(conversationId, eventRunId);
+          scheduleToolHydration(target, eventRunId);
         }
         return;
       }
@@ -223,13 +226,16 @@ export function useRunRuntime(
         type === "run.interrupted" ||
         type === "run.reconciled"
       ) {
-        if (type !== "approval.request") markRunSyncing(eventRunId);
-        void refreshRuntime(conversationId, eventRunId);
+        if (type !== "approval.request") markRunSyncing(target, eventRunId);
+        void refreshRuntime(target.conversationId, eventRunId);
       }
     },
     [
       applyRunStreamEvent,
+      captureTarget,
+      isCurrentTarget,
       markRunSyncing,
+      readRuntime,
       refreshLatestMessages,
       refreshRuntime,
       scheduleToolHydration,
@@ -282,12 +288,13 @@ export function useRunRuntime(
     queueItemId: string,
     expectedRevision: number,
   ) => {
+    const target = captureTarget();
+    if (!target) return;
     const item = await apiClient.cancelQueueItem(queueItemId, {
       expected_revision: expectedRevision,
     });
-    if (activeConversationIdRef.current !== item.conversation_id) return;
-    replaceQueueItemInView(item);
-    void refreshRuntime(item.conversation_id);
+    if (applyQueueItem(target, item) || captureTarget(target.conversationId))
+      void refreshRuntime(target.conversationId);
   };
 
   const handleEditQueueItem = async (
@@ -295,43 +302,52 @@ export function useRunRuntime(
     content: string,
     expectedRevision: number,
   ) => {
+    const target = captureTarget();
+    if (!target) return;
     const item = await apiClient.patchQueueItem(queueItemId, {
       content,
       expected_revision: expectedRevision,
     });
-    if (activeConversationIdRef.current !== item.conversation_id) return;
-    replaceQueueItemInView(item);
+    if (!applyQueueItem(target, item) && captureTarget(target.conversationId))
+      void refreshRuntime(target.conversationId);
   };
 
   const handleStopRun = async () => {
-    if (!activeRun) return;
-    const nextRun = await apiClient.stopRun(activeRun.id);
-    if (activeConversationIdRef.current !== activeRun.conversation_id) return;
-    applyRun(nextRun);
-    if (activeConversationId)
-      void refreshRuntime(activeConversationId, nextRun.id);
+    const target = captureTarget();
+    const run = target && readRuntime(target)?.run;
+    if (!target || !run) return;
+    const nextRun = await apiClient.stopRun(run.id);
+    if (
+      applyRun(target, nextRun, run.id) ||
+      captureTarget(target.conversationId)
+    )
+      void refreshRuntime(target.conversationId, nextRun.id);
   };
 
   const handleApproval = async (choice: "once" | "deny") => {
-    if (!activeRun) return;
-    const nextRun = await apiClient.submitApproval(activeRun.id, {
+    const target = captureTarget();
+    const run = target && readRuntime(target)?.run;
+    if (!target || !run) return;
+    const nextRun = await apiClient.submitApproval(run.id, {
       choice,
-      request_id: activeRun.approval?.request_id,
+      request_id: run.approval?.request_id,
     });
-    if (activeConversationIdRef.current !== activeRun.conversation_id) return;
-    applyRun(nextRun);
-    if (activeConversationId)
-      void refreshRuntime(activeConversationId, nextRun.id);
+    if (
+      applyRun(target, nextRun, run.id) ||
+      captureTarget(target.conversationId)
+    )
+      void refreshRuntime(target.conversationId, nextRun.id);
   };
 
   const handleReconcile = async () => {
-    if (!activeRun) return;
-    const result = await apiClient.reconcileRun(activeRun.id);
-    if (activeConversationIdRef.current !== activeRun.conversation_id) return;
-    applyRun(result.run);
-    replaceQueueItemInView(result.queue_item);
-    if (activeConversationId)
-      void refreshRuntime(activeConversationId, result.run.id);
+    const target = captureTarget();
+    const run = target && readRuntime(target)?.run;
+    if (!target || !run) return;
+    const result = await apiClient.reconcileRun(run.id);
+    const appliedRun = applyRun(target, result.run, run.id);
+    const appliedItem = applyQueueItem(target, result.queue_item);
+    if (appliedRun || appliedItem || captureTarget(target.conversationId))
+      void refreshRuntime(target.conversationId, result.run.id);
   };
 
   return {

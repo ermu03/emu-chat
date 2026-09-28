@@ -38,13 +38,11 @@ export function useMessageSend(
   setConversations: Dispatch<SetStateAction<ConversationSummary[]>>,
 ) {
   const {
-    activeConversationIdRef,
-    activeRunRef,
-    queueRef,
-    setDraft,
-    setQueueOpen,
+    captureTarget,
+    readRuntime,
+    openQueuePanel,
     clearStreamForNewSend,
-    upsertQueueItemInView,
+    applySubmissionResult,
     activeQueueItem,
     messages,
     runDisplay,
@@ -177,12 +175,15 @@ export function useMessageSend(
   const handleSend = async (content: string, expectedDraftRevision: number) => {
     if (!activeConversationId) throw new Error("请先选择会话");
     const conversationId = activeConversationId;
+    const target = captureTarget(conversationId);
+    if (!target) throw new Error("会话已切换，请重试发送");
+    const runtime = readRuntime(target);
     const isFollowUp = isAgentGenerating(
-      activeRunRef.current,
-      queueRef.current,
+      runtime?.run ?? null,
+      runtime?.queue ?? null,
     );
     if (!isFollowUp) {
-      clearStreamForNewSend();
+      clearStreamForNewSend(target);
     }
 
     let pending = pendingSendRef.current;
@@ -208,7 +209,7 @@ export function useMessageSend(
         isFollowUp,
       },
     ]);
-    if (isFollowUp) setQueueOpen(true);
+    if (isFollowUp) openQueuePanel(target);
 
     try {
       const result = await apiClient.sendMessage(conversationId, {
@@ -220,10 +221,17 @@ export function useMessageSend(
       setPendingSubmissions((current) =>
         current.filter((entry) => entry.requestId !== pending.requestId),
       );
-      if (activeConversationIdRef.current === conversationId) {
-        setDraft(result.draft);
-        upsertQueueItemInView(conversationId, result.queue_item);
-        if (isFollowUp) setQueueOpen(true);
+      if (
+        applySubmissionResult(
+          target,
+          result.draft,
+          result.queue_item,
+          isFollowUp,
+        )
+      ) {
+        void refreshRuntime(conversationId, result.queue_item.local_run_id);
+      } else if (captureTarget(conversationId)) {
+        // The request succeeded during an earlier visit to this conversation.
         void refreshRuntime(conversationId, result.queue_item.local_run_id);
       }
       setConversations((current) =>

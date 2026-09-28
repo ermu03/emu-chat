@@ -73,6 +73,7 @@ export function AppShell() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
   const routeConversationIdRef = useRef(routeConversationId);
+  const conversationListLoadRef = useRef(0);
   const composerRef = useRef<DraftComposerHandle | null>(null);
   routeConversationIdRef.current = routeConversationId;
 
@@ -100,9 +101,11 @@ export function AppShell() {
   }, []);
 
   const loadConversations = useCallback(async () => {
+    const loadId = ++conversationListLoadRef.current;
     setConversationsLoading(true);
     try {
       const response = await apiClient.listConversations({ limit: 50 });
+      if (loadId !== conversationListLoadRef.current) return;
       setConversations(response.items);
       setActiveConversationId((current) => {
         if (current) return current;
@@ -113,9 +116,11 @@ export function AppShell() {
         );
       });
     } catch (error) {
-      setWorkspaceError(getErrorMessage(error, "无法加载会话列表"));
+      if (loadId === conversationListLoadRef.current)
+        setWorkspaceError(getErrorMessage(error, "无法加载会话列表"));
     } finally {
-      setConversationsLoading(false);
+      if (loadId === conversationListLoadRef.current)
+        setConversationsLoading(false);
     }
   }, []);
 
@@ -143,7 +148,7 @@ export function AppShell() {
     loadingEarlier,
     draft,
     queueOpen,
-    setQueueOpen,
+    closeQueuePanel,
     runDisplay,
     hasTargetMessages,
     hasActiveConversationView,
@@ -213,7 +218,8 @@ export function AppShell() {
 
   const selectConversation = (conversationId: string) => {
     setIsEditingTitle(false);
-    view.restoreCachedView(conversationId);
+    if (conversationId !== activeConversationId)
+      view.restoreCachedView(conversationId);
     setActiveConversationId(conversationId);
     setSidebarOpen(false);
     navigate(`/conversations/${encodeURIComponent(conversationId)}`);
@@ -275,7 +281,7 @@ export function AppShell() {
         confirmed,
       });
       view.dropCachedView(conversationId);
-      if (activeConversationId === conversationId) {
+      if (view.captureTarget(conversationId)) {
         setActiveConversationId(null);
         navigate("/");
       }
@@ -295,21 +301,20 @@ export function AppShell() {
         (conversation) => conversation.conversation_id === conversationId,
       );
       if (!current || current.title !== title) {
-        await apiClient.patchHermesMetadata(conversationId, {
+        const updated = await apiClient.patchHermesMetadata(conversationId, {
           field: "title",
           value: title,
         });
+        view.applyMetadataField(conversationId, "title", updated.title);
       }
       if (!current || current.pinned !== pinned) {
-        await apiClient.patchHermesMetadata(conversationId, {
+        const updated = await apiClient.patchHermesMetadata(conversationId, {
           field: "pinned",
           value: pinned,
         });
+        view.applyMetadataField(conversationId, "pinned", updated.pinned);
       }
       await loadConversations();
-      if (activeConversationId === conversationId && activeConversation) {
-        view.setActiveConversation({ ...activeConversation, title, pinned });
-      }
     } catch (error) {
       setWorkspaceError(getErrorMessage(error, "更新会话失败"));
     }
@@ -611,19 +616,25 @@ export function AppShell() {
                     key={admissionReviewItem.id}
                     item={admissionReviewItem}
                     onRefreshHistory={async () => {
+                      const target = view.captureTarget(activeConversationId);
+                      if (!target) return;
                       await view.refreshLatestMessages(
-                        activeConversationId,
+                        target,
                         admissionReviewItem.local_run_id ?? undefined,
                       );
-                      await runtime.refreshRuntime(activeConversationId);
+                      if (view.isCurrentTarget(target))
+                        await runtime.refreshRuntime(target.conversationId);
                     }}
                     onResumeQueue={async () => {
-                      const targetId = activeConversationId;
-                      const resumed = await apiClient.resumeQueue(targetId);
-                      if (view.activeConversationIdRef.current !== targetId)
-                        return;
-                      view.applyQueue(resumed);
-                      void runtime.refreshRuntime(targetId);
+                      const target = view.captureTarget(activeConversationId);
+                      if (!target) return;
+                      const version = view.readRuntime(target)?.queueVersion;
+                      const resumed = await apiClient.resumeQueue(
+                        target.conversationId,
+                      );
+                      view.applyQueue(target, resumed, version);
+                      if (view.isCurrentTarget(target))
+                        void runtime.refreshRuntime(target.conversationId);
                     }}
                   />
                 )}
@@ -632,7 +643,7 @@ export function AppShell() {
                     pendingQueueItems.length > 0) && (
                     <QueuePanel
                       isOpen={queueOpen}
-                      onClose={() => setQueueOpen(false)}
+                      onClose={closeQueuePanel}
                       items={queuedMessages}
                       pendingItems={pendingQueueItems}
                       onCancelItem={handleCancelQueueItem}

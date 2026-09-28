@@ -59,7 +59,7 @@ SVG 路径采用 `image/svg+xml` Blob URL 加 `<img>`，不使用 innerHTML、�
 
 本次范围不包括多文件工程构建、React/Vue 编译、依赖安装、服务端代码执行、源码在线编辑、SVG 可视化编辑、PNG 栅格导出、发布网站或完整成果库。后续可在首版使用反馈基础上扩展 Markdown、图像导出和明确的版本管理。
 
-预计改动集中于消息渲染、成果提取与运行组件、AppShell 布局和[样式](../../../../src/client/index.css)。成果提取应保留[消息分组](../../../../src/client/features/messages/message-display.ts)中的原消息身份，避免只在通用 Markdown 组件内新增状态、丢失角色和来源边界。与[会话状态隔离提案](../architecture/2026-09-26-guard-conversation-view-updates.md)保持一致，不扩大跨会话状态回写面。实施后更新[客户端说明](../../../../docs/06-client-internals.md)、[安全说明](../../../../docs/09-error-and-security.md)和 README，并将本笔记随代码移入 implemented；提案阶段保留现状文档。
+预计改动集中于消息渲染、成果提取与运行组件、AppShell 布局和[样式](../../../../src/client/index.css)。成果提取应保留[消息分组](../../../../src/client/features/messages/message-display.ts)中的原消息身份，避免只在通用 Markdown 组件内新增状态、丢失角色和来源边界。与[会话状态隔离决定](../../implemented/architecture/2026-09-26-guard-conversation-view-updates.md)保持一致，不扩大跨会话状态回写面。实施后更新[客户端说明](../../../../docs/06-client-internals.md)、[安全说明](../../../../docs/09-error-and-security.md)和 README，并将本笔记随代码移入 implemented；提案阶段保留现状文档。
 
 ## Alternatives considered
 
