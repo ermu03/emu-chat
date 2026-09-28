@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 import Database from "better-sqlite3";
 import { buildServer } from "../../src/server/app.js";
@@ -72,6 +72,7 @@ describe("Phase 4: Queue and runs HTTP integration", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     if (app) await app.close();
     app = null;
     if (db?.open) db.close();
@@ -175,6 +176,193 @@ describe("Phase 4: Queue and runs HTTP integration", () => {
     });
   });
 
+  it("rolls back dispatch when Run insertion fails and can dispatch the same item later", async () => {
+    const conversationId = await createMappedConversation();
+    db!
+      .prepare(
+        "UPDATE conversations SET queue_paused = 1, pause_reason = 'manual_resume_required' WHERE id = ?",
+      )
+      .run(conversationId);
+    await putDraft(conversationId, "Dispatch after rollback", 0);
+    const sent = await app!.inject({
+      method: "POST",
+      url: `/api/v1/conversations/${conversationId}/messages`,
+      payload: {
+        client_request_id: "00000000-0000-4000-8000-000000000409",
+        expected_draft_revision: 1,
+      },
+    });
+    const itemId = (sent.json() as { queue_item: QueueItemView }).queue_item.id;
+    const insert = vi
+      .spyOn(RunRepository.prototype, "insert")
+      .mockImplementationOnce(() => {
+        throw new Error("injected Run insert failure");
+      });
+
+    const resumed = await app!.inject({
+      method: "POST",
+      url: `/api/v1/conversations/${conversationId}/queue/resume`,
+      payload: {},
+    });
+    expect(resumed.statusCode).toBe(200);
+    await waitFor(() => (insert.mock.calls.length === 1 ? true : undefined));
+    expect(
+      db!.prepare("SELECT state FROM queue_items WHERE id = ?").get(itemId),
+    ).toMatchObject({ state: "queued" });
+    expect(new RunRepository(db!).findByQueueItemId(itemId)).toBeNull();
+
+    await waitFor(
+      () =>
+        new RunRepository(db!).findByQueueItemId(itemId)?.local_state ===
+        "reconciled"
+          ? true
+          : undefined,
+      5_000,
+    );
+    const sessionId = (
+      db!
+        .prepare("SELECT hermes_session_id FROM conversations WHERE id = ?")
+        .get(conversationId) as { hermes_session_id: string }
+    ).hermes_session_id;
+    expect(
+      fakeHermes
+        .getMessages(sessionId)
+        ?.filter((message) => message.role === "user"),
+    ).toHaveLength(1);
+  });
+
+  it("recovers a lost admission response after restart using the original Hermes run", async () => {
+    const conversationId = await createMappedConversation();
+    fakeHermes.loseNextRunAdmissionResponse = true;
+    await putDraft(conversationId, "Recover original Hermes run", 0);
+    const sent = await app!.inject({
+      method: "POST",
+      url: `/api/v1/conversations/${conversationId}/messages`,
+      payload: {
+        client_request_id: "00000000-0000-4000-8000-000000000410",
+        expected_draft_revision: 1,
+      },
+    });
+    expect(sent.statusCode).toBe(202);
+    const itemId = (sent.json() as { queue_item: QueueItemView }).queue_item.id;
+    await waitFor(() => {
+      const item = db!
+        .prepare("SELECT state, last_error_code FROM queue_items WHERE id = ?")
+        .get(itemId) as { state: string; last_error_code: string | null };
+      return item.state === "dispatching" && item.last_error_code
+        ? true
+        : undefined;
+    });
+
+    await app!.close();
+    app = null;
+    db!
+      .prepare("UPDATE queue_items SET updated_at = ? WHERE id = ?")
+      .run(new Date(Date.now() - 60_000).toISOString(), itemId);
+    app = buildServer(config, { db: db! });
+    await app.ready();
+    await waitFor(() => {
+      const item = db!
+        .prepare("SELECT state FROM queue_items WHERE id = ?")
+        .get(itemId) as { state: string };
+      return item.state === "done" ? true : undefined;
+    });
+    const item = db!
+      .prepare("SELECT attempt_count FROM queue_items WHERE id = ?")
+      .get(itemId) as { attempt_count: number };
+    expect(item.attempt_count).toBe(2);
+    expect(fakeHermes.admissionRequests).toBe(2);
+    const sessionId = (
+      db!
+        .prepare("SELECT hermes_session_id FROM conversations WHERE id = ?")
+        .get(conversationId) as { hermes_session_id: string }
+    ).hermes_session_id;
+    expect(
+      fakeHermes
+        .getMessages(sessionId)
+        ?.filter((message) => message.role === "user"),
+    ).toHaveLength(1);
+  });
+
+  it("stops after four unconfirmed admissions and frees the global slot", async () => {
+    const uncertainConversationId = await createMappedConversation();
+    const nextConversationId = await createMappedConversation();
+    fakeHermes.failRunAdmissions = 4;
+    await putDraft(uncertainConversationId, "Unconfirmed submission", 0);
+    const sent = await app!.inject({
+      method: "POST",
+      url: `/api/v1/conversations/${uncertainConversationId}/messages`,
+      payload: {
+        client_request_id: "00000000-0000-4000-8000-000000000411",
+        expected_draft_revision: 1,
+      },
+    });
+    const itemId = (sent.json() as { queue_item: QueueItemView }).queue_item.id;
+
+    for (let attempt = 1; attempt < 4; attempt += 1) {
+      await waitFor(() => {
+        const row = db!
+          .prepare(
+            "SELECT attempt_count, last_error_code FROM queue_items WHERE id = ?",
+          )
+          .get(itemId) as {
+          attempt_count: number;
+          last_error_code: string | null;
+        };
+        return row.attempt_count === attempt && row.last_error_code
+          ? true
+          : undefined;
+      }, 5_000);
+      db!
+        .prepare("UPDATE queue_items SET updated_at = ? WHERE id = ?")
+        .run(new Date(Date.now() - 60_000).toISOString(), itemId);
+    }
+    await waitFor(() => {
+      const row = db!
+        .prepare("SELECT state FROM queue_items WHERE id = ?")
+        .get(itemId) as { state: string };
+      return row.state === "review_required" ? true : undefined;
+    }, 5_000);
+    const uncertain = db!
+      .prepare(
+        "SELECT state, attempt_count, last_error_code FROM queue_items WHERE id = ?",
+      )
+      .get(itemId) as {
+      state: string;
+      attempt_count: number;
+      last_error_code: string;
+    };
+    expect(uncertain).toMatchObject({
+      state: "review_required",
+      attempt_count: 4,
+      last_error_code: "ADMISSION_UNCONFIRMED",
+    });
+    expect(fakeHermes.admissionRequests).toBe(4);
+    expect(
+      db!
+        .prepare("SELECT pause_reason FROM conversations WHERE id = ?")
+        .get(uncertainConversationId),
+    ).toMatchObject({ pause_reason: "manual_resume_required" });
+
+    await putDraft(nextConversationId, "Can use the freed slot", 0);
+    const nextSent = await app!.inject({
+      method: "POST",
+      url: `/api/v1/conversations/${nextConversationId}/messages`,
+      payload: {
+        client_request_id: "00000000-0000-4000-8000-000000000412",
+        expected_draft_revision: 1,
+      },
+    });
+    const nextItemId = (nextSent.json() as { queue_item: QueueItemView })
+      .queue_item.id;
+    await waitFor(() => {
+      const row = db!
+        .prepare("SELECT state FROM queue_items WHERE id = ?")
+        .get(nextItemId) as { state: string };
+      return row.state === "done" ? true : undefined;
+    });
+  }, 15_000);
+
   it("skips a paused queue head and dispatches another conversation", async () => {
     const pausedConversationId = await createMappedConversation();
     const runnableConversationId = await createMappedConversation();
@@ -272,6 +460,17 @@ describe("Phase 4: Queue and runs HTTP integration", () => {
     expect(sent.statusCode).toBe(202);
     const itemId = (sent.json() as { queue_item: QueueItemView }).queue_item.id;
 
+    await waitFor(() => {
+      const row = db!
+        .prepare("SELECT last_error_code FROM queue_items WHERE id = ?")
+        .get(itemId) as { last_error_code: string | null };
+      return row.last_error_code ? true : undefined;
+    });
+    // Exhaust the remaining attempts without waiting through retry backoff.
+    db!
+      .prepare("UPDATE queue_items SET attempt_count = 4 WHERE id = ?")
+      .run(itemId);
+
     await waitFor(async () => {
       const response = await app!.inject({
         method: "GET",
@@ -280,8 +479,8 @@ describe("Phase 4: Queue and runs HTTP integration", () => {
       const item = (response.json() as QueueView).data.find(
         (entry) => entry.id === itemId,
       );
-      return item?.state === "rejected" ? item : undefined;
-    });
+      return item?.state === "review_required" ? item : undefined;
+    }, 5_000);
     const copyBeforeExpiry = await app!.inject({
       method: "POST",
       url: `/api/v1/queue-items/${itemId}/copy-to-draft`,

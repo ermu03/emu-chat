@@ -30,7 +30,6 @@ import { LeaseRepository } from "../db/repositories/lease.repository.js";
 import { QueueRepository } from "../db/repositories/queue.repository.js";
 import { RunRepository } from "../db/repositories/run.repository.js";
 import {
-  ApprovalNotPendingError,
   DraftConflictError,
   HermesAuthFailedError,
   HermesNotReadyError,
@@ -45,6 +44,11 @@ import type { HermesAdapter } from "../hermes/adapter.js";
 
 type WakeCoordinator = () => void;
 type ReconcileCoordinator = (localRunId: string) => Promise<void>;
+type StopCoordinator = (localRunId: string) => Promise<void>;
+type ApproveCoordinator = (
+  localRunId: string,
+  input: ApprovalRequest,
+) => Promise<void>;
 
 export interface QueueRunServiceOptions {
   db: Database.Database;
@@ -56,6 +60,8 @@ export interface QueueRunServiceOptions {
   hermesAdapter: HermesAdapter;
   wakeCoordinator: WakeCoordinator;
   reconcileCoordinator: ReconcileCoordinator;
+  stopCoordinator: StopCoordinator;
+  approveCoordinator: ApproveCoordinator;
 }
 
 /** Implements the browser-facing queue/run mutations and resource projections. */
@@ -69,6 +75,8 @@ export class QueueRunService {
   private readonly hermesAdapter: HermesAdapter;
   private readonly wakeCoordinator: WakeCoordinator;
   private readonly reconcileCoordinator: ReconcileCoordinator;
+  private readonly stopCoordinator: StopCoordinator;
+  private readonly approveCoordinator: ApproveCoordinator;
 
   constructor(options: QueueRunServiceOptions) {
     this.db = options.db;
@@ -80,6 +88,8 @@ export class QueueRunService {
     this.hermesAdapter = options.hermesAdapter;
     this.wakeCoordinator = options.wakeCoordinator;
     this.reconcileCoordinator = options.reconcileCoordinator;
+    this.stopCoordinator = options.stopCoordinator;
+    this.approveCoordinator = options.approveCoordinator;
   }
 
   async sendMessage(
@@ -433,45 +443,7 @@ export class QueueRunService {
   }
 
   async stopRun(localRunId: string): Promise<RunResponse> {
-    const stop = withImmediateTransaction(this.db, () => {
-      const run = this.requireRun(localRunId);
-      const item = this.requireQueueItem(run.queue_item_id);
-      this.requireMutableConversation(run.conversation_id);
-      if (
-        run.local_state === "reconciling" ||
-        run.local_state === "reconciled"
-      ) {
-        throw new StateConflictError(`Run is ${run.local_state}`, {
-          current_state: run.local_state,
-        });
-      }
-      if (run.upstream_status === "stopping") return { run, shouldStop: false };
-      if (
-        run.local_state !== "accepted" ||
-        item.state !== "accepted" ||
-        !run.hermes_run_id
-      ) {
-        throw new StateConflictError(
-          "Run cannot be stopped in its current state",
-          {
-            current_state: run.local_state,
-          },
-        );
-      }
-      const updated = this.runRepo.update(run.id, {
-        upstream_status: "stopping",
-      });
-      this.conversationRepo.setQueuePaused(
-        run.conversation_id,
-        true,
-        "user_stopped",
-      );
-      return { run: updated, shouldStop: true };
-    });
-
-    if (stop.shouldStop && stop.run.hermes_run_id) {
-      await this.hermesAdapter.stopRun(stop.run.hermes_run_id);
-    }
+    await this.stopCoordinator(localRunId);
     return this.getRun(localRunId);
   }
 
@@ -479,58 +451,7 @@ export class QueueRunService {
     localRunId: string,
     input: ApprovalRequest,
   ): Promise<RunResponse> {
-    const run = this.requireRun(localRunId);
-    this.requireMutableConversation(run.conversation_id);
-    if (!run.hermes_run_id || run.upstream_status !== "waiting_for_approval") {
-      throw new ApprovalNotPendingError(
-        `Run ${localRunId} is not waiting for approval`,
-      );
-    }
-    const status = await this.hermesAdapter.getRunStatus(run.hermes_run_id);
-    const approval = status.approval;
-    const choices =
-      approval?.choices.filter(
-        (choice): choice is "once" | "deny" =>
-          choice === "once" || choice === "deny",
-      ) ?? [];
-    if (
-      status.status !== "waiting_for_approval" ||
-      !approval ||
-      !choices.includes(input.choice)
-    ) {
-      throw new ApprovalNotPendingError(
-        `Run ${localRunId} is not waiting for approval`,
-      );
-    }
-    if (
-      input.request_id !== undefined &&
-      input.request_id !== approval.request_id
-    ) {
-      throw new ApprovalNotPendingError("Approval request has expired");
-    }
-    this.requireMutableConversation(run.conversation_id);
-    await this.hermesAdapter.submitApproval(
-      run.hermes_run_id,
-      input.choice,
-      approval.request_id,
-    );
-    withImmediateTransaction(this.db, () => {
-      const current = this.requireRun(run.id);
-      this.requireMutableConversation(current.conversation_id);
-      if (
-        current.hermes_run_id !== run.hermes_run_id ||
-        current.upstream_status !== "waiting_for_approval"
-      ) {
-        throw new ApprovalNotPendingError(
-          `Run ${localRunId} is not waiting for approval`,
-        );
-      }
-      this.runRepo.update(current.id, { upstream_status: "running" });
-    });
-    // An approval can make the upstream run terminal before its paused SSE
-    // consumer receives another event. Reconcile instead of assuming a later
-    // stream callback will advance local state.
-    await this.reconcileCoordinator(run.id);
+    await this.approveCoordinator(localRunId, input);
     return this.getRun(localRunId);
   }
 

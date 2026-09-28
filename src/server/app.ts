@@ -214,6 +214,7 @@ export function buildServer(
     new DraftPreferencesService(draftRepo, new PreferencesRepository(db));
 
   const coordinator = new AdmissionCoordinator(
+    db,
     queueRepo,
     runRepo,
     leaseRepo,
@@ -237,6 +238,9 @@ export function buildServer(
       wakeCoordinator: () => coordinator.wake(),
       reconcileCoordinator: (localRunId) =>
         coordinator.reconcileRun(localRunId),
+      stopCoordinator: (localRunId) => coordinator.stopRun(localRunId),
+      approveCoordinator: (localRunId, input) =>
+        coordinator.submitApproval(localRunId, input),
     });
 
   let coordinatorStopped = false;

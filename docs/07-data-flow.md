@@ -33,7 +33,7 @@ sequenceDiagram
 
     Coord->>Coord: tick (执行心跳)
     Coord->>Coord: 获取双重租约 (Lease)
-    Coord->>Coord: dispatch ()
+    Coord->>Coord: 即时事务: 队列 dispatching + Run submitting
     Coord->>Coord: submit (startRun)
     Runtime->>SSE: Run 可见后订阅事件流
     SSE-->>Runtime: 发送 stream.ready
@@ -191,12 +191,19 @@ flowchart TD
     ServerReplay -- Cursor 失效/过期 --> ReplyGap[发送 stream.gap 通知]
     ReplyGap --> ClientREST
 
-    SubmitFail(后端向协调器提交 Run 失败) --> Rejected[标记 QueueItem 为 rejected]
-    Rejected --> Paused[标记会话为 paused: submission_rejected]
-    Paused --> UserAction{用户手动干预}
+    Unknown(提交超时、断线或响应不完整) --> Replay[持久化的会话 ID、正文和幂等键重放；最多 4 次]
+    Crash --> Replay
+    Replay -- 找回同一次 Run --> Accepted[原子提交 Run 与队列项 accepted，继续 SSE 和对账]
+    Replay -- 四次仍不明或 24 小时窗口到期 --> Review[Run 与队列项 review_required；释放全局槽位]
+    Review --> History[用户刷新并检查 Hermes 历史]
+    History --> Resume[确认后恢复此会话后续队列]
+    ExplicitFail(提交前失败或 Hermes 明确拒绝) --> Rejected[Run 与队列项 rejected；会话暂停]
+    Rejected --> UserAction{用户手动干预}
     UserAction -- Copy --> CopyDraft[拷贝到草稿 copyToDraft]
     UserAction -- Discard --> DiscardItem[丢弃该条目 discardRecovery]
 ```
+
+结果不明的旧队列项不会自动重发为新任务。人工恢复队列只解除会话暂停；如确需重新提交原文，应先检查 Hermes 历史，并在 7 天恢复期内复制到草稿后由用户重新发送。
 
 ## 7. SSE 事件流双轨容灾
 

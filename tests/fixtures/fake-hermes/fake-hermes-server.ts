@@ -67,6 +67,9 @@ export interface FakeHermesFault {
 export class FakeHermesServer {
   public readonly sessions = new Map<string, FakeSession>();
   public failNextRun = false;
+  public failRunAdmissions = 0;
+  public loseNextRunAdmissionResponse = false;
+  public admissionRequests = 0;
   public pauseNextRun = false;
   public simulateDisconnect = false;
   public activeAgents = 0;
@@ -353,6 +356,7 @@ export class FakeHermesServer {
     });
 
     app.post("/v1/runs", async (request, reply) => {
+      this.admissionRequests += 1;
       const body = request.body as { session_id?: string; input?: string };
       if (!body?.session_id || !body.input)
         return reply.code(400).send({ error: "invalid run body" });
@@ -365,6 +369,10 @@ export class FakeHermesServer {
       );
       if (result.kind === "error")
         return reply.code(result.status).send({ error: result.message });
+      if (!result.replayed && this.loseNextRunAdmissionResponse) {
+        this.loseNextRunAdmissionResponse = false;
+        return reply.code(202).send({ status: "started", replayed: false });
+      }
       return reply.code(result.replayed ? 200 : 202).send({
         run_id: result.run.id,
         status: result.replayed ? result.run.status : "started",
@@ -438,6 +446,10 @@ export class FakeHermesServer {
       };
     if (this.failNextRun) {
       this.failNextRun = false;
+      return { kind: "error", status: 503, message: "Fake Hermes run failure" };
+    }
+    if (this.failRunAdmissions > 0) {
+      this.failRunAdmissions -= 1;
       return { kind: "error", status: 503, message: "Fake Hermes run failure" };
     }
     const session = this.sessions.get(sessionId);

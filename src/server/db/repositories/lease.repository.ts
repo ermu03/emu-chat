@@ -16,6 +16,22 @@ export class LeaseRepository {
     return row ?? null;
   }
 
+  owns(
+    scopeType: CoordinatorLeaseEntity["scope_type"],
+    scopeId: string,
+    ownerId: string,
+    leaseToken: string,
+  ): boolean {
+    const row = this.db
+      .prepare(
+        `SELECT 1 FROM coordinator_leases
+         WHERE scope_type = ? AND scope_id = ? AND owner_id = ?
+           AND lease_token = ? AND expires_at > ?`,
+      )
+      .get(scopeType, scopeId, ownerId, leaseToken, new Date().toISOString());
+    return row !== undefined;
+  }
+
   acquire(
     scopeType: CoordinatorLeaseEntity["scope_type"],
     scopeId: string,

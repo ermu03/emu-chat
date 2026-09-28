@@ -190,6 +190,13 @@ export function useRunRuntime(
       if (event.event !== "run.event" || typeof event.data.type !== "string")
         return;
       const type = event.data.type;
+      if (type === "run.review_required") {
+        void refreshLatestMessages(conversationId, eventRunId).catch(() => {
+          setStreamNotice("运行提交结果未确认，请手动刷新会话历史。");
+        });
+        void refreshRuntime(conversationId, eventRunId);
+        return;
+      }
       // Hermes can emit reasoning.available from ordinary assistant content;
       // only the persisted message reasoning field is safe to render as a card.
       if (
@@ -223,6 +230,7 @@ export function useRunRuntime(
     [
       applyRunStreamEvent,
       markRunSyncing,
+      refreshLatestMessages,
       refreshRuntime,
       scheduleToolHydration,
     ],

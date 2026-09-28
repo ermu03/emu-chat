@@ -239,6 +239,13 @@ class EmuChatApiClient {
     );
   }
 
+  resumeQueue(conversationId: string): Promise<QueueListResponse> {
+    return this.request<QueueListResponse>(
+      `/api/v1/conversations/${conversationId}/queue/resume`,
+      { method: "POST", body: JSON.stringify({}) },
+    );
+  }
+
   // --- Runs ---
   getRun(localRunId: string): Promise<RunResponse> {
     return this.request<RunResponse>(`/api/v1/runs/${localRunId}`);

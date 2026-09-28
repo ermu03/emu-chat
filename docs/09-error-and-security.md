@@ -102,4 +102,4 @@
 | 上游 I/O | 普通读/写超时 10 秒；Run 提交和 SSE 存活超时 30 秒；SSE 握手超时 10 秒；非 SSE 响应最大 4 MiB |
 | 界面 | 偏好 API 的侧栏宽度允许 240～520 像素；当前桌面拖拽限制为 240～480 像素，且最多占视口宽度的 45% |
 
-`MAX_ADMISSION_ATTEMPTS` 和 `RECONCILIATION_MAX_DURATION_MS` 虽已定义，但当前协调器没有读取这两个常量；数据库仅对 `attempt_count` 设有 0～4 的字段约束。
+协调器读取 `MAX_ADMISSION_ATTEMPTS = 4`，并在 24 小时截止时间前用原会话、正文和幂等键重放结果不明的提交；失败后按 5、10、20 秒退避。到达次数或截止时间后暂停该会话等待人工核对，释放全局派发槽位。`RECONCILIATION_MAX_DURATION_MS` 已定义，当前协调器尚未读取。

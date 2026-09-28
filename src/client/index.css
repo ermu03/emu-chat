@@ -1591,6 +1591,80 @@ details[open] > summary .tool-call-chevron {
   text-align: center;
 }
 
+/* Admission review */
+.admission-review {
+  margin-bottom: 10px;
+  padding: 14px 16px;
+  border: 1px solid color-mix(in srgb, var(--warning) 45%, var(--line));
+  border-radius: var(--radius-lg);
+  color: var(--ink);
+  background: var(--warning-wash);
+  font-size: 13px;
+}
+
+.admission-review > p {
+  margin: 5px 0 10px;
+  color: var(--ink-soft);
+}
+
+.admission-review-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.admission-review button {
+  padding: 5px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  background: var(--surface);
+  font-size: 12px;
+}
+
+.admission-review button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.admission-review details {
+  margin: 8px 0;
+}
+
+.admission-review summary {
+  cursor: pointer;
+}
+
+.admission-review pre {
+  max-height: 120px;
+  margin: 8px 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.admission-review-confirm {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 10px 0;
+  color: var(--ink-soft);
+}
+
+.admission-review-confirm input {
+  margin-top: 3px;
+}
+
+.admission-review .admission-review-resume {
+  border-color: var(--warning);
+}
+
+.admission-review .admission-review-error {
+  margin: 8px 0 0;
+  color: var(--danger);
+}
+
 /* Queue Panel */
 .queue-panel {
   margin-bottom: 10px;

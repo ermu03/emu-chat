@@ -170,8 +170,8 @@ erDiagram
 - **revision**: (INTEGER) 队列项的乐观锁版本。
 - **idempotency_key**: (TEXT) 幂等键，通常带有前缀 `ec_`。
 - **dispatch_session_id**: (TEXT) 本次派发使用的 Hermes 会话 ID。
-- **attempt_count**: (INTEGER) 准入尝试计数，字段约束为 0～4；当前协调器首次派发记为 1，尚未执行多次准入重试。
-- **first_attempt_at**, **admission_deadline_at**: 首次派发时间及按 24 小时幂等窗口计算的截止时间；当前协调器没有读取截止时间来控制重试。
+- **attempt_count**: (INTEGER) 准入尝试计数，字段约束为 0～4；首次派发记为 1，结果不明时最多用原请求重放至第 4 次。
+- **first_attempt_at**, **admission_deadline_at**: 首次派发时间及按 24 小时幂等窗口计算的截止时间；超过截止时间不再自动重放。
 - **recovery_expires_at**: 失败项恢复正文的 7 天截止时间；**payload_expired_at** 记录到期清理时的原截止时间，**payload_discarded_at** 记录用户主动丢弃正文的时间。
 - **last_error_code**: (TEXT) 最后一次失败原因。
 

@@ -14,6 +14,7 @@ import {
   type DraftComposerHandle,
 } from "./features/composer/draft-composer.js";
 import { QueuePanel } from "./features/queue/queue-panel.js";
+import { AdmissionReviewPanel } from "./features/queue/admission-review-panel.js";
 import { isLiveRun } from "./features/queue/queue-state.js";
 import { ApprovalDialog } from "./features/approval/approval-dialog.js";
 import {
@@ -355,6 +356,15 @@ export function AppShell() {
     visibleRun?.local_state === "reconciling" ||
     (visibleRun?.local_state === "review_required" &&
       visibleRun.hermes_run_id !== null);
+  const admissionReviewItem =
+    view.visibleQueue?.paused &&
+    view.visibleQueue.pause_reason === "manual_resume_required"
+      ? view.visibleQueue.data.findLast(
+          (item) =>
+            item.state === "review_required" &&
+            item.last_error_code === "ADMISSION_UNCONFIRMED",
+        )
+      : undefined;
   const isAssistantReplying =
     (agentGenerating || hasPendingPrimarySubmission) &&
     visibleRun?.upstream_status !== "waiting_for_approval" &&
@@ -596,6 +606,27 @@ export function AppShell() {
 
             <div className="composer-shell">
               <div className="composer-inner">
+                {admissionReviewItem && activeConversationId && (
+                  <AdmissionReviewPanel
+                    key={admissionReviewItem.id}
+                    item={admissionReviewItem}
+                    onRefreshHistory={async () => {
+                      await view.refreshLatestMessages(
+                        activeConversationId,
+                        admissionReviewItem.local_run_id ?? undefined,
+                      );
+                      await runtime.refreshRuntime(activeConversationId);
+                    }}
+                    onResumeQueue={async () => {
+                      const targetId = activeConversationId;
+                      const resumed = await apiClient.resumeQueue(targetId);
+                      if (view.activeConversationIdRef.current !== targetId)
+                        return;
+                      view.applyQueue(resumed);
+                      void runtime.refreshRuntime(targetId);
+                    }}
+                  />
+                )}
                 {queueOpen &&
                   (queuedMessages.length > 0 ||
                     pendingQueueItems.length > 0) && (

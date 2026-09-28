@@ -13,7 +13,8 @@ stateDiagram-v2
     queued --> cancelled : 用户在排队时取消
     
     dispatching --> accepted : 成功提交至 Hermes
-    dispatching --> rejected : 提交失败；暂停该会话
+    dispatching --> rejected : 明确拒绝提交；暂停该会话
+    dispatching --> review_required : 四次仍无法确认接纳或幂等窗口到期
     
     accepted --> done : 消息可读、正常完成且非 partial
     accepted --> paused : 消息可读，但运行失败或部分完成
@@ -28,7 +29,7 @@ stateDiagram-v2
     cancelled --> [*]
 ```
 
-队列项枚举共有 9 种状态，其中 `reconciling` 仍在 Schema 中，但当前协调器不写入该状态；终态对账期间变化的是本地 Run 的状态。工具审批等待体现在 Run 的 `upstream_status = waiting_for_approval`，此时队列项仍是 `accepted`；`review_required` 表示终态对账无法验证。恢复会话队列只解除会话的暂停标记，不把旧的 `paused` 或 `rejected` 项重新入队；这些项的正文可在恢复期限内复制到草稿或丢弃。协调器会跳过暂停、待删除会话的排队项，继续派发其他可运行会话。
+队列项枚举共有 9 种状态，其中 `reconciling` 仍在 Schema 中，但当前协调器不写入该状态；终态对账期间变化的是本地 Run 的状态。工具审批等待体现在 Run 的 `upstream_status = waiting_for_approval`，此时队列项仍是 `accepted`。`review_required` 有两种来源：已有上游 Run ID，但终态消息无法验证；或提交结果不明且没有上游 Run ID。后一种需要人工检查 Hermes 历史，不能调用单 Run 对账接口。恢复会话队列只解除暂停标记，不把旧的 `review_required`、`paused` 或 `rejected` 项重新入队；这些项的正文可在恢复期限内复制到草稿或丢弃。协调器会跳过暂停、待删除会话的排队项，继续派发其他可运行会话。
 
 ## 2. 本地 Run 状态 (RunLocalState)
 
@@ -39,14 +40,15 @@ stateDiagram-v2
     [*] --> submitting : 初始化创建 run 行
     
     submitting --> accepted : Hermes 返回成功并返回 hermes_run_id
-    submitting --> rejected : 提交失败且没有取得上游 Run ID
+    submitting --> rejected : 明确拒绝提交且没有上游 Run ID
+    submitting --> review_required : 提交结果无法确认
     
     accepted --> reconciling : 确认上游终态，开始核对消息
     
     reconciling --> review_required : 终态消息无法验证
     reconciling --> reconciled : 终态消息可读，完成对账
     
-    review_required --> reconciling : 用户手动重试对账
+    review_required --> reconciling : 已有上游 Run ID，用户手动重试对账
     
     reconciled --> [*]
     rejected --> [*]
@@ -97,17 +99,18 @@ stateDiagram-v2
 - **run_cancelled**: 任务被远程或本地取消。
 - **run_interrupted**: 上游任务被中断。
 - **user_stopped**: 用户手动点击了停止按钮。
-- **submission_rejected**: 向 Hermes 提交 Run 时失败，未取得上游 Run ID；原因不限于载荷错误。
+- **submission_rejected**: 提交前失败，或 Hermes 明确返回鉴权失败、会话不存在；未取得上游 Run ID。
 - **reconciliation_failed**: 上游 Run 已终止，但终态消息无法验证。
 - **review_required**: 枚举保留项，当前服务未写入该暂停原因；终态消息无法验证时写入的是 `reconciliation_failed`。工具审批由 Run 的上游状态表示。
-- **manual_resume_required**: 枚举保留项，当前服务未写入该暂停原因。
+- **manual_resume_required**: 提交结果无法确认；用户检查 Hermes 历史后，才能手动恢复此会话后续队列。
 
 ## 7. 队列项与 Run 状态的联动关系
 
 队列项 (QueueItem) 抽象的是“用户请求”，而 Run 抽象的是“对上游的执行实例”。
-- **单向绑定**: 当 QueueItem 进入 `dispatching` 时产生一个 Run 行（`submitting` 态）。
-- **同步推进**: 当 Run 从 `submitting` 转为 `accepted` 时，对应的 QueueItem 也从 `dispatching` 变成 `accepted`。审批等待只改变 Run 的上游状态，不会把队列项设为 `review_required`。
+- **单向绑定**: QueueItem 进入 `dispatching` 与创建 `submitting` Run 在同一即时事务中完成。
+- **同步推进**: Run 与 QueueItem 的接纳、明确拒绝、结果不明及终态迁移在同一即时事务中提交。审批等待只改变 Run 的上游状态。
 - **终态上卷**: 终态消息可读时，`completed` 且非 partial 的 Run 使队列项变为 `done`；失败、取消、中断或 partial 的 Run 使队列项变为 `paused`，并暂停该会话的后续派发。消息无法验证时，Run 和队列项进入 `review_required`，会话以 `reconciliation_failed` 原因暂停。
+- **提交结果不明**: 协调器在 24 小时幂等窗口内用同一会话 ID、正文及幂等键重放，最多提交 4 次，失败后依次等待 5、10、20 秒。仍无法确认或窗口到期时，Run 和队列项进入 `review_required`，会话以 `manual_resume_required` 暂停，并释放全局槽位。
 
 ## 8. 载荷 (payload_text) 生命周期设计
 

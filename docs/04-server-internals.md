@@ -47,7 +47,7 @@ stateDiagram-v2
   5. 插入 `queue_item`。
   6. 清空草稿并令 `revision++`。
   7. 唤醒协调器（AdmissionCoordinator）。
-- **stopRun / submitApproval 流程**: 提供终止当前运行或提交人工审批的能力。
+- **stopRun / submitApproval 流程**: 提供 HTTP 入口并调用协调器；Run 状态写入和审批后的对账由协调器处理。
 - **故障载荷恢复**: 
   - `copyToDraft`: 按 `recovery_expires_at` 检查 7 天期限，设置 `overwrite_nonempty` 参数将队列中失败或中断的任务内容写回草稿箱。
   - `discardRecovery`: 丢弃不再需要的恢复载荷。
@@ -83,16 +83,19 @@ sequenceDiagram
 - **实例标识**: `ownerId` 基于 `inst_<pid>_<random>` 生成，区分不同节点。
 - **启动与崩溃恢复**: 服务启动时将尚未结束的 Run 标记为 `events_truncated`，并在新的事件中心记录 `process_restarted` 缺口，供客户端重连时识别。
 - **tick() 2秒轮询循环**:
-  执行 `heartbeatLeases`，检查活跃项，调用 `recoverRun` 或 `findNextGlobalQueued` 寻找可用任务进行 `dispatch`。候选查询跳过已暂停或删除状态不为 `none` 的会话，在其余会话中按入队时间取最早项；跳过的任务保留在队列中，恢复会话后重新参与调度。
+  执行 `heartbeatLeases`，检查活跃项；无上游 ID 时执行 `recoverSubmitting`，有上游 ID 时执行 `recoverRun`，否则通过 `findNextGlobalQueued` 寻找可用任务。租约另有独立的 5 秒续期定时器，避免上游读请求阻塞派发 tick 时租约过期。候选查询跳过已暂停或删除状态不为 `none` 的会话，在其余会话中按入队时间取最早项。
 - **dispatch 双重租约算法**:
-  先后获取**全局租约**与**会话租约**，复核任务仍排队、会话未暂停且删除状态为 `none`。成功后状态更新为 `dispatching`，插入 Run 数据并启动 `submit`。
+  先后获取**全局租约**与**会话租约**，在即时事务中复核令牌、任务与会话状态，并原子地将队列项改为 `dispatching`、插入 `submitting` Run。事务失败时两项均回滚；上游调用在提交之后开始。
 - **submit 提交流程**:
-  尝试执行 `startRun`，成功则标记为 `accepted` 并进入 `consume` 流程；失败则标记为 `rejected` 且暂停对应队列。
+  `startRun` 成功后，在即时事务中将 Run 与队列项共同改为 `accepted`，随后消费 SSE。提交前失败或 Hermes 明确返回鉴权失败、会话不存在时，Run 与队列项共同进入 `rejected`，会话暂停。超时、网络断开或响应格式错误等结果不明的情况保留 `submitting` / `dispatching`，不换幂等键；同一进程用 `submitFlights` 防止并发提交同一 Run。
+- **提交恢复与人工核对**:
+  首次派发持久化 `dispatch_session_id`、正文、幂等键及 24 小时截止时间。重启后在有效窗口内用完全相同的请求重放，最多尝试 4 次，失败后等待 5、10、20 秒。第四次仍无法确认或截止时间已过时，原子地将 Run 与队列项改为 `review_required`、会话以 `manual_resume_required` 暂停，发出 `run.review_required`，释放租约和全局槽位。没有上游 ID 的记录只能由用户检查 Hermes 历史后手动恢复后续队列；原正文仍按 7 天恢复规则保留。
 - **consume SSE消费转发循环**: 建立上游长连接并持续接收结果。
 - **reconcileById 权威对账算法**:
-  1. 拉取上游最新状态，确认是否为终态。
-  2. 验证消息是否可读。
-  3. 分支判定：完全成功则标记 `done`；部分成功/失败进入 `paused` 状态，并拥有 7 天恢复窗口；验证失败触发 `review_required`。
+  1. 所有定时轮询、SSE 消费结束、审批后和手动对账请求按本地 Run ID 合并进行中的调用。
+  2. 拉取 Hermes 状态后，在即时事务中复核当前状态和活跃租约；旧的非终态响应不能覆盖已记录的终态。
+  3. 终态时验证消息可读，再复核状态、`partial` 与租约，并在一个事务内更新 Run、队列项及会话暂停状态。完全成功进入 `done`，失败或部分完成进入 `paused`，消息无法验证进入 `review_required`。提交后再发 SSE 通知并释放租约。
+- **停止与审批**: `stopRun` 在事务中更新上游状态缓存及会话暂停标记，随后请求 Hermes 停止。`submitApproval` 核验上游当前审批，在发送选择后只在 Run 仍处于同一待审批状态时写回 `running`，再通过统一对账入口刷新终态。
 - **租约释放与SSE延迟清理**: 安全退出的重要环节，避免僵尸进程和内存泄漏。
 
 ### SSEHub 事件广播中枢
