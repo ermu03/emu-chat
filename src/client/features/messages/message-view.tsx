@@ -35,6 +35,7 @@ import type { RunDisplay } from "./run-display.js";
 import {
   downloadArtifact,
   extractArtifacts,
+  remarkRawSvgArtifacts,
   type Artifact,
   type ArtifactSource,
 } from "../artifacts/artifact.js";
@@ -719,7 +720,11 @@ const MarkdownContent = memo(function MarkdownContent({
   );
   return (
     <ReactMarkdown
-      remarkPlugins={[remarkGfm, remarkMath]}
+      remarkPlugins={[
+        remarkGfm,
+        remarkMath,
+        ...(artifacts.size ? [() => remarkRawSvgArtifacts(artifacts)] : []),
+      ]}
       rehypePlugins={[rehypeHighlight, rehypeKatex]}
       components={{
         pre({ children }) {

@@ -1,8 +1,13 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
+import { unified } from "unified";
+import remarkParse from "remark-parse";
+import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
 import {
   extractArtifacts,
   MAX_ARTIFACT_BYTES,
+  remarkRawSvgArtifacts,
 } from "../../src/client/features/artifacts/artifact.js";
 
 const owner = {
@@ -51,5 +56,49 @@ describe("artifact execution eligibility", () => {
 
     expect(found).toHaveLength(1);
     expect(found[0]).toMatchObject({ kind: "svg", previewable: false });
+  });
+
+  it("turns a complete SVG in reply prose into a previewable code block", async () => {
+    const svg =
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><rect width="20" height="20"/></svg>';
+    const markdown = `前面的说明：\n\n${svg}\n后面的说明。`;
+    const artifacts = extractArtifacts(markdown, owner);
+    const found = [...artifacts.values()];
+
+    expect(found).toHaveLength(1);
+    expect(found[0]).toMatchObject({
+      origin: "raw-svg",
+      kind: "svg",
+      previewable: true,
+      source: svg,
+    });
+
+    const processor = unified()
+      .use(remarkParse)
+      .use(remarkGfm)
+      .use(remarkMath)
+      .use(() => remarkRawSvgArtifacts(artifacts));
+    const tree = await processor.run(processor.parse(markdown));
+    expect(tree.children.map((node) => node.type)).toEqual([
+      "paragraph",
+      "code",
+      "paragraph",
+    ]);
+    expect(tree.children[1]).toMatchObject({
+      type: "code",
+      lang: "svg",
+      value: svg,
+      position: { start: { offset: markdown.indexOf(svg) } },
+    });
+  });
+
+  it("keeps incomplete, invalid, and quoted SVG without a preview entry", () => {
+    const valid = '<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>';
+    const markdown = [
+      `\`${valid}\``,
+      '<svg xmlns="http://www.w3.org/2000/svg"><rect/>',
+      '<svg xmlns="http://www.w3.org/2000/svg"><script></svg>',
+    ].join("\n\n");
+    expect(extractArtifacts(markdown, owner).size).toBe(0);
   });
 });

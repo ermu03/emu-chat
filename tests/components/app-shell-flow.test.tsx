@@ -244,10 +244,20 @@ afterEach(() => {
 
 describe("AppShell async flows", () => {
   it("runs only saved assistant artifacts and clears the selected preview on conversation switch", async () => {
+    const NativeURL = URL;
+    vi.stubGlobal(
+      "URL",
+      class extends NativeURL {
+        static createObjectURL = vi.fn(() => "blob:svg-preview");
+        static revokeObjectURL = vi.fn();
+      },
+    );
     const first = conversation("cv_artifact_first", "First");
     const second = conversation("cv_artifact_second", "Second");
     const html =
       "```html\n<html><head><title>Timer</title></head><body><button>Start</button></body></html>\n```";
+    const svg =
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><rect width="20" height="20"/></svg>';
     mockCommonApi([first, second]);
     vi.spyOn(apiClient, "getQueue").mockImplementation(async (id) => queue(id));
     vi.spyOn(apiClient, "listMessages").mockImplementation(async (id) =>
@@ -255,8 +265,14 @@ describe("AppShell async flows", () => {
         id,
         id === first.conversation_id
           ? [
-              message(1, first.hermes_session_id, "user", html),
+              message(1, first.hermes_session_id, "user", svg),
               message(2, first.hermes_session_id, "assistant", html),
+              message(
+                3,
+                first.hermes_session_id,
+                "assistant",
+                `前面的说明：\n\n${svg}\n后面的说明。`,
+              ),
             ]
           : [],
       ),
@@ -267,7 +283,9 @@ describe("AppShell async flows", () => {
         <AppShell />
       </MemoryRouter>,
     );
-    const preview = await screen.findByRole("button", { name: "打开预览" });
+    const [preview, rawSvgPreview] = await screen.findAllByRole("button", {
+      name: "打开预览",
+    });
     const composer = screen.getByRole("textbox", {
       name: "消息输入框",
     }) as HTMLTextAreaElement;
@@ -283,6 +301,12 @@ describe("AppShell async flows", () => {
       expect(document.querySelector(".artifact-panel")).toBeNull(),
     );
     await waitFor(() => expect(document.activeElement).toBe(preview));
+    fireEvent.click(rawSvgPreview!);
+    expect(document.querySelector(".artifact-svg-stage img")).not.toBeNull();
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() =>
+      expect(document.querySelector(".artifact-panel")).toBeNull(),
+    );
     fireEvent.click(preview);
 
     fireEvent.click(

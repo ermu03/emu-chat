@@ -1,4 +1,12 @@
-import type { Code, Root, RootContent } from "mdast";
+import type {
+  Blockquote,
+  Code,
+  ListItem,
+  Paragraph,
+  PhrasingContent,
+  Root,
+  RootContent,
+} from "mdast";
 import { unified } from "unified";
 import remarkParse from "remark-parse";
 import remarkGfm from "remark-gfm";
@@ -15,6 +23,7 @@ export interface Artifact {
   readonly blockIndex: number;
   readonly contentHash: string;
   readonly kind: ArtifactKind;
+  readonly origin: "fence" | "raw-svg";
   readonly title: string;
   readonly filename: string;
   readonly source: string;
@@ -39,48 +48,218 @@ export function extractArtifacts(
   source: ArtifactSource,
 ): Map<number, Artifact> {
   const artifacts = new Map<number, Artifact>();
-  if (!markdown.includes("```") && !markdown.includes("~~~")) return artifacts;
-  let blockIndex = 0;
+  if (
+    !markdown.includes("```") &&
+    !markdown.includes("~~~") &&
+    !markdown.includes("<svg")
+  )
+    return artifacts;
   const tree = parser.parse(markdown) as Root;
-
+  const blocks: {
+    offset: number;
+    source: string;
+    language: string | undefined;
+    origin: Artifact["origin"];
+  }[] = [];
   const visit = (node: Root | RootContent) => {
     if (node.type === "code") {
-      const index = blockIndex++;
       const code = node as Code;
       const offset = code.position?.start.offset;
       const end = code.position?.end.offset;
       if (
         offset === undefined ||
         end === undefined ||
-        !isClosedFence(markdown.slice(offset, end)) ||
-        new TextEncoder().encode(code.value).byteLength > MAX_ARTIFACT_BYTES
+        !isClosedFence(markdown.slice(offset, end))
       )
         return;
-      const language = code.lang?.toLowerCase();
-      const candidate = classifyArtifact(language, code.value);
-      if (!candidate) return;
-      const contentHash = hashSource(code.value);
-      const title = candidate.title.slice(0, 120);
-      artifacts.set(offset, {
-        key: `${source.conversationId}:${source.sessionId}:${source.messageId}:${index}:${contentHash}`,
-        ...source,
-        blockIndex: index,
-        contentHash,
-        kind: candidate.kind,
-        title,
-        filename: safeFilename(title, candidate.kind),
+      blocks.push({
+        offset,
         source: code.value,
-        previewable: candidate.previewable,
-        ...(candidate.sizingWarning
-          ? { sizingWarning: candidate.sizingWarning }
-          : {}),
+        language: code.lang?.toLowerCase(),
+        origin: "fence",
       });
+      return;
+    }
+    if (node.type === "html") {
+      const offset = node.position?.start.offset;
+      const end = node.position?.end.offset;
+      if (
+        offset !== undefined &&
+        end !== undefined &&
+        /^<svg\b/i.test(node.value)
+      )
+        blocks.push({
+          offset,
+          source: markdown.slice(offset, end),
+          language: "svg",
+          origin: "raw-svg",
+        });
+      return;
+    }
+    if (node.type === "paragraph") {
+      for (const span of findInlineSvgSpans(node))
+        blocks.push({
+          offset: span.start,
+          source: markdown.slice(span.start, span.end),
+          language: "svg",
+          origin: "raw-svg",
+        });
+      return;
     }
     if ("children" in node && Array.isArray(node.children))
       for (const child of node.children) visit(child);
   };
   visit(tree);
+  blocks.sort((left, right) => left.offset - right.offset);
+  for (const [index, block] of blocks.entries()) {
+    if (new TextEncoder().encode(block.source).byteLength > MAX_ARTIFACT_BYTES)
+      continue;
+    const candidate = classifyArtifact(block.language, block.source);
+    if (!candidate || (block.origin === "raw-svg" && !candidate.previewable))
+      continue;
+    const contentHash = hashSource(block.source);
+    const title = candidate.title.slice(0, 120);
+    artifacts.set(block.offset, {
+      key: `${source.conversationId}:${source.sessionId}:${source.messageId}:${index}:${contentHash}`,
+      ...source,
+      blockIndex: index,
+      contentHash,
+      kind: candidate.kind,
+      origin: block.origin,
+      title,
+      filename: safeFilename(title, candidate.kind),
+      source: block.source,
+      previewable: candidate.previewable,
+      ...(candidate.sizingWarning
+        ? { sizingWarning: candidate.sizingWarning }
+        : {}),
+    });
+  }
   return artifacts;
+}
+
+function findInlineSvgSpans(
+  paragraph: Paragraph,
+): { start: number; end: number }[] {
+  const spans: { start: number; end: number }[] = [];
+  const children = paragraph.children;
+  for (let index = 0; index < children.length; index++) {
+    const opening = children[index];
+    if (opening?.type !== "html" || !/^<svg\b/i.test(opening.value)) continue;
+    const start = opening.position?.start.offset;
+    if (start === undefined) continue;
+    let depth = /\/\s*>$/.test(opening.value) ? 0 : 1;
+    let end = depth === 0 ? opening.position?.end.offset : undefined;
+    for (
+      let cursor = index + 1;
+      depth > 0 && cursor < children.length;
+      cursor++
+    ) {
+      const child = children[cursor];
+      if (child?.type !== "html") continue;
+      if (/^<svg\b/i.test(child.value) && !/\/\s*>$/.test(child.value)) depth++;
+      else if (/^<\/svg\s*>$/i.test(child.value)) depth--;
+      if (depth === 0) {
+        end = child.position?.end.offset;
+        index = cursor;
+      }
+    }
+    if (end !== undefined) spans.push({ start, end });
+  }
+  return spans;
+}
+
+// Render validated, unfenced SVG as an ordinary code block at its original
+// location. ReactMarkdown still escapes raw HTML when no artifact is admitted.
+export function remarkRawSvgArtifacts(artifacts: Map<number, Artifact>) {
+  return (tree: Root) => {
+    const visit = (parent: Root | Blockquote | ListItem) => {
+      const children = parent.children as RootContent[];
+      for (let index = 0; index < children.length; index++) {
+        const child = children[index];
+        if (!child) continue;
+        if (child.type === "html") {
+          const artifact = artifacts.get(child.position?.start.offset ?? -1);
+          if (artifact?.origin === "raw-svg")
+            children[index] = {
+              type: "code",
+              lang: "svg",
+              value: artifact.source,
+              position: child.position,
+            };
+        } else if (child.type === "paragraph") {
+          const replacements = splitRawSvgParagraph(child, artifacts);
+          if (replacements) {
+            children.splice(index, 1, ...replacements);
+            index += replacements.length - 1;
+          }
+        } else if (child.type === "blockquote" || child.type === "listItem") {
+          visit(child);
+        } else if (child.type === "list") {
+          for (const item of child.children) visit(item);
+        }
+      }
+    };
+    visit(tree);
+  };
+}
+
+function splitRawSvgParagraph(
+  paragraph: Paragraph,
+  artifacts: Map<number, Artifact>,
+): RootContent[] | null {
+  const replacements: RootContent[] = [];
+  let pending: PhrasingContent[] = [];
+  const flush = () => {
+    if (!pending.length) return;
+    const first = pending[0];
+    const last = pending.at(-1);
+    replacements.push({
+      ...paragraph,
+      children: pending,
+      position:
+        first?.position && last?.position
+          ? { start: first.position.start, end: last.position.end }
+          : paragraph.position,
+    });
+    pending = [];
+  };
+  for (let index = 0; index < paragraph.children.length; index++) {
+    const child = paragraph.children[index];
+    if (!child) continue;
+    const artifact = artifacts.get(child.position?.start.offset ?? -1);
+    if (artifact?.origin !== "raw-svg") {
+      pending.push(child);
+      continue;
+    }
+    const end = (child.position?.start.offset ?? 0) + artifact.source.length;
+    const lastIndex = paragraph.children.findIndex(
+      (item, candidateIndex) =>
+        candidateIndex >= index && item.position?.end.offset === end,
+    );
+    if (lastIndex < index) {
+      pending.push(child);
+      continue;
+    }
+    flush();
+    replacements.push({
+      type: "code",
+      lang: "svg",
+      value: artifact.source,
+      position:
+        child.position && paragraph.children[lastIndex]?.position
+          ? {
+              start: child.position.start,
+              end: paragraph.children[lastIndex]!.position!.end,
+            }
+          : undefined,
+    });
+    index = lastIndex;
+  }
+  flush();
+  return replacements.some((node) => node.type === "code")
+    ? replacements
+    : null;
 }
 
 function isClosedFence(segment: string): boolean {
