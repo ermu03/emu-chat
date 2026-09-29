@@ -7,6 +7,7 @@ import type {
   PreferencesResponse,
 } from "../shared/api-schemas.js";
 import { ConversationList } from "./features/conversations/conversation-list.js";
+import { UNTITLED_CONVERSATION_LABEL } from "./features/conversations/conversation-title.js";
 import { MessageView } from "./features/messages/message-view.js";
 import {
   DraftComposer,
@@ -217,6 +218,14 @@ export function AppShell() {
 
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
+  const editableTitle =
+    activeConversation?.conversation_id === activeConversationId
+      ? activeConversation.title
+      : (activeConversationSummary?.title ?? "");
+  const editablePinned =
+    activeConversation?.conversation_id === activeConversationId
+      ? activeConversation.pinned
+      : (activeConversationSummary?.pinned ?? false);
 
   const selectConversation = (conversationId: string) => {
     setIsEditingTitle(false);
@@ -229,9 +238,7 @@ export function AppShell() {
 
   const handleCreateConversation = async () => {
     try {
-      const created = await apiClient.createConversation({
-        title: "新会话",
-      });
+      const created = await apiClient.createConversation();
       await loadConversations();
       selectConversation(created.conversation_id);
     } catch (error) {
@@ -240,7 +247,7 @@ export function AppShell() {
   };
 
   const startEditingTitle = () => {
-    setTitleDraft(activeConversationTitle);
+    setTitleDraft(editableTitle);
     setIsEditingTitle(true);
   };
 
@@ -248,18 +255,14 @@ export function AppShell() {
     setIsEditingTitle(false);
     if (!activeConversationId) return;
     const trimmed = titleDraft.trim();
-    if (trimmed && trimmed !== activeConversationTitle) {
-      await handleUpdateMetadata(
-        activeConversationId,
-        trimmed,
-        activeConversation?.pinned ?? false,
-      );
+    if (trimmed && trimmed !== editableTitle) {
+      await handleUpdateMetadata(activeConversationId, trimmed, editablePinned);
     }
   };
 
   const cancelTitleEdit = () => {
     setIsEditingTitle(false);
-    setTitleDraft(activeConversationTitle);
+    setTitleDraft(editableTitle);
   };
 
   const handleFork = async (conversationId: string) => {
@@ -466,6 +469,7 @@ export function AppShell() {
                         autoFocus
                         maxLength={200}
                         aria-label="编辑会话标题"
+                        placeholder={UNTITLED_CONVERSATION_LABEL}
                       />
                       <button
                         type="submit"
@@ -523,10 +527,10 @@ export function AppShell() {
                 <span>
                   {currentConversationLoadError
                     ? transitionSnapshot
-                      ? `无法加载「${activeConversationSummary?.title || "目标会话"}」，仍显示「${transitionSnapshot.title || "未命名会话"}」。`
+                      ? `无法加载「${activeConversationSummary?.title || "目标会话"}」，仍显示「${transitionSnapshot.title || UNTITLED_CONVERSATION_LABEL}」。`
                       : `无法加载「${activeConversationSummary?.title || "目标会话"}」，请重试。`
                     : transitionSnapshot
-                      ? `正在加载「${activeConversationSummary?.title || "目标会话"}」，当前暂显「${transitionSnapshot.title || "未命名会话"}」。`
+                      ? `正在加载「${activeConversationSummary?.title || "目标会话"}」，当前暂显「${transitionSnapshot.title || UNTITLED_CONVERSATION_LABEL}」。`
                       : `正在加载「${activeConversationSummary?.title || "目标会话"}」。`}
                 </span>
                 {currentConversationLoadError && (

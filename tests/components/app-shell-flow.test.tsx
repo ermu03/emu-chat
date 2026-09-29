@@ -243,6 +243,61 @@ afterEach(() => {
 });
 
 describe("AppShell async flows", () => {
+  it("keeps an untitled session untitled when editing without changes or pinning", async () => {
+    const untitled = conversation("cv_untitled", "");
+    mockCommonApi([untitled]);
+    vi.spyOn(apiClient, "getQueue").mockImplementation(async (id) => queue(id));
+    vi.spyOn(apiClient, "listMessages").mockImplementation(async (id) =>
+      messageList(id, []),
+    );
+    const patch = vi
+      .spyOn(apiClient, "patchHermesMetadata")
+      .mockImplementation(async (_id, body) => {
+        if (body.field === "title") untitled.title = body.value;
+        else untitled.pinned = body.value;
+        return detail(untitled);
+      });
+
+    render(
+      <MemoryRouter initialEntries={["/conversations/cv_untitled"]}>
+        <AppShell />
+      </MemoryRouter>,
+    );
+    await screen.findByRole("textbox", { name: "消息输入框" });
+    fireEvent.click(
+      screen.getByText("新会话", { selector: ".main-toolbar-title" }),
+    );
+    const input = screen.getByRole("textbox", {
+      name: "编辑会话标题",
+    }) as HTMLInputElement;
+    expect(input.value).toBe("");
+    fireEvent.blur(input);
+    expect(patch).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "更多会话操作" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "置顶会话" }));
+    await waitFor(() =>
+      expect(patch).toHaveBeenCalledWith("cv_untitled", {
+        field: "pinned",
+        value: true,
+      }),
+    );
+    expect(patch).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(
+      screen.getByText("新会话", { selector: ".main-toolbar-title" }),
+    );
+    fireEvent.change(screen.getByRole("textbox", { name: "编辑会话标题" }), {
+      target: { value: "新会话" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存标题" }));
+    await waitFor(() =>
+      expect(patch).toHaveBeenCalledWith("cv_untitled", {
+        field: "title",
+        value: "新会话",
+      }),
+    );
+  });
   it("restores sending from the sidebar after status failures without losing the draft", async () => {
     const summary = conversation("cv_status_recheck", "Status recovery");
     const firstRecheck = deferred<ConnectionStatusResponse>();

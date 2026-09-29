@@ -16,8 +16,17 @@ import {
   type HermesRunStatusResponse,
 } from "../../shared/hermes-schemas.js";
 import { LIMITS } from "../../shared/limits.js";
-import { HermesProtocolError, HermesNotReadyError } from "../domain/errors.js";
-import type { HermesClient, HermesSseEvent } from "./client.js";
+import {
+  HermesProtocolError,
+  HermesNotReadyError,
+  HermesTitleConflictError,
+  HermesTitleInvalidError,
+} from "../domain/errors.js";
+import {
+  HermesBadRequestError,
+  type HermesClient,
+  type HermesSseEvent,
+} from "./client.js";
 import { evaluateHermesCapabilities } from "./capabilities.js";
 
 export interface HermesRunEvent {
@@ -163,11 +172,15 @@ export class HermesAdapter {
   async createSession(
     data: { title?: string } = {},
   ): Promise<HermesSessionDetailResponse> {
-    const raw = await this.client.request({
-      method: "POST",
-      path: "/api/sessions",
-      ...(Object.keys(data).length ? { body: data } : {}),
-    });
+    const raw = await this.requestWithTitleValidation(
+      () =>
+        this.client.request({
+          method: "POST",
+          path: "/api/sessions",
+          body: data,
+        }),
+      data.title !== undefined,
+    );
     return this.parseSessionResponse(raw, "Hermes create session");
   }
 
@@ -175,11 +188,15 @@ export class HermesAdapter {
     sessionId: string,
     data: { title?: string; pinned?: boolean },
   ): Promise<HermesSessionDetailResponse> {
-    const raw = await this.client.request({
-      method: "PATCH",
-      path: `/api/sessions/${encodeURIComponent(sessionId)}`,
-      body: data,
-    });
+    const raw = await this.requestWithTitleValidation(
+      () =>
+        this.client.request({
+          method: "PATCH",
+          path: `/api/sessions/${encodeURIComponent(sessionId)}`,
+          body: data,
+        }),
+      data.title !== undefined,
+    );
     return this.parseSessionResponse(raw, "Hermes update session", sessionId);
   }
 
@@ -187,11 +204,15 @@ export class HermesAdapter {
     sessionId: string,
     data: { title?: string } = {},
   ): Promise<HermesSessionDetailResponse> {
-    const raw = await this.client.request({
-      method: "POST",
-      path: `/api/sessions/${encodeURIComponent(sessionId)}/fork`,
-      body: data,
-    });
+    const raw = await this.requestWithTitleValidation(
+      () =>
+        this.client.request({
+          method: "POST",
+          path: `/api/sessions/${encodeURIComponent(sessionId)}/fork`,
+          body: data,
+        }),
+      data.title !== undefined,
+    );
     return this.parseSessionResponse(raw, "Hermes fork session");
   }
 
@@ -277,6 +298,33 @@ export class HermesAdapter {
     }
   }
 
+  private async requestWithTitleValidation<T>(
+    request: () => Promise<T>,
+    titleProvided: boolean,
+  ): Promise<T> {
+    try {
+      return await request();
+    } catch (error) {
+      if (
+        !(error instanceof HermesBadRequestError) ||
+        !titleProvided ||
+        error.upstreamCode !== "invalid_title"
+      )
+        throw error;
+      const reason = error.upstreamMessage ?? "";
+      if (
+        /^Title '[^\r\n]*' is already in use by session \S+$/.test(reason) ||
+        /^Title already in use by session \S+$/.test(reason)
+      )
+        throw new HermesTitleConflictError();
+      if (/^Title too long \(\d+ chars, max \d+\)$/.test(reason))
+        throw new HermesTitleInvalidError("标题过长，请缩短后重试。");
+      throw new HermesTitleInvalidError(
+        "Hermes 拒绝了该会话标题，请换一个名称。",
+      );
+    }
+  }
+
   private parseSseEvent(
     event: HermesSseEvent,
     expectedRunId: string,
@@ -344,7 +392,7 @@ export class HermesAdapter {
     const lastActiveSource = session.last_active ?? createdSource;
     const normalized: HermesSessionDetailResponse = {
       id: session.id,
-      title: session.title,
+      title: session.title ?? "",
       pinned: session.pinned,
       created_at: this.toIsoTimestamp(createdSource, "created_at"),
       updated_at: this.toIsoTimestamp(lastActiveSource, "updated_at"),

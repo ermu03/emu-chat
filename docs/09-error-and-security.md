@@ -22,7 +22,7 @@
 - **4xx 客户端错误**: 转换为相应的 AppError
 - **5xx 服务端错误**: 隐蔽内部细节，统一转换为 500 内部服务器错误
 
-### 错误码矩阵（共享枚举 19 项）
+### 错误码矩阵（共享枚举 21 项）
 
 错误码由 [共享枚举](../src/shared/domain-enums.ts) 定义，HTTP 状态和动作由 [服务端错误类](../src/server/domain/errors.ts) 定义。当前错误类对应的错误码如下：
 
@@ -41,6 +41,8 @@
 | `HermesAuthFailedError` | `HERMES_AUTH_FAILED` | 502 | false | none | Hermes 鉴权失败 |
 | `HermesUnavailableError` | `HERMES_UNAVAILABLE` | 502 | true | reconnect | Hermes 不可用或连接失败 |
 | `HermesConflictError` | `HERMES_CONFLICT` | 409 | false | refresh_status | Hermes 上游状态冲突 |
+| `HermesTitleConflictError` | `HERMES_TITLE_CONFLICT` | 409 | false | none | Hermes 明确报告标题重名；上游状态为 400 |
+| `HermesTitleInvalidError` | `HERMES_TITLE_INVALID` | 400 | false | none | Hermes 其他标题校验失败；上游状态为 400 |
 | `HermesTemporaryFailureError` | `HERMES_TEMPORARY_FAILURE` | 502 | true | retry | Hermes 暂时性故障 |
 | `HermesProtocolError` | `HERMES_PROTOCOL_ERROR` | 502 | false | recheck | Hermes 响应不符合协议 |
 | `HermesBusyGlobalError` | `HERMES_BUSY_GLOBAL` | 409 | true | retry | Hermes 正在运行另一个全局任务 |

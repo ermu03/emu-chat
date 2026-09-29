@@ -15,6 +15,7 @@ import type {
   ConnectionStatusResponse,
   ConversationSummary,
 } from "../../../shared/api-schemas.js";
+import { UNTITLED_CONVERSATION_LABEL } from "./conversation-title.js";
 
 export interface ConversationListProps {
   conversations: ConversationSummary[];
@@ -288,7 +289,7 @@ export const ConversationList: React.FC<ConversationListProps> = ({
             </p>
             <dl>
               <dt>会话</dt>
-              <dd>{deleteTarget.title || "未命名会话"}</dd>
+              <dd>{deleteTarget.title || UNTITLED_CONVERSATION_LABEL}</dd>
               <dt>Hermes session</dt>
               <dd>
                 <code>{deleteTarget.hermes_session_id}</code>
@@ -481,11 +482,12 @@ function ConversationRow({
               autoFocus
               maxLength={200}
               aria-label="编辑会话标题"
+              placeholder={UNTITLED_CONVERSATION_LABEL}
             />
           </form>
         ) : (
           <span className="conversation-title">
-            {conversation.title || "未命名会话"}
+            {conversation.title || UNTITLED_CONVERSATION_LABEL}
           </span>
         )}
         <div ref={actionsRef} className="conversation-row-actions">

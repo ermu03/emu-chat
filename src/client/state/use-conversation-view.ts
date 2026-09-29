@@ -19,6 +19,7 @@ import type {
   RunResponse,
 } from "../../shared/api-schemas.js";
 import { ConversationViewCache } from "../features/conversations/conversation-view-cache.js";
+import { UNTITLED_CONVERSATION_LABEL } from "../features/conversations/conversation-title.js";
 import {
   groupMessagesIntoTurns,
   mergeMessages,
@@ -901,10 +902,10 @@ export function useConversationView(
     [activeConversationId, conversations],
   );
   const activeConversationTitle = transitionSnapshot
-    ? transitionSnapshot.title || "未命名会话"
+    ? transitionSnapshot.title || UNTITLED_CONVERSATION_LABEL
     : activeConversation?.conversation_id === activeConversationId
-      ? activeConversation.title || "未命名会话"
-      : activeConversationSummary?.title || "未命名会话";
+      ? activeConversation.title || UNTITLED_CONVERSATION_LABEL
+      : activeConversationSummary?.title || UNTITLED_CONVERSATION_LABEL;
   const currentConversationLoadError =
     conversationLoadError?.conversationId === activeConversationId
       ? conversationLoadError.message

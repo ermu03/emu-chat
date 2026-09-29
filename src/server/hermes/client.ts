@@ -30,6 +30,16 @@ export interface HermesSseEvent {
   id?: string;
 }
 
+/** Structured 400 metadata for the adapter; upstream text is never sent to clients. */
+export class HermesBadRequestError extends HermesProtocolError {
+  constructor(
+    public readonly upstreamCode: string | null,
+    public readonly upstreamMessage: string | null,
+  ) {
+    super("Hermes rejected the request (400)");
+  }
+}
+
 /** Thin server-only HTTP client. It never exposes the bearer token to callers. */
 export class HermesClient {
   private readonly baseUrl: string;
@@ -70,7 +80,7 @@ export class HermesClient {
         signal: controller.signal,
       });
       const text = await this.readBoundedText(response);
-      this.throwForStatus(response.status, opts.path);
+      this.throwForStatus(response.status, opts.path, text);
       if (!text.trim()) return undefined as T;
       try {
         return JSON.parse(text) as T;
@@ -271,7 +281,11 @@ export class HermesClient {
     return text;
   }
 
-  private throwForStatus(status: number, path: string): void {
+  private throwForStatus(
+    status: number,
+    path: string,
+    bodyText?: string,
+  ): void {
     if (status >= 200 && status < 300) return;
     if (status === 401 || status === 403)
       throw new HermesAuthFailedError(
@@ -285,6 +299,25 @@ export class HermesClient {
       );
     if (status === 409)
       throw new HermesConflictError(`Hermes conflict: ${path}`, status);
+    if (status === 400) {
+      let upstreamCode: string | null = null;
+      let upstreamMessage: string | null = null;
+      try {
+        const envelope: unknown = JSON.parse(bodyText ?? "");
+        if (envelope && typeof envelope === "object" && "error" in envelope) {
+          const error = envelope.error;
+          if (error && typeof error === "object") {
+            if ("code" in error && typeof error.code === "string")
+              upstreamCode = error.code;
+            if ("message" in error && typeof error.message === "string")
+              upstreamMessage = error.message;
+          }
+        }
+      } catch {
+        // An unstructured 400 still has a safe, generic public error.
+      }
+      throw new HermesBadRequestError(upstreamCode, upstreamMessage);
+    }
     if (status === 408 || status === 425 || status === 429)
       throw new HermesTemporaryFailureError(
         `Hermes temporary failure (${status})`,

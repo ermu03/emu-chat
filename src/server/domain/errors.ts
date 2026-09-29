@@ -246,6 +246,32 @@ export class HermesConflictError extends AppError {
   }
 }
 
+export class HermesTitleConflictError extends AppError {
+  constructor() {
+    super({
+      code: "HERMES_TITLE_CONFLICT",
+      message: "该名称已被使用，请换一个名称。",
+      statusCode: 409,
+      retryable: false,
+      action: "none",
+      upstreamStatus: 400,
+    });
+  }
+}
+
+export class HermesTitleInvalidError extends AppError {
+  constructor(message: string) {
+    super({
+      code: "HERMES_TITLE_INVALID",
+      message,
+      statusCode: 400,
+      retryable: false,
+      action: "none",
+      upstreamStatus: 400,
+    });
+  }
+}
+
 export class HermesTemporaryFailureError extends AppError {
   constructor(
     message: string = "Hermes temporary failure",

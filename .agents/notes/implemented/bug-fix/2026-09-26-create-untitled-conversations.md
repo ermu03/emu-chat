@@ -1,20 +1,20 @@
 # Agent Note: 默认创建未命名会话，避免固定标题冲突
 
-Status: proposed
+Status: implemented
 
 ## Problem
 
-用户在前端连续新建两个会话时，第二次收到包含 400 的错误提示；将第一个会话改名后，又可以继续新建。根据 emu-chat `dbd6f5c` 与本地 hermes-agent `f5d1926` 的源码，原因是固定默认标题与上游的标题唯一性规则冲突。
+用户在前端连续新建两个会话时，第二次收到包含 400 的错误提示；将第一个会话改名后，又可以继续新建。固定默认标题与上游的标题唯一性规则冲突。
 
-- [AppShell](../../../../src/client/app.tsx) 的 `handleCreateConversation` 每次都提交 `title: "新会话"`；[ConversationService](../../../../src/server/services/conversation-service.ts) 将标题直接传给 Hermes。[本地 conversations 表](../../../../migrations/0001_initial.sql) 不存储标题，也没有标题唯一约束。
+- 原先 [AppShell](../../../../src/client/app.tsx) 的 `handleCreateConversation` 每次都提交 `title: "新会话"`；[ConversationService](../../../../src/server/services/conversation-service.ts) 将标题直接传给 Hermes。[本地 conversations 表](../../../../migrations/0001_initial.sql) 不存储标题，也没有标题唯一约束。
 - 本地 Hermes 仓库的 `gateway/platforms/api_server.py` 中，`_handle_create_session` 检查会话标题是否已被使用，冲突时返回 `400 / invalid_title`。省略标题则允许创建未命名会话，标题为 `null`；同一数据库内其他客户端创建的会话也参与查重。`hermes_state_titles.py` 的手动改名逻辑同样拒绝重名。
-- [HermesClient](../../../../src/server/hermes/client.ts) 没有使用上游错误响应体，将 400 转为通用协议错误。按当前错误映射，本地 HTTP 响应为 502，文字中仍包含上游 400，用户无法从提示判断具体原因。
+- 原先 [HermesClient](../../../../src/server/hermes/client.ts) 没有使用上游错误响应体，将 400 转为通用协议错误。按旧错误映射，本地 HTTP 响应为 502，文字中仍包含上游 400，用户无法从提示判断具体原因。
 
-不能仅删除前端的默认标题：[HermesAdapter](../../../../src/server/hermes/adapter.ts) 当前对空参数省略请求体，而 Hermes 创建接口要求 JSON；[会话响应 Schema](../../../../src/shared/hermes-schemas.ts) 又只接受字符串标题。否则可能从重名错误变成无效 JSON，或出现上游创建成功、本地解析失败而未登记会话的问题。
+不能仅删除前端的默认标题：[HermesAdapter](../../../../src/server/hermes/adapter.ts) 原先对空参数省略请求体，而 Hermes 创建接口要求 JSON；[会话响应 Schema](../../../../src/shared/hermes-schemas.ts) 原先只接受字符串标题。否则可能从重名错误变成无效 JSON，或出现上游创建成功、本地解析失败而未登记会话的问题。
 
-以上结论来自用户反馈及两个本地仓库的静态分析，尚未向运行中的 Hermes 创建测试会话；实施时需核对实际运行版本。
+实施时已向本地运行中的 Hermes 创建并清理验证会话，确认空标题及重名响应。
 
-## Proposal
+## Decision
 
 默认创建未命名会话，将“新会话”作为前端占位文字，而非写入 Hermes 的真实标题。会话身份继续由会话 ID 决定，多个未命名会话可以共存，用户需要时再主动改名。
 
@@ -25,7 +25,7 @@ Status: proposed
 
 本方案不增加本地标题库、命名序号分配器或自动摘要功能，不修改 Hermes 的唯一性规则，也不批量重命名已有会话。已有真实标题“新会话”保持原值，新建未命名会话不再与它冲突。
 
-本提案替代[前端视觉调整决定](../../implemented/feature/2026-09-24-refine-frontend-ui-aesthetics.md)中“新建时写入默认标题”的部分，保留点击即创建及就地改名的交互。实施时按[决策笔记规范](../../../../docs/decision-notes.md)关联两篇笔记，并更新 [README](../../../../README.md)、[Hermes 集成说明](../../../../docs/05-hermes-integration.md)、[前端说明](../../../../docs/06-client-internals.md)及受影响的[错误约定](../../../../docs/09-error-and-security.md)。提案阶段不将这些文档改写成已实现状态。
+本决定替代[前端视觉调整决定](../feature/2026-09-24-refine-frontend-ui-aesthetics.md)中“新建时写入默认标题”的部分，保留点击即创建及就地改名的交互。
 
 ## Alternatives considered
 
@@ -33,17 +33,16 @@ Status: proposed
 - **自动生成“新会话 2、3……”并查重。** 名称容易辨认；但仅查询当前前端列表无法涵盖分页、其他客户端的会话或并发创建，仍需以上游结果为准并处理冲突。为默认占位名称增加全局编号逻辑收益有限。
 - **保留固定标题，要求用户先改名再新建。** 实现改动最少；但将默认名称的冲突转嫁给用户，破坏点击即可新建的交互，不能解决本次反馈。
 
-## Acceptance criteria
+## Consequences
 
 - 已存在真实标题为“新会话”的会话时，仍能连续创建至少三个未命名会话；各自有独立会话 ID，刷新后仍可访问，无须先改名。
 - 创建请求向 Hermes 发送合法 JSON `{}` 且不携带默认 `title`；`title: null` 的响应能够被解析并登记到本地，列表和详情读取正常。
 - 未命名会话显示“新会话”，进入编辑后不修改内容就退出，不会写入真实标题；置顶不会触发占位标题改名。正常发送、会话切换与各自草稿继续按 ID 隔离。
 - 将会话改为未被占用的名称后，刷新能看到新标题；改成已占用名称时显示明确提示，原有标题和草稿不丢失。其他上游 400 不会被误报为重名。
-- 实施时通过类型检查、Lint 与构建，并针对实际 Hermes 版本人工验证上述创建、刷新及改名路径。遵循 [AGENTS.md](../../../../AGENTS.md)，不新增普通 CRUD 或静态占位文字测试；验证重点是请求体、空标题适配和创建成功后本地登记的一致性，不为该修复增加广泛测试矩阵。
+- 多个未命名会话显示相同占位文字，用户依靠时间、预览及主动改名区分；无需为默认标题分配全局序号。
 
-## Risks
+## Verification
 
-- 空请求体修正与空标题响应适配必须同批完成，避免上游已创建成功而本地没有登记。若已有此类失败，不盲目自动重复提交，先核对上游结果。
-- 多个未命名会话显示相同占位文字，区分依赖现有时间、预览及用户主动改名；本次不通过额外编号改变真实标题。
-- 标题编辑和置顶可能复用显示标题，需要检查所有回写入口，防止占位文字泄漏到上游。现有“新会话”真实标题与占位文字视觉相同，但必须保留真实值与空值的区别。
-- 上游 `invalid_title` 同时涵盖冲突与其他校验错误，实施时应核对真实响应格式；只在原因明确时给出重名提示，无法分类时保留通用标题错误，避免依赖宽泛字符串匹配。
+- 本地 Hermes：在一个带真实标题的会话存在时，连续创建并读取三个未命名会话，ID 均不同；独立改名成功，重名返回 `400 / invalid_title` 且原标题不变。四个验证会话均已清理。
+- 临时 emu-chat 数据库：一个具名及三个未命名会话均成功登记、列出并通过 ID 读取；改名成功，重名转换为 `409 / HERMES_TITLE_CONFLICT` 且原空标题保留。四个会话和临时数据库均已清理。
+- 适配边界测试覆盖 `{}` 请求体、空标题归一化、异常标题类型及错误分类；组件交互测试覆盖空标题编辑和置顶不写入占位名称。

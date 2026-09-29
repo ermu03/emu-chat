@@ -32,7 +32,7 @@ Status: implemented
 在保证所有现有接口协议、状态机流转、无障碍属性（`aria-label` / `role` / `data-message-id`）以及 4 项高风险核心交互机制（防误删确认、草稿断网防丢、异步竞态安全、跨会话隔离）100% 稳定的前提下，系统化完成前端展示层重构：
 
 ### 1. 新建会话交互重塑：即开即建与就地重命名 ([src/client/app.tsx](../../../../src/client/app.tsx))
-- **无感新建**：彻底移除 `window.prompt` 原生顶栏弹窗。点击「新建会话」时立即发起创建请求（默认标题「新会话」），创建完成后切换选中；当前实现不会自动聚焦输入框。
+- **无感新建**：彻底移除 `window.prompt` 原生顶栏弹窗。点击「新建会话」时立即发起创建请求，创建完成后切换选中；当前实现不会自动聚焦输入框。默认标题写入行为已由[未命名会话决定](../bug-fix/2026-09-26-create-untitled-conversations.md)调整为「新会话」占位显示。
 - **顶部标题就地重命名**：中间顶部工具栏支持点击会话标题直接就地内联编辑（悬停显示微调铅笔），用户在需要自定义标题时随时可优雅修改（Enter 保存，Escape 撤销），并同步回写 Hermes 元数据。
 
 ### 2. Logo 图标重构与标题区通透化 ([src/client/app.tsx](../../../../src/client/app.tsx) & [src/client/features/conversations/conversation-list.tsx](../../../../src/client/features/conversations/conversation-list.tsx))

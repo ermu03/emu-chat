@@ -104,7 +104,7 @@ export const HermesSessionWireSchema = z
   .object({
     id: z.string(),
     source: z.string(),
-    title: z.string(),
+    title: z.string().nullable(),
     pinned: z.boolean(),
     started_at: z.number().nonnegative(),
     last_active: z.number().nonnegative().optional(),

@@ -8,6 +8,8 @@ import { evaluateHermesCapabilities } from "../../src/server/hermes/capabilities
 import {
   HermesNotReadyError,
   HermesProtocolError,
+  HermesTitleConflictError,
+  HermesTitleInvalidError,
 } from "../../src/server/domain/errors.js";
 import { LIMITS } from "../../src/shared/limits.js";
 import {
@@ -146,6 +148,71 @@ describe("HermesAdapter real Hermes 0.21 contract", () => {
       has_more: false,
       messages: [{ tool_calls: null, token_count: null }],
     });
+  });
+
+  it("sends an empty JSON object and normalizes null titles on create and reread", async () => {
+    const untitled = {
+      ...realHermesSessionDetail,
+      session: { ...realHermesSessionDetail.session, title: null },
+    };
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(async () => jsonResponse(untitled));
+    globalThis.fetch = fetchMock as typeof fetch;
+    const adapter = makeAdapter();
+
+    expect((await adapter.createSession()).title).toBe("");
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
+      method: "POST",
+      body: "{}",
+    });
+    expect((await adapter.getSession(untitled.session.id)).title).toBe("");
+
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        ...untitled,
+        session: { ...untitled.session, title: 7 },
+      }),
+    );
+    await expect(
+      adapter.getSession(untitled.session.id),
+    ).rejects.toBeInstanceOf(HermesProtocolError);
+  });
+
+  it("classifies only a proven duplicate title as a conflict", async () => {
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as typeof fetch;
+    const response = (message: string, code = "invalid_title") =>
+      new Response(JSON.stringify({ error: { code, message } }), {
+        status: 400,
+      });
+    const adapter = makeAdapter();
+
+    fetchMock.mockResolvedValueOnce(
+      response("Title 'Taken' is already in use by session private_id"),
+    );
+    await expect(
+      adapter.updateSession("api_anonymous_session", { title: "Taken" }),
+    ).rejects.toBeInstanceOf(HermesTitleConflictError);
+
+    fetchMock.mockResolvedValueOnce(
+      response("Title too long (201 chars, max 200)"),
+    );
+    await expect(
+      adapter.updateSession("api_anonymous_session", { title: "Long" }),
+    ).rejects.toBeInstanceOf(HermesTitleInvalidError);
+
+    fetchMock.mockResolvedValueOnce(response("another title rule"));
+    await expect(
+      adapter.updateSession("api_anonymous_session", { title: "Other" }),
+    ).rejects.toMatchObject({ code: "HERMES_TITLE_INVALID" });
+
+    fetchMock.mockResolvedValueOnce(
+      response("Title already in use by session private_id", "bad_request"),
+    );
+    await expect(
+      adapter.updateSession("api_anonymous_session", { title: "Taken" }),
+    ).rejects.toMatchObject({ code: "HERMES_PROTOCOL_ERROR" });
   });
 
   it("rejects detail and update responses for a different session", async () => {

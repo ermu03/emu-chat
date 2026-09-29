@@ -27,6 +27,8 @@
 - **getDetailedHealth**: 组合式探活，合并调用 `/health/detailed` 与 `/v1/capabilities` 双端点确认整体存活及能力详情。
 - **assertReady**: 将健康状态评估与能力是否符合预期的检查进行组合校验，只有两项均过关才判定为 Ready。
 - **会话管理API映射**: 包装了针对 Hermes session 相关的各种调用（`getSession`, `createSession`, `updateSession`, `forkSession`, `deleteSession`）。
+- **未命名会话**: `createSession` 省略标题时仍提交 JSON `{}`；Hermes 返回的 `title: null` 在创建、详情及列表读取的统一适配入口转为空字符串。内部和前端会话模型始终使用字符串标题，用户输入的标题继续由 Hermes 校验。
+- **标题校验错误**: Client 仅保留有界 400 响应中的结构化错误码和原因；Adapter 只在提交标题时识别 `invalid_title`，明确重名时转换为 `HERMES_TITLE_CONFLICT`，其他标题校验转换为 `HERMES_TITLE_INVALID`。其他 400 保持通用协议错误；原始上游原因和会话 ID 不进入前端错误信息。
 - **startRun**: 发起运行调用。内部限制请求超时 30 秒，并附加 `Idempotency-Key` 标头以防止网络抖动导致的重复执行。
 - **getRunStatus**: 拉取状态信息，并对获取到的 `run_id` 实施强一致性校验。
 - **streamEvents**: 异步迭代器接口，负责将来自 Client 的纯净流进行转换。逐帧校验 JSON 格式、对比 `run_id` 确保不错乱，并验证 timestamp 合法性。
