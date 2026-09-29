@@ -10,11 +10,14 @@ import {
   PayloadTooLargeError,
 } from "../domain/errors.js";
 import { LIMITS } from "../../shared/limits.js";
+import type { AttachmentRef, MediaAsset } from "../../shared/media-schemas.js";
+import type { MediaService } from "../media/service.js";
 
 export interface DraftView {
   object: "emu_chat.draft";
   conversation_id: string;
   content: string;
+  attachments: MediaAsset[];
   revision: number;
   updated_at: string | null;
 }
@@ -32,6 +35,7 @@ export class DraftPreferencesService {
   constructor(
     private draftRepo: DraftRepository,
     private preferencesRepo: PreferencesRepository,
+    private mediaService?: MediaService,
   ) {}
 
   getDraft(conversationId: string): DraftView {
@@ -41,6 +45,7 @@ export class DraftPreferencesService {
         object: "emu_chat.draft",
         conversation_id: conversationId,
         content: "",
+        attachments: [],
         revision: 0,
         updated_at: null,
       };
@@ -53,6 +58,7 @@ export class DraftPreferencesService {
     conversationId: string,
     content: string,
     expectedRevision: number,
+    attachments?: AttachmentRef[],
   ): DraftView {
     if (typeof content !== "string") {
       throw new InvalidRequestError("Draft content must be a string");
@@ -83,6 +89,7 @@ export class DraftPreferencesService {
         conversationId,
         content,
         expectedRevision,
+        attachments,
       );
       return this.toDraftView(updated);
     } catch (err) {
@@ -154,6 +161,13 @@ export class DraftPreferencesService {
       object: "emu_chat.draft",
       conversation_id: entity.conversation_id,
       content: entity.content,
+      attachments:
+        this.mediaService?.findManyStored(
+          entity.conversation_id,
+          (JSON.parse(entity.attachments_json) as AttachmentRef[]).map(
+            (attachment) => attachment.asset_id,
+          ),
+        ) ?? [],
       revision: entity.revision,
       updated_at: entity.updated_at,
     };

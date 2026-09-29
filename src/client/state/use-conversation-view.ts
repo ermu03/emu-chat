@@ -33,6 +33,7 @@ import {
   type RunDisplay,
 } from "../features/messages/run-display.js";
 import { LIMITS } from "../../shared/limits.js";
+import type { AttachmentRef } from "../../shared/media-schemas.js";
 import {
   getCurrentRunId,
   getPrimaryQueueItem,
@@ -64,12 +65,18 @@ const MESSAGE_PAGE_SIZE = LIMITS.MESSAGES_PAGE_DEFAULT;
 function runHistoryAnchor(
   messages: MessageItem[],
   prompt: string | null,
+  operationId: string | null = null,
 ): number {
-  const promptMessage = prompt
+  const promptMessage = operationId
     ? messages.findLast(
-        (message) => message.role === "user" && message.content === prompt,
+        (message) =>
+          message.role === "user" && message.media_operation_id === operationId,
       )
-    : null;
+    : prompt
+      ? messages.findLast(
+          (message) => message.role === "user" && message.content === prompt,
+        )
+      : null;
   return promptMessage?.id ?? messages.at(-1)?.id ?? 0;
 }
 
@@ -166,6 +173,7 @@ export interface ConversationView {
   handleLoadEarlier(): Promise<void>;
   handleSaveDraft(
     content: string,
+    attachments: AttachmentRef[],
     expectedRevision: number,
   ): Promise<{ revision: number }>;
   refreshLatestMessages(target: ViewTarget, runId?: string): Promise<boolean>;
@@ -491,18 +499,31 @@ export function useConversationView(
 
   const activateRunDisplay = useCallback(
     (runId: string, prompt: string | null = null) => {
+      const queueItem = getPrimaryQueueItem(
+        queueRef.current,
+        activeRunRef.current,
+      );
+      const operationId = queueItem?.attachments.length
+        ? queueItem.operation_id
+        : null;
       const existing = runDisplaysRef.current.get(runId);
       const next = existing
-        ? prompt && !existing.promptContent
-          ? { ...existing, promptContent: prompt }
+        ? (prompt && !existing.promptContent) ||
+          (operationId && !existing.operationId)
+          ? {
+              ...existing,
+              promptContent: existing.promptContent ?? prompt,
+              operationId: existing.operationId ?? operationId,
+            }
           : existing
         : createRunDisplay(
             runId,
             messagesRef.current.conversationId ===
               activeConversationIdRef.current
-              ? runHistoryAnchor(messagesRef.current.items, prompt)
+              ? runHistoryAnchor(messagesRef.current.items, prompt, operationId)
               : 0,
             prompt,
+            operationId,
           );
       commitRunDisplay(next);
       return next;
@@ -712,6 +733,7 @@ export function useConversationView(
                 afterMessageId: runHistoryAnchor(
                   nextMessages,
                   display.promptContent,
+                  display.operationId,
                 ),
               });
             }
@@ -959,12 +981,17 @@ export function useConversationView(
     setRunSnapshot,
   ]);
 
-  const handleSaveDraft = async (content: string, expectedRevision: number) => {
+  const handleSaveDraft = async (
+    content: string,
+    attachments: AttachmentRef[],
+    expectedRevision: number,
+  ) => {
     if (!activeConversationId) throw new Error("请先选择会话");
     const target = captureTarget(activeConversationId);
     if (!target) throw new Error("会话已切换，请重试保存");
     const saved = await apiClient.putDraft(activeConversationId, {
       content,
+      attachments,
       expected_revision: expectedRevision,
     });
     commitDraft(target, saved);

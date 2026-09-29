@@ -9,6 +9,11 @@ import {
   X,
 } from "lucide-react";
 import type { QueueItemResponse } from "../../../shared/api-schemas.js";
+import type {
+  MediaAsset,
+  AttachmentRef,
+} from "../../../shared/media-schemas.js";
+import { MediaAssets } from "../media/media-assets.js";
 
 interface QueuePanelProps {
   isOpen: boolean;
@@ -19,6 +24,7 @@ interface QueuePanelProps {
   onEditItem: (
     itemId: string,
     content: string,
+    attachments: AttachmentRef[],
     expectedRevision: number,
   ) => Promise<void>;
 }
@@ -26,6 +32,7 @@ interface QueuePanelProps {
 export interface PendingQueueItem {
   id: string;
   content: string;
+  attachments: MediaAsset[];
 }
 
 export const QueuePanel: React.FC<QueuePanelProps> = ({
@@ -38,6 +45,7 @@ export const QueuePanel: React.FC<QueuePanelProps> = ({
 }) => {
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [editedContent, setEditedContent] = useState("");
+  const [editedAttachments, setEditedAttachments] = useState<MediaAsset[]>([]);
   const [actionError, setActionError] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState(false);
 
@@ -115,6 +123,17 @@ export const QueuePanel: React.FC<QueuePanelProps> = ({
                           aria-label="编辑排队消息"
                           autoFocus
                         />
+                        <MediaAssets
+                          assets={editedAttachments}
+                          compact
+                          onRemove={(assetId) =>
+                            setEditedAttachments((current) =>
+                              current.filter(
+                                (asset) => asset.asset_id !== assetId,
+                              ),
+                            )
+                          }
+                        />
                         <div className="queue-edit-actions">
                           <button
                             type="button"
@@ -127,12 +146,19 @@ export const QueuePanel: React.FC<QueuePanelProps> = ({
                           <button
                             type="button"
                             className="primary"
-                            disabled={!editedContent.trim()}
+                            disabled={
+                              !editedContent.trim() &&
+                              editedAttachments.length === 0
+                            }
                             onClick={() =>
                               void runAction(async () => {
                                 await onEditItem(
                                   item.id,
                                   editedContent,
+                                  editedAttachments.map((asset) => ({
+                                    asset_id: asset.asset_id,
+                                    sha256: asset.sha256,
+                                  })),
                                   item.revision,
                                 );
                                 setEditingItemId(null);
@@ -154,6 +180,7 @@ export const QueuePanel: React.FC<QueuePanelProps> = ({
                         <div className="queue-item-content">
                           {item.content || "正文已清除"}
                         </div>
+                        <MediaAssets assets={item.attachments} compact />
                       </>
                     )}
                   </div>
@@ -166,6 +193,7 @@ export const QueuePanel: React.FC<QueuePanelProps> = ({
                         aria-label="编辑排队消息"
                         onClick={() => {
                           setEditedContent(item.content ?? "");
+                          setEditedAttachments(item.attachments);
                           setEditingItemId(item.id);
                           setActionError(null);
                         }}
@@ -198,6 +226,7 @@ export const QueuePanel: React.FC<QueuePanelProps> = ({
                     <span>正在加入队列</span>
                   </div>
                   <div className="queue-item-content">{item.content}</div>
+                  <MediaAssets assets={item.attachments} compact />
                 </div>
               </div>
             ))}

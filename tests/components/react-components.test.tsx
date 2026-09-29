@@ -106,8 +106,8 @@ describe("high-risk component interactions", () => {
     fireEvent.keyDown(textarea, { key: "Enter", ctrlKey: true });
 
     await waitFor(() => {
-      expect(onSaveDraft).toHaveBeenCalledWith("Retry this message", 0);
-      expect(onSend).toHaveBeenCalledWith("Retry this message", 1);
+      expect(onSaveDraft).toHaveBeenCalledWith("Retry this message", [], 0);
+      expect(onSend).toHaveBeenCalledWith("Retry this message", [], 1);
       expect(screen.getByText("Hermes unavailable")).toBeDefined();
     });
     expect(textarea.value).toBe("Retry this message");
@@ -147,13 +147,13 @@ describe("high-risk component interactions", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(500);
     });
-    expect(onSaveDraft).toHaveBeenCalledWith("A", 0);
+    expect(onSaveDraft).toHaveBeenCalledWith("A", [], 0);
 
     fireEvent.change(textarea, { target: { value: "AB" } });
     await act(async () => {
       resolveFirstSave({ revision: 1 });
     });
-    expect(onSaveDraft).toHaveBeenNthCalledWith(2, "AB", 1);
+    expect(onSaveDraft).toHaveBeenNthCalledWith(2, "AB", [], 1);
 
     view.rerender(
       <DraftComposer
@@ -200,7 +200,7 @@ describe("high-risk component interactions", () => {
 
     act(() => composerRef.current!.selectPrompt("建议内容"));
     await act(async () => vi.advanceTimersByTimeAsync(500));
-    expect(onSaveDraft).toHaveBeenCalledWith("建议内容", 0);
+    expect(onSaveDraft).toHaveBeenCalledWith("建议内容", [], 0);
 
     fireEvent.change(textarea, { target: { value: "建议内容 + 自己补充" } });
     act(() => composerRef.current!.selectPrompt("另一条建议"));
@@ -210,7 +210,12 @@ describe("high-risk component interactions", () => {
     ).toBeDefined();
 
     await act(async () => resolvePromptSave({ revision: 1 }));
-    expect(onSaveDraft).toHaveBeenNthCalledWith(2, "建议内容 + 自己补充", 1);
+    expect(onSaveDraft).toHaveBeenNthCalledWith(
+      2,
+      "建议内容 + 自己补充",
+      [],
+      1,
+    );
     view.rerender(
       <DraftComposer
         ref={composerRef}

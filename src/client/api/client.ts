@@ -23,6 +23,10 @@ import type {
   PreferencesResponse,
   PutPreferencesRequest,
 } from "../../shared/api-schemas.js";
+import type {
+  MediaAsset,
+  MediaCapabilities,
+} from "../../shared/media-schemas.js";
 
 export class ApiClientError extends Error {
   public readonly envelope: ApiErrorEnvelope;
@@ -166,6 +170,49 @@ class EmuChatApiClient {
   }
 
   // --- Draft ---
+  getMediaCapabilities(conversationId: string): Promise<MediaCapabilities> {
+    return this.request<MediaCapabilities>(
+      `/api/v1/conversations/${conversationId}/media/capabilities`,
+    );
+  }
+
+  getMediaAsset(conversationId: string, assetId: string): Promise<MediaAsset> {
+    return this.request<MediaAsset>(
+      `/api/v1/conversations/${conversationId}/media/assets/${assetId}`,
+    );
+  }
+
+  retryMediaCapture(
+    conversationId: string,
+    assetId: string,
+  ): Promise<{ accepted: boolean }> {
+    return this.request(
+      `/api/v1/conversations/${conversationId}/media/assets/${assetId}/retry-capture`,
+      { method: "POST" },
+    );
+  }
+
+  async uploadMedia(
+    conversationId: string,
+    file: File,
+    uploadId: string,
+    signal?: AbortSignal,
+  ): Promise<MediaAsset> {
+    return this.request<MediaAsset>(
+      `/api/v1/conversations/${conversationId}/media/uploads`,
+      {
+        method: "POST",
+        body: file,
+        ...(signal ? { signal } : {}),
+        headers: {
+          "Content-Type": file.type,
+          "Idempotency-Key": uploadId,
+          "X-File-Name": encodeURIComponent(file.name.slice(0, 120)),
+        },
+      },
+    );
+  }
+
   getDraft(conversationId: string): Promise<DraftResponse> {
     return this.request<DraftResponse>(
       `/api/v1/conversations/${conversationId}/draft`,

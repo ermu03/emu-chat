@@ -53,6 +53,13 @@ export function hasPersistedQueueMessage(
   messages: MessageItem[],
   queueItem: QueueItemResponse,
 ): boolean {
+  if (queueItem.attachments.length > 0) {
+    return messages.some(
+      (message) =>
+        message.role === "user" &&
+        message.media_operation_id === queueItem.operation_id,
+    );
+  }
   const latestUserMessage = [...messages]
     .reverse()
     .find((message) => message.role === "user");

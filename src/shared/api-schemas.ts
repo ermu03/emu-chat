@@ -13,6 +13,7 @@ import {
   MessageRoleValues,
 } from "./domain-enums.js";
 import { LIMITS } from "./limits.js";
+import { AttachmentRefsSchema, MediaAssetSchema } from "./media-schemas.js";
 
 // --- Error Envelope ---
 export const ErrorActionValues = [
@@ -204,6 +205,8 @@ export const MessageItemSchema = z.object({
   finish_reason: z.string().nullable(),
   reasoning: z.string().nullable(),
   display_kind: z.string().nullable(),
+  attachments: z.array(MediaAssetSchema).optional(),
+  media_operation_id: z.string().optional(),
 });
 export type MessageItem = z.infer<typeof MessageItemSchema>;
 
@@ -224,6 +227,7 @@ export const DraftResponseSchema = z.object({
   object: z.literal("emu_chat.draft"),
   conversation_id: z.string(),
   content: z.string(),
+  attachments: z.array(MediaAssetSchema),
   revision: z.number().int().nonnegative(),
   updated_at: z.string().nullable(),
 });
@@ -233,6 +237,7 @@ export const PutDraftRequestSchema = z
   .object({
     // Byte length is checked by the service. Zod's string max counts code units.
     content: z.string(),
+    attachments: AttachmentRefsSchema.optional(),
     expected_revision: z.number().int().nonnegative(),
   })
   .strict();
@@ -247,6 +252,8 @@ export const QueueItemResponseSchema = z.object({
   fifo_seq: z.number().int().positive(),
   state: z.enum(QueueItemStateValues),
   content: z.string().nullable(),
+  attachments: z.array(MediaAssetSchema),
+  media_state: z.enum(["pending", "ready", "failed"]),
   payload_bytes: z.number().int().positive(),
   payload_available: z.boolean(),
   recovery_expires_at: z.string().nullable(),
@@ -296,6 +303,7 @@ export const GetQueueQuerySchema = z
 export const PatchQueueItemRequestSchema = z
   .object({
     content: z.string(),
+    attachments: AttachmentRefsSchema.optional(),
     expected_revision: z.number().int().nonnegative(),
   })
   .strict();

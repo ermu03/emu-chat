@@ -63,6 +63,7 @@ function draft(
     object: "emu_chat.draft",
     conversation_id: conversationId,
     content,
+    attachments: [],
     revision,
     updated_at: null,
   };
@@ -95,6 +96,8 @@ function acceptedItem(
     fifo_seq: 1,
     state: "accepted",
     content,
+    attachments: [],
+    media_state: "ready",
     payload_bytes: content.length,
     payload_available: true,
     recovery_expires_at: null,
@@ -210,6 +213,9 @@ function mockCommonApi(summaries: ConversationSummary[]) {
     return detail(summary);
   });
   vi.spyOn(apiClient, "getDraft").mockImplementation(async (id) => draft(id));
+  vi.spyOn(apiClient, "getMediaCapabilities").mockRejectedValue(
+    new Error("图片插件未安装"),
+  );
 }
 
 class FakeEventSource {
@@ -490,6 +496,8 @@ describe("AppShell async flows", () => {
       fifo_seq: 1,
       state: "queued",
       content: prompt,
+      attachments: [],
+      media_state: "ready",
       payload_bytes: new TextEncoder().encode(prompt).length,
       payload_available: true,
       recovery_expires_at: null,
@@ -529,6 +537,7 @@ describe("AppShell async flows", () => {
     await waitFor(() => expect(putDraft).toHaveBeenCalledOnce());
     expect(putDraft).toHaveBeenCalledWith(summary.conversation_id, {
       content: prompt,
+      attachments: [],
       expected_revision: 0,
     });
     expect(sendMessage).not.toHaveBeenCalled();
@@ -542,6 +551,7 @@ describe("AppShell async flows", () => {
     await waitFor(() => expect(sendMessage).toHaveBeenCalledOnce());
     expect(putDraft).toHaveBeenNthCalledWith(2, summary.conversation_id, {
       content: prompt,
+      attachments: [],
       expected_revision: 0,
     });
     await waitFor(() => expect(input.value).toBe(""));
@@ -786,6 +796,8 @@ describe("AppShell async flows", () => {
       fifo_seq: 1,
       state: "accepted",
       content: "Message 260",
+      attachments: [],
+      media_state: "ready",
       payload_bytes: 11,
       payload_available: true,
       recovery_expires_at: null,
@@ -933,6 +945,8 @@ describe("AppShell async flows", () => {
       fifo_seq: 1,
       state: "accepted",
       content: "Check the design",
+      attachments: [],
+      media_state: "ready",
       payload_bytes: 16,
       payload_available: true,
       recovery_expires_at: null,
@@ -992,6 +1006,7 @@ describe("AppShell async flows", () => {
     await waitFor(() => expect(apiClient.sendMessage).toHaveBeenCalledOnce());
     expect(apiClient.putDraft).toHaveBeenCalledWith(summary.conversation_id, {
       content: "Check the design",
+      attachments: [],
       expected_revision: 0,
     });
     expect(apiClient.sendMessage).toHaveBeenCalledWith(

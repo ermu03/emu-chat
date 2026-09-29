@@ -10,6 +10,8 @@ import {
   StateConflictError,
 } from "../../domain/errors.js";
 import { withImmediateTransaction } from "../transaction.js";
+import type { AttachmentRef } from "../../../shared/media-schemas.js";
+import { enqueueMediaSync, queueMediaRegistration } from "../../media/sync.js";
 
 export class ConversationRepository {
   constructor(private db: Database.Database) {}
@@ -249,6 +251,14 @@ export class ConversationRepository {
           },
         );
       }
+      const unmappedBranch = this.db
+        .prepare(
+          `SELECT 1 FROM media_branch_pending
+        WHERE source_scope_id=? AND status='pending' LIMIT 1`,
+        )
+        .get(id);
+      if (unmappedBranch)
+        throw new StateConflictError("图片分支关联尚未完成，请稍后重试删除");
       return this.setDeleteState(id, "pending");
     });
   }
@@ -266,6 +276,15 @@ export class ConversationRepository {
 
   delete(id: string): boolean {
     return withImmediateTransaction(this.db, () => {
+      if (
+        this.db
+          .prepare(
+            `SELECT 1 FROM media_branch_pending
+        WHERE source_scope_id=? AND status='pending' LIMIT 1`,
+          )
+          .get(id)
+      )
+        throw new StateConflictError("图片分支关联尚未完成，不能清理来源会话");
       // coordinator_leases intentionally has no conversation foreign key:
       // the global lease must survive while this conversation lease is removed.
       this.db
@@ -276,6 +295,10 @@ export class ConversationRepository {
       const res = this.db
         .prepare("DELETE FROM conversations WHERE id = ?")
         .run(id);
+      if (res.changes)
+        enqueueMediaSync(this.db, `scope_${id}`, id, "scope_delete", {
+          version: 1,
+        });
       return res.changes > 0;
     });
   }
@@ -344,12 +367,19 @@ export class DraftRepository {
     conversationId: string,
     content: string,
     expectedRevision?: number,
+    attachments?: AttachmentRef[],
   ): DraftEntity {
     return withImmediateTransaction(this.db, () => {
       const conversation = this.db
-        .prepare("SELECT delete_state FROM conversations WHERE id = ?")
+        .prepare(
+          "SELECT delete_state,hermes_session_id FROM conversations WHERE id = ?",
+        )
         .get(conversationId) as
-        { delete_state: ConversationEntity["delete_state"] } | undefined;
+        | {
+            delete_state: ConversationEntity["delete_state"];
+            hermes_session_id: string;
+          }
+        | undefined;
       if (!conversation) throw new LocalNotFoundError("Conversation not found");
       if (conversation.delete_state !== "none") {
         throw new StateConflictError(
@@ -359,6 +389,27 @@ export class DraftRepository {
       }
       const current = this.findByConversationId(conversationId);
       const now = new Date().toISOString();
+      const nextAttachments =
+        attachments ??
+        (JSON.parse(current?.attachments_json ?? "[]") as AttachmentRef[]);
+      for (const attachment of nextAttachments) {
+        const asset = this.db
+          .prepare(
+            "SELECT status,sha256 FROM media_assets WHERE conversation_id=? AND asset_id=?",
+          )
+          .get(conversationId, attachment.asset_id) as
+          { status: string; sha256: string } | undefined;
+        if (
+          !asset ||
+          asset.status !== "ready" ||
+          asset.sha256 !== attachment.sha256
+        ) {
+          throw new StateConflictError(
+            "Image attachment is not ready or has changed",
+          );
+        }
+      }
+      const attachmentsJson = JSON.stringify(nextAttachments);
 
       if (!current) {
         if (expectedRevision !== undefined && expectedRevision !== 0) {
@@ -366,10 +417,32 @@ export class DraftRepository {
         }
         this.db
           .prepare(
-            `INSERT INTO drafts (conversation_id, content, revision, created_at, updated_at)
-             VALUES (?, ?, 0, ?, ?)`,
+            `INSERT INTO drafts (conversation_id, content, attachments_json, revision, created_at, updated_at)
+             VALUES (?, ?, ?, 0, ?, ?)`,
           )
-          .run(conversationId, content, now, now);
+          .run(conversationId, content, attachmentsJson, now, now);
+        if (nextAttachments.length) {
+          queueMediaRegistration(
+            this.db,
+            conversationId,
+            conversation.hermes_session_id,
+          );
+          enqueueMediaSync(
+            this.db,
+            `draft_${conversationId}`,
+            conversationId,
+            "reference_put",
+            {
+              reference_id: `ref_draft_${conversationId}`,
+              kind: "draft",
+              revision: 0,
+              session_id: conversation.hermes_session_id,
+              asset_ids: nextAttachments.map(
+                (attachment) => attachment.asset_id,
+              ),
+            },
+          );
+        }
         return this.findByConversationId(conversationId)!;
       }
 
@@ -385,13 +458,41 @@ export class DraftRepository {
       const res = this.db
         .prepare(
           `UPDATE drafts
-           SET content = ?, revision = ?, updated_at = ?
+           SET content = ?, attachments_json = ?, revision = ?, updated_at = ?
            WHERE conversation_id = ? AND revision = ?`,
         )
-        .run(content, nextRevision, now, conversationId, expected);
+        .run(
+          content,
+          attachmentsJson,
+          nextRevision,
+          now,
+          conversationId,
+          expected,
+        );
 
       if (res.changes === 0) {
         throw new LocalConflictError("Draft revision conflict");
+      }
+
+      if (nextAttachments.length || current.attachments_json !== "[]") {
+        queueMediaRegistration(
+          this.db,
+          conversationId,
+          conversation.hermes_session_id,
+        );
+        enqueueMediaSync(
+          this.db,
+          `draft_${conversationId}`,
+          conversationId,
+          "reference_put",
+          {
+            reference_id: `ref_draft_${conversationId}`,
+            kind: "draft",
+            revision: nextRevision,
+            session_id: conversation.hermes_session_id,
+            asset_ids: nextAttachments.map((attachment) => attachment.asset_id),
+          },
+        );
       }
 
       return this.findByConversationId(conversationId)!;

@@ -1,0 +1,146 @@
+{
+  "protocol_version": 1,
+  "manifest": {
+    "start": "<emu-media-input-v1>",
+    "end": "</emu-media-input-v1>",
+    "user_text": "Describe image",
+    "payload": {
+      "version": 1,
+      "scope_id": "cv_example",
+      "operation_id": "op_example",
+      "session_id": "hermes_example",
+      "asset_ids": ["asset_example"],
+      "user_text_sha256": "b9f03bc45b53eb6073314604e9f4af2804839890ed43cd24f1214278b5eabbeb",
+      "prompt_source": "user"
+    },
+    "run_input": "Describe image\n\n<emu-media-input-v1>\n{\"asset_ids\":[\"asset_example\"],\"operation_id\":\"op_example\",\"prompt_source\":\"user\",\"scope_id\":\"cv_example\",\"session_id\":\"hermes_example\",\"user_text_sha256\":\"b9f03bc45b53eb6073314604e9f4af2804839890ed43cd24f1214278b5eabbeb\",\"version\":1}\n</emu-media-input-v1>"
+  },
+  "capabilities_response": {
+    "protocol_version": 1,
+    "limits": {
+      "max_attachments": 4,
+      "max_upload_bytes": 8388608,
+      "max_capture_bytes": 33554432,
+      "max_pixels": 32000000,
+      "max_side_pixels": 16384,
+      "max_storage_bytes": 5368709120,
+      "mime_types": ["image/png", "image/jpeg", "image/webp"]
+    },
+    "vision": {
+      "status": "available",
+      "reason": null,
+      "input_bridge": "local_file"
+    },
+    "generation": {
+      "status": "unknown",
+      "reason": "Provider availability is not proven without a model call"
+    },
+    "editing": {
+      "status": "unsupported",
+      "reason": "The selected provider does not accept a local file in the current terminal backend",
+      "input_bridge": null,
+      "max_reference_images": 0
+    }
+  },
+  "upload_request": {
+    "method": "POST",
+    "path": "/v1/emu-media/scopes/cv_example/uploads",
+    "headers": {
+      "Authorization": "Bearer <server-secret>",
+      "Idempotency-Key": "upload_example",
+      "Content-Type": "image/png",
+      "X-File-Name": "picture.png"
+    },
+    "body": "raw image bytes, never JSON"
+  },
+  "asset_response": {
+    "protocol_version": 1,
+    "asset_id": "asset_example",
+    "scope_id": "cv_example",
+    "status": "ready",
+    "source": { "kind": "upload", "upload_id": "upload_example" },
+    "mime_type": "image/png",
+    "byte_size": 1234,
+    "width": 320,
+    "height": 240,
+    "sha256": "6a09e667bb67ae853c6ef372a54ff53a510e527fade682d1b56c4b63e28b3",
+    "file_name": "picture.png"
+  },
+  "submission_request": {
+    "version": 1,
+    "session_id": "hermes_example",
+    "asset_ids": ["asset_example"],
+    "user_text_sha256": "b9f03bc45b53eb6073314604e9f4af2804839890ed43cd24f1214278b5eabbeb",
+    "run_input_sha256": "4a54ae24e8ed9664f52409cc53dc233b48ce0338e6feb4132ab868154f1e78a0"
+  },
+  "submission_response": {
+    "protocol_version": 1,
+    "operation_id": "op_example",
+    "scope_id": "cv_example",
+    "session_id": "hermes_example",
+    "asset_ids": ["asset_example"],
+    "status": "bound"
+  },
+  "reference_request": {
+    "version": 1,
+    "kind": "draft",
+    "revision": 2,
+    "session_id": "hermes_example",
+    "asset_ids": ["asset_example"]
+  },
+  "reference_response": {
+    "protocol_version": 1,
+    "reference_id": "ref_draft_cv_example",
+    "scope_id": "cv_example",
+    "revision": 2,
+    "asset_ids": ["asset_example"]
+  },
+  "asset_list_response": {
+    "protocol_version": 1,
+    "data": [
+      {
+        "asset_id": "asset_example",
+        "status": "ready",
+        "source": {
+          "kind": "tool",
+          "session_id": "hermes_example",
+          "turn_id": "turn_example",
+          "tool_call_id": "call_example",
+          "output_index": 0
+        },
+        "mime_type": "image/png",
+        "byte_size": 1234,
+        "width": 320,
+        "height": 240
+      }
+    ],
+    "next_cursor": null
+  },
+  "reconcile_request": {
+    "version": 1,
+    "session_ids": ["hermes_example"],
+    "limit": 200
+  },
+  "reconcile_response": {
+    "protocol_version": 1,
+    "scanned_messages": 12,
+    "capture_jobs_added": 1,
+    "next_cursor": null
+  },
+  "release_orphan_request": {
+    "method": "POST",
+    "path": "/v1/emu-media/scopes/cv_example/assets/asset_example/release-orphan",
+    "body": "empty; rejects any durable reference or submission"
+  },
+  "release_orphan_response": {
+    "protocol_version": 1,
+    "asset_id": "asset_example",
+    "released": true
+  },
+  "error_response": {
+    "error": {
+      "code": "revision_conflict",
+      "message": "Reference revision is stale"
+    }
+  }
+}

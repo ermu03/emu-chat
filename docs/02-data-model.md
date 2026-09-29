@@ -23,7 +23,7 @@
 
 ## 3. 实体关系图 (ER Diagram)
 
-下面是系统中 7 张核心数据表的完整 ER 图表示。
+下面是原有 7 张核心数据表的 ER 图；图片控制表见第 10 节。
 
 ```mermaid
 erDiagram
@@ -282,3 +282,11 @@ erDiagram
 - **排他写锁 (BEGIN IMMEDIATE)**：标准 SQLite 的 `BEGIN` 是延迟获取写锁。使用 `BEGIN IMMEDIATE` 强制立即获取保留锁(Reserved Lock)，从而避免并发写引发的死锁问题，与 `busy_timeout` 完美配合。
 - **防嵌套重入**：函数内部使用 `db.inTransaction` 检测，如果有上层事务已开启，则复用外部事务，不会报错。
 - **容错回滚**：当业务逻辑抛出异常时，利用 `finally/catch` 确保安全的 `ROLLBACK`，不会在数据库连接池中留下未封闭的损坏事务上下文。
+
+## 10. 图片控制记录
+
+`0002_media.sql` 为现有数据库增加草稿 `attachments_json`、队列 `payload_attachments_json`、`media_state` 和冻结后的 `payload_run_input`。附件数组只保存有序资源 ID 与完整性摘要，不保存图片字节。文字与附件共用草稿及队列 revision，发送重试复用相同的 operation ID 与冻结 Run 输入。
+
+`media_assets` 是按会话缓存的图片元数据；图片原件、采集任务、提交绑定和最终引用由独立 Hermes 插件持有。`media_outbox` 持久化跨服务登记、引用、历史交接、删除和孤儿上传释放意图。失败任务会重试或进入人工核对状态，不以本地事务假装跨两个 SQLite 数据库原子提交。
+
+`media_branch_pending` 记录复制历史尚未映射的分支以及分支当时的源和目标 Hermes session ID；映射完成前阻止删除来源会话，之后的有效 session 变化不改写这次复制身份。`media_branch_messages` 按目标 Hermes 消息 ID 记录实际继承的图片，避免将来源会话的全部资源授予分支。插件引用与文件的物理清理由插件完成，历史图片不跟随队列控制记录的 7 天期限删除。

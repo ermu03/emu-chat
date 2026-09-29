@@ -1,8 +1,8 @@
 # 图片工作流实施规格
 
-状态：提案配套规格，未实现。决策入口：[图片识别、生成与编辑提案](../notes/proposed/feature/2026-09-28-add-image-workflows.md)。
+状态：P0–P5 开发实现与隔离验证已完成，尚未发布到运行中的 Hermes。决策入口：[图片识别、生成与编辑决定](../notes/implemented/feature/2026-09-28-add-image-workflows.md)。验证记录：[已部署 Hermes 的 P0 实测](../research/2026-09-29-image-workflows-p0.md)。
 
-本文给后续编码模型交接：产品选择以提案为准，协议是准备实施的约定，不代表现有 Hermes 已有这些接口。P0 的验证结果应更新本文；无法满足既定边界时记录具体阻碍，不自行改 Hermes 核心或换一套 Run API。
+本文记录已实现的协议与发布边界。插件接口属于独立 `hermes-emu-media` 仓库，不代表 Hermes 核心原生提供这些接口；无法满足边界时记录阻碍，不自行改 Hermes 核心或换一套 Run API。
 
 ## 1. 已定边界
 
@@ -58,6 +58,8 @@ emu-chat 增加独立的 media client/adapter、media service 与 media routes�
 
 命名空间拟定为 `/v1/emu-media`，只作用于当前默认 Hermes profile。首版不实现多租户或跨 profile 访问。P0 固定请求/响应 schema 后，P1、P3 共享协议 fixture。
 
+P0 已固定协议版本 `1`，示例与字段结构见 [emu-media-v1.json](fixtures/emu-media-v1.json)。服务端非二进制响应带 `protocol_version: 1`；错误统一为 `{"error":{"code":"...","message":"..."}}`。所有资源端点使用插件专属 Bearer 凭据。上传为单文件原始字节请求，`Content-Type` 为图片 MIME，`Idempotency-Key` 为上传重试身份，`X-File-Name` 仅供下载展示；不接收把图片嵌入 JSON 的上传。JSON 请求版本字段 `version: 1`，未知版本返回 422。列表使用不透明 `next_cursor`，未结束时不得用随机资源 ID 直接推断下一页。
+
 | 接口 | 责任 |
 | --- | --- |
 | `GET /capabilities` | 协议版本、图片功能状态、上传限制、工具输入桥接与输出格式支持情况 |
@@ -98,9 +100,13 @@ emu-chat 暴露对应的 `/api/conversations/{id}/media/...` 接口，不开放�
 
 机器清单随 Hermes 用户消息持久化，历史读取据此定位输入附件，避免队列载荷清理后失去关联。emu-chat 仅在后台验证其与已登记 operation、输入摘要、会话相符后把清单转换成附件；不能用宽泛正则删除用户原文。缺乏证明则显示原始内容或待核对状态。后台长期保留的是摘要与引用，完整用户正文仍以 Hermes 为准。
 
+版本 1 的清单使用固定 `<emu-media-input-v1>` 行界，载荷为键名排序、无多余空白的 JSON；只追加在冻结的 Run `input` 末尾。`user_text_sha256` 是原用户文字的 UTF-8 SHA-256；`run_input_sha256` 是包括清单的完整 Run 字符串 SHA-256，提交绑定在派发前写入插件。空文字加图时用有标识的默认识图提示，清单的 `prompt_source` 为 `default`。历史解析必须先匹配已登记的 scope、operation、session、图片顺序和两个摘要，再按精确末尾字节范围剥离清单；未匹配时保留原文并标记待核对。
+
 插件通过官方 `pre_llm_call` 注入当前已验证附件的可用说明；通过文档化的 `pre_tool_call` 对受管理引用进行验证/必要转换，范围仅限 `vision_analyze` 与 `image_generate` 的图片参数。不得拦截其他工具、替换模型服务或从结果 Hook 修改执行行为。给模型的资源表示必须可以用来选择某张图，不能要求模型猜浏览器 URL。
 
 P0 需在实际配置的工具/terminal backend 上确定输入表示：优先使用允许目录中的工具可读暂存文件；供应商只接受 URL/data 时，仅在工具调用边界转换已授权图片。这些转换属于传输适配，不实现新的供应商协议。不能把需要 Bearer 的浏览器资源 URL 直接交给无法认证的第三方模型，也不能靠公开图片服务绕过。
+
+2026-09-29 P0 实测与用户决定：当前终端后端为 `local`。识图使用受管理的本地暂存文件；首版图片编辑只向已验证会读取本地文件的 Hermes 图片供应商开放。已验证内置 OpenAI、OpenRouter、xAI 的本地路径适配。FAL 在 `local` 后端下会把路径原样传给供应商；不使用会把图片内容暴露给工具生命周期参数的 Hook data URI 桥接，能力接口须将这一组合报告为 `unsupported`。FAL 的纯文字生图不受此编辑限制。新增供应商需逐个验证其文件输入能力，不能根据工具参数名推断支持。
 
 必须证明转换后的大段 Base64 不会进入长期历史或普通日志；若官方 Hook 路径做不到，使用已验证的暂存文件路径，或在 P0 明确该组合不支持。不得以导入 Hermes 私有图片解析器或 monkeypatch 作为隐含后门。具体桥接方式是待实测的工程事实，不需要用户选择。
 
@@ -170,7 +176,9 @@ P0 需在实际配置的工具/terminal backend 上确定输入表示：优先�
 
 每包交接说明改动位置、契约版本、通过的验证、尚未验证事项。P0 可用模拟 provider 验证基础设施；需要真实付费调用时由执行者遵循届时的操作授权，本文不代表现在已执行调用。不得用“看见 Hook 函数”替代 P0 的端到端证据。
 
-文件完整性、引用和输入桥接的不变量必须在对应包实现，不能全部推迟给 P5 修补。一个 feature 提案记录整体决定，部分完成时继续留在 proposed；整个功能达到验收才流转，避免某个包完成就误标整个功能已实现。
+P0 已用真实 `AIAgent` 与 `/v1/runs` 在隔离环境跑通模拟模型回合、持久历史、Hook 身份、插件路由鉴权和幂等重放；复现脚本与限制见验证记录。未进行付费供应商调用，能力报告中的 `available` 仅代表配置和已验证适配，并非供应商实时可用承诺。
+
+文件完整性、引用和输入桥接的不变量已经在对应包实现；feature 决定笔记随开发实现流转到 implemented。生产安装与后续 Hermes 版本兼容性仍按第 11 节单独验证。
 
 ## 11. 验证与发版
 
@@ -188,7 +196,7 @@ emu-chat 实施后运行类型检查、Lint、构建及对应主干测试；按�
 
 ## 12. 源码与官方依据
 
-本轮仅阅读源码和文档，没有安装插件、发起图片模型调用或修改服务。
+最初的规格阶段仅阅读源码和文档。开发阶段已在独立仓库实现插件和 emu-chat 接口，并用隔离 profile 与浏览器仿真验证；未安装到运行中的 Hermes，也未发起付费图片模型调用。
 
 - emu-chat：`src/server/hermes/adapter.ts` 的 startRun 当前发送字符串 input；`src/shared/hermes-schemas.ts` 当前要求消息 content 为字符串。
 - emu-chat：`src/server/services/queue-run-service.ts`、`src/client/state/use-message-send.ts`、`src/client/features/composer/draft-composer.tsx` 的草稿/队列/乐观消息均需扩展附件；`src/server/services/conversation-service.ts` 已有 effective session 采用、分支和删除逻辑。

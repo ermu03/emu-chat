@@ -5,11 +5,20 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { LoaderCircle, Send } from "lucide-react";
+import { ImagePlus, LoaderCircle, Send, X } from "lucide-react";
 import { LIMITS } from "../../../shared/limits.js";
+import type {
+  AttachmentRef,
+  MediaAsset,
+  MediaCapabilities,
+} from "../../../shared/media-schemas.js";
+import { apiClient } from "../../api/client.js";
+import { generateBrowserUuid } from "../../state/app-shell-utils.js";
+import { MediaAssets } from "../media/media-assets.js";
 
 export interface DraftSnapshot {
   content: string;
+  attachments: MediaAsset[];
   revision: number;
 }
 
@@ -19,19 +28,23 @@ export interface DraftSendResult {
 
 export interface DraftComposerHandle {
   selectPrompt: (prompt: string) => void;
+  addAsset: (asset: MediaAsset) => void;
 }
 
 export interface DraftComposerProps {
   conversationId: string;
   initialDraft?: string;
   initialRevision?: number;
+  initialAttachments?: MediaAsset[];
   sendShortcut: "enter" | "mod_enter";
   onSaveDraft: (
     content: string,
+    attachments: AttachmentRef[],
     expectedRevision: number,
   ) => Promise<{ revision: number }>;
   onSend: (
     content: string,
+    attachments: MediaAsset[],
     expectedDraftRevision: number,
   ) => Promise<DraftSendResult>;
   disabled?: boolean;
@@ -46,6 +59,7 @@ export const DraftComposer = React.forwardRef<
     conversationId,
     initialDraft = "",
     initialRevision = 0,
+    initialAttachments = [],
     sendShortcut,
     onSaveDraft,
     onSend,
@@ -55,6 +69,25 @@ export const DraftComposer = React.forwardRef<
   ref,
 ) {
   const [content, setContent] = useState(initialDraft);
+  const [attachments, setAttachments] =
+    useState<MediaAsset[]>(initialAttachments);
+  const [uploads, setUploads] = useState<
+    Array<{
+      id: string;
+      file: File;
+      state: "uploading" | "failed";
+      error?: string;
+    }>
+  >([]);
+  const [capabilities, setCapabilities] = useState<MediaCapabilities | null>(
+    null,
+  );
+  const [capabilityError, setCapabilityError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const uploadsRef = useRef(uploads);
+  const controllersRef = useRef(new Map<string, AbortController>());
+  const attachmentsRef = useRef(initialAttachments);
+  const savedAttachmentsRef = useRef(initialAttachments);
   const [, setRevision] = useState(initialRevision);
   const [isSending, setIsSending] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -69,6 +102,36 @@ export const DraftComposer = React.forwardRef<
   const savePromiseRef = useRef<Promise<void> | null>(null);
   const conversationRef = useRef(conversationId);
   const selectedPromptRef = useRef<string | null>(null);
+  const refs = (items: MediaAsset[]): AttachmentRef[] =>
+    items.map((asset) => ({
+      asset_id: asset.asset_id,
+      sha256: asset.sha256,
+    }));
+  const sameAssets = (left: MediaAsset[], right: MediaAsset[]) =>
+    JSON.stringify(refs(left)) === JSON.stringify(refs(right));
+
+  useEffect(() => {
+    uploadsRef.current = uploads;
+  }, [uploads]);
+  useEffect(() => {
+    let current = true;
+    setCapabilities(null);
+    setCapabilityError(null);
+    void apiClient
+      .getMediaCapabilities(conversationId)
+      .then((value) => {
+        if (current) setCapabilities(value);
+      })
+      .catch((error) => {
+        if (current)
+          setCapabilityError(
+            error instanceof Error ? error.message : "图片功能暂不可用",
+          );
+      });
+    return () => {
+      current = false;
+    };
+  }, [conversationId]);
 
   const resizeTextarea = useCallback(() => {
     const textarea = textareaRef.current;
@@ -95,8 +158,16 @@ export const DraftComposer = React.forwardRef<
     clearDebounce();
     savePromiseRef.current = null;
     selectedPromptRef.current = null;
+    for (const controller of controllersRef.current.values())
+      controller.abort();
+    controllersRef.current.clear();
+    uploadsRef.current = [];
+    setUploads([]);
     contentRef.current = initialDraft;
     savedContentRef.current = initialDraft;
+    attachmentsRef.current = initialAttachments;
+    savedAttachmentsRef.current = initialAttachments;
+    setAttachments(initialAttachments);
     revisionRef.current = initialRevision;
     setContent(initialDraft);
     setRevision(initialRevision);
@@ -104,42 +175,63 @@ export const DraftComposer = React.forwardRef<
     setSendError(null);
     sendingRef.current = false;
     setIsSending(false);
-  }, [clearDebounce, conversationId, initialDraft, initialRevision]);
+  }, [
+    clearDebounce,
+    conversationId,
+    initialDraft,
+    initialRevision,
+    initialAttachments,
+  ]);
 
   useEffect(() => {
-    if (contentRef.current !== savedContentRef.current) return;
+    if (
+      contentRef.current !== savedContentRef.current ||
+      !sameAssets(attachmentsRef.current, savedAttachmentsRef.current)
+    )
+      return;
     if (initialRevision < revisionRef.current) return;
     if (
       initialRevision === revisionRef.current &&
-      initialDraft === savedContentRef.current
+      initialDraft === savedContentRef.current &&
+      sameAssets(initialAttachments, savedAttachmentsRef.current)
     ) {
       return;
     }
     contentRef.current = initialDraft;
     savedContentRef.current = initialDraft;
+    attachmentsRef.current = initialAttachments;
+    savedAttachmentsRef.current = initialAttachments;
+    setAttachments(initialAttachments);
     selectedPromptRef.current = null;
     revisionRef.current = initialRevision;
     setContent(initialDraft);
     setRevision(initialRevision);
     setSaveError(null);
-  }, [initialDraft, initialRevision]);
+  }, [initialDraft, initialRevision, initialAttachments]);
 
   useEffect(() => {
     return () => {
       generationRef.current += 1;
       clearDebounce();
+      for (const controller of controllersRef.current.values())
+        controller.abort();
       sendingRef.current = false;
     };
   }, [clearDebounce]);
 
   const saveSnapshot = useCallback(
-    async (nextContent: string) => {
+    async (nextContent: string, nextAttachments: MediaAsset[]) => {
       const generation = generationRef.current;
       setSaveError(null);
       try {
-        const result = await onSaveDraft(nextContent, revisionRef.current);
+        const result = await onSaveDraft(
+          nextContent,
+          refs(nextAttachments),
+          revisionRef.current,
+        );
         if (generation !== generationRef.current) return;
         savedContentRef.current = nextContent;
+        savedAttachmentsRef.current = nextAttachments;
         revisionRef.current = result.revision;
         setRevision(result.revision);
       } catch (error) {
@@ -157,14 +249,16 @@ export const DraftComposer = React.forwardRef<
     const generation = generationRef.current;
     while (
       generation === generationRef.current &&
-      savedContentRef.current !== contentRef.current
+      (savedContentRef.current !== contentRef.current ||
+        !sameAssets(savedAttachmentsRef.current, attachmentsRef.current))
     ) {
       if (savePromiseRef.current) {
         await savePromiseRef.current;
         continue;
       }
       const snapshot = contentRef.current;
-      const promise = saveSnapshot(snapshot);
+      const snapshotAttachments = attachmentsRef.current;
+      const promise = saveSnapshot(snapshot, snapshotAttachments);
       savePromiseRef.current = promise;
       try {
         await promise;
@@ -204,7 +298,113 @@ export const DraftComposer = React.forwardRef<
     [disabled, scheduleSave],
   );
 
-  useImperativeHandle(ref, () => ({ selectPrompt }), [selectPrompt]);
+  const addAsset = useCallback(
+    (asset: MediaAsset) => {
+      if (asset.status !== "ready" || disabled || sendingRef.current) return;
+      if (
+        attachmentsRef.current.some(
+          (entry) => entry.asset_id === asset.asset_id,
+        )
+      ) {
+        textareaRef.current?.focus();
+        return;
+      }
+      if (attachmentsRef.current.length + uploadsRef.current.length >= 4) {
+        setSendError("一条消息最多附加 4 张图片");
+        return;
+      }
+      const next = [...attachmentsRef.current, asset];
+      attachmentsRef.current = next;
+      setAttachments(next);
+      scheduleSave();
+      textareaRef.current?.focus();
+    },
+    [disabled, scheduleSave],
+  );
+
+  useImperativeHandle(ref, () => ({ selectPrompt, addAsset }), [
+    selectPrompt,
+    addAsset,
+  ]);
+
+  const removeAsset = (assetId: string) => {
+    const next = attachmentsRef.current.filter(
+      (asset) => asset.asset_id !== assetId,
+    );
+    attachmentsRef.current = next;
+    setAttachments(next);
+    scheduleSave();
+  };
+
+  const uploadFile = (
+    file: File,
+    id = `upload_${generateBrowserUuid().replaceAll("-", "")}`,
+  ) => {
+    const allowed = ["image/png", "image/jpeg", "image/webp"];
+    if (!allowed.includes(file.type)) {
+      setSendError(`${file.name}: 只支持静态 PNG、JPEG、WebP 图片`);
+      return;
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      setSendError(`${file.name}: 图片超过 8 MiB`);
+      return;
+    }
+    if (attachmentsRef.current.length + uploadsRef.current.length >= 4) {
+      setSendError("一条消息最多附加 4 张图片");
+      return;
+    }
+    const generation = generationRef.current;
+    const controller = new AbortController();
+    controllersRef.current.set(id, controller);
+    const pending = [
+      ...uploadsRef.current,
+      { id, file, state: "uploading" as const },
+    ];
+    uploadsRef.current = pending;
+    setUploads(pending);
+    setSendError(null);
+    void apiClient
+      .uploadMedia(conversationId, file, id, controller.signal)
+      .then((asset) => {
+        if (
+          generation !== generationRef.current ||
+          !uploadsRef.current.some((item) => item.id === id)
+        )
+          return;
+        uploadsRef.current = uploadsRef.current.filter(
+          (item) => item.id !== id,
+        );
+        setUploads(uploadsRef.current);
+        if (asset.status !== "ready") throw new Error("图片尚未就绪");
+        addAsset(asset);
+      })
+      .catch((error) => {
+        if (
+          generation !== generationRef.current ||
+          !uploadsRef.current.some((item) => item.id === id)
+        )
+          return;
+        uploadsRef.current = uploadsRef.current.map((item) =>
+          item.id === id
+            ? {
+                ...item,
+                state: "failed",
+                error: error instanceof Error ? error.message : "上传失败",
+              }
+            : item,
+        );
+        setUploads(uploadsRef.current);
+      })
+      .finally(() => controllersRef.current.delete(id));
+  };
+
+  const addFiles = (files: FileList | File[]) => {
+    if (!capabilities) {
+      setSendError(capabilityError ?? "图片服务暂不可用");
+      return;
+    }
+    for (const file of Array.from(files)) uploadFile(file);
+  };
 
   const handleChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
     const nextContent = event.target.value;
@@ -217,10 +417,14 @@ export const DraftComposer = React.forwardRef<
 
   const handleSend = async () => {
     const current = contentRef.current;
+    const currentAttachments = attachmentsRef.current;
     const isOverLimit =
       new TextEncoder().encode(current).length > LIMITS.INPUT_MAX_BYTES;
     if (
-      !current.trim() ||
+      (!current.trim() && currentAttachments.length === 0) ||
+      (currentAttachments.length > 0 && !capabilities) ||
+      uploadsRef.current.length > 0 ||
+      currentAttachments.some((asset) => asset.status !== "ready") ||
       disabled ||
       sendDisabled ||
       sendingRef.current ||
@@ -235,13 +439,25 @@ export const DraftComposer = React.forwardRef<
     try {
       await flushDraft();
       if (generation !== generationRef.current) return;
-      const result = await onSend(current, revisionRef.current);
+      const result = await onSend(
+        current,
+        currentAttachments,
+        revisionRef.current,
+      );
       if (generation !== generationRef.current) return;
-      contentRef.current = result.draft.content;
+      const changedDuringSend =
+        contentRef.current !== current ||
+        !sameAssets(attachmentsRef.current, currentAttachments);
       savedContentRef.current = result.draft.content;
+      savedAttachmentsRef.current = result.draft.attachments;
       selectedPromptRef.current = null;
       revisionRef.current = result.draft.revision;
-      setContent(result.draft.content);
+      if (!changedDuringSend) {
+        contentRef.current = result.draft.content;
+        attachmentsRef.current = result.draft.attachments;
+        setContent(result.draft.content);
+        setAttachments(result.draft.attachments);
+      } else scheduleSave();
       setRevision(result.draft.revision);
       setSaveError(null);
     } catch (error) {
@@ -276,18 +492,90 @@ export const DraftComposer = React.forwardRef<
     sendShortcut === "mod_enter" ? "发送（⌘/Ctrl + Enter）" : "发送（Enter）";
 
   return (
-    <div className={`composer-container ${isOverLimit ? "over-limit" : ""}`}>
+    <div
+      className={`composer-container ${isOverLimit ? "over-limit" : ""}`}
+      onDragOver={(event) => {
+        if (event.dataTransfer.types.includes("Files")) event.preventDefault();
+      }}
+      onDrop={(event) => {
+        if (!event.dataTransfer.files.length) return;
+        event.preventDefault();
+        addFiles(event.dataTransfer.files);
+      }}
+    >
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp"
+        multiple
+        hidden
+        onChange={(event) => {
+          if (event.target.files) addFiles(event.target.files);
+          event.target.value = "";
+        }}
+      />
       <textarea
         ref={textareaRef}
         className="composer-textarea"
         value={content}
         onChange={handleChange}
         onKeyDown={handleKeyDown}
+        onPaste={(event) => {
+          const images = Array.from(event.clipboardData.files).filter((file) =>
+            file.type.startsWith("image/"),
+          );
+          if (images.length) addFiles(images);
+        }}
         disabled={disabled || isSending}
         placeholder="写下你的消息..."
         rows={3}
         aria-label="消息输入框"
       />
+      <MediaAssets
+        assets={attachments}
+        conversationId={conversationId}
+        onRemove={removeAsset}
+        compact
+      />
+      {uploads.length > 0 && (
+        <div className="composer-uploads">
+          {uploads.map((entry) => (
+            <div className="composer-upload" key={entry.id}>
+              <span>
+                {entry.file.name}:{" "}
+                {entry.state === "uploading" ? "上传中…" : entry.error}
+              </span>
+              {entry.state === "failed" && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    uploadsRef.current = uploadsRef.current.filter(
+                      (item) => item.id !== entry.id,
+                    );
+                    setUploads(uploadsRef.current);
+                    uploadFile(entry.file, entry.id);
+                  }}
+                >
+                  重试
+                </button>
+              )}
+              <button
+                type="button"
+                aria-label={`移除 ${entry.file.name}`}
+                onClick={() => {
+                  controllersRef.current.get(entry.id)?.abort();
+                  uploadsRef.current = uploadsRef.current.filter(
+                    (item) => item.id !== entry.id,
+                  );
+                  setUploads(uploadsRef.current);
+                }}
+              >
+                <X size={13} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
       <div className="composer-footer">
         <div className="composer-meta">
           <span
@@ -315,8 +603,31 @@ export const DraftComposer = React.forwardRef<
           {sendError && sendError !== saveError && (
             <span className="error">{sendError}</span>
           )}
+          {capabilityError && (
+            <span
+              className="composer-media-unavailable"
+              title={capabilityError}
+            >
+              图片暂不可用
+            </span>
+          )}
         </div>
         <div className="composer-actions">
+          <button
+            type="button"
+            className="composer-attach"
+            aria-label="添加图片"
+            title="添加图片"
+            disabled={
+              disabled ||
+              isSending ||
+              !capabilities ||
+              attachments.length + uploads.length >= 4
+            }
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <ImagePlus size={17} />
+          </button>
           {isSending && (
             <LoaderCircle size={15} className="spin" aria-label="发送中" />
           )}
@@ -328,7 +639,9 @@ export const DraftComposer = React.forwardRef<
               disabled ||
               sendDisabled ||
               isSending ||
-              !content.trim() ||
+              (!content.trim() && attachments.length === 0) ||
+              (attachments.length > 0 && !capabilities) ||
+              uploads.length > 0 ||
               isOverLimit
             }
             aria-label={sendTitle}

@@ -41,6 +41,9 @@ import {
   StateConflictError,
 } from "../domain/errors.js";
 import type { HermesAdapter } from "../hermes/adapter.js";
+import type { MediaService } from "../media/service.js";
+import type { AttachmentRef } from "../../shared/media-schemas.js";
+import { enqueueMediaSync, queueMediaRegistration } from "../media/sync.js";
 
 type WakeCoordinator = () => void;
 type ReconcileCoordinator = (localRunId: string) => Promise<void>;
@@ -58,6 +61,7 @@ export interface QueueRunServiceOptions {
   runRepo: RunRepository;
   leaseRepo: LeaseRepository;
   hermesAdapter: HermesAdapter;
+  mediaService?: MediaService;
   wakeCoordinator: WakeCoordinator;
   reconcileCoordinator: ReconcileCoordinator;
   stopCoordinator: StopCoordinator;
@@ -73,6 +77,7 @@ export class QueueRunService {
   private readonly runRepo: RunRepository;
   private readonly leaseRepo: LeaseRepository;
   private readonly hermesAdapter: HermesAdapter;
+  private readonly mediaService: MediaService | undefined;
   private readonly wakeCoordinator: WakeCoordinator;
   private readonly reconcileCoordinator: ReconcileCoordinator;
   private readonly stopCoordinator: StopCoordinator;
@@ -86,6 +91,7 @@ export class QueueRunService {
     this.runRepo = options.runRepo;
     this.leaseRepo = options.leaseRepo;
     this.hermesAdapter = options.hermesAdapter;
+    this.mediaService = options.mediaService;
     this.wakeCoordinator = options.wakeCoordinator;
     this.reconcileCoordinator = options.reconcileCoordinator;
     this.stopCoordinator = options.stopCoordinator;
@@ -118,13 +124,18 @@ export class QueueRunService {
           expected_revision: expectedDraftRevision,
         });
       }
-      if (draft.content.trim().length === 0) {
+      const attachments = JSON.parse(draft.attachments_json) as AttachmentRef[];
+      if (draft.content.trim().length === 0 && attachments.length === 0) {
         throw new StateConflictError("Draft content cannot be empty", {
           current_state: "empty_draft",
         });
       }
 
-      const payloadBytes = Buffer.byteLength(draft.content, "utf8");
+      const payloadBytes =
+        Buffer.byteLength(draft.content, "utf8") +
+        (attachments.length
+          ? Buffer.byteLength(draft.attachments_json, "utf8")
+          : 0);
       if (payloadBytes > LIMITS.INPUT_MAX_BYTES) {
         throw new PayloadTooLargeError(
           `Message exceeds ${LIMITS.INPUT_MAX_BYTES} bytes`,
@@ -154,19 +165,25 @@ export class QueueRunService {
       const operationId = generateId(ID_PREFIXES.operation);
       const idempotencyKey = generateId(ID_PREFIXES.idempotency);
       const payloadSha256 = createHash("sha256")
-        .update(draft.content, "utf8")
+        .update(
+          attachments.length
+            ? JSON.stringify({ version: 1, text: draft.content, attachments })
+            : draft.content,
+          "utf8",
+        )
         .digest("hex");
 
       this.db
         .prepare(
           `INSERT INTO queue_items (
              id, conversation_id, operation_id, client_request_id, fifo_seq,
-             state, payload_text, payload_sha256, payload_bytes, revision,
+             state, payload_text, payload_attachments_json, payload_sha256,
+             payload_bytes, media_state, revision,
              idempotency_key, dispatch_session_id, attempt_count,
              first_attempt_at, admission_deadline_at, recovery_expires_at,
              payload_expired_at, payload_discarded_at, last_error_code,
              created_at, updated_at
-           ) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, 0, ?, NULL, 0,
+           ) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, 0, ?, NULL, 0,
                      NULL, NULL, NULL, NULL, NULL, NULL, ?, ?)`,
         )
         .run(
@@ -176,8 +193,10 @@ export class QueueRunService {
           clientRequestId,
           maxSeq.max_seq + 1,
           draft.content,
+          draft.attachments_json,
           payloadSha256,
           payloadBytes,
+          attachments.length ? "pending" : "ready",
           idempotencyKey,
           now,
           now,
@@ -186,7 +205,7 @@ export class QueueRunService {
       const draftUpdate = this.db
         .prepare(
           `UPDATE drafts
-           SET content = '', revision = revision + 1, updated_at = ?
+           SET content = '', attachments_json = '[]', revision = revision + 1, updated_at = ?
            WHERE conversation_id = ? AND revision = ?`,
         )
         .run(now, conversationId, expectedDraftRevision);
@@ -196,6 +215,24 @@ export class QueueRunService {
             this.draftRepo.findByConversationId(conversationId)?.revision ?? 0,
           expected_revision: expectedDraftRevision,
         });
+      }
+      if (attachments.length) {
+        const sessionId =
+          this.requireMutableConversation(conversationId).hermes_session_id;
+        queueMediaRegistration(this.db, conversationId, sessionId);
+        enqueueMediaSync(
+          this.db,
+          `draft_${conversationId}`,
+          conversationId,
+          "reference_put",
+          {
+            reference_id: `ref_draft_${conversationId}`,
+            kind: "draft",
+            revision: expectedDraftRevision + 1,
+            session_id: sessionId,
+            asset_ids: [],
+          },
+        );
       }
 
       return { item: this.queueRepo.findById(itemId)!, replayed: false };
@@ -231,21 +268,6 @@ export class QueueRunService {
     queueItemId: string,
     input: PatchQueueItemRequest,
   ): QueueItemResponse {
-    if (input.content.length === 0) {
-      throw new StateConflictError("Queue item content cannot be empty", {
-        current_state: "empty_payload",
-      });
-    }
-    const bytes = Buffer.byteLength(input.content, "utf8");
-    if (bytes > LIMITS.INPUT_MAX_BYTES) {
-      throw new PayloadTooLargeError(
-        `Queue item exceeds ${LIMITS.INPUT_MAX_BYTES} bytes`,
-        {
-          limit_bytes: LIMITS.INPUT_MAX_BYTES,
-        },
-      );
-    }
-
     const item = withImmediateTransaction(this.db, () => {
       const current = this.requireQueueItem(queueItemId);
       this.requireMutableConversation(current.conversation_id);
@@ -260,18 +282,53 @@ export class QueueRunService {
           expected_revision: input.expected_revision,
         });
       }
+      const attachments =
+        input.attachments ??
+        (JSON.parse(current.payload_attachments_json) as AttachmentRef[]);
+      if (!input.content.trim() && attachments.length === 0)
+        throw new StateConflictError("Queue item content cannot be empty", {
+          current_state: "empty_payload",
+        });
+      const attachmentsJson = JSON.stringify(attachments);
+      const bytes =
+        Buffer.byteLength(input.content, "utf8") +
+        (attachments.length ? Buffer.byteLength(attachmentsJson, "utf8") : 0);
+      if (bytes > LIMITS.INPUT_MAX_BYTES)
+        throw new PayloadTooLargeError(
+          `Queue item exceeds ${LIMITS.INPUT_MAX_BYTES} bytes`,
+        );
+      for (const attachment of attachments) {
+        const asset = this.mediaService?.findStored(
+          current.conversation_id,
+          attachment.asset_id,
+        );
+        if (
+          !asset ||
+          asset.status !== "ready" ||
+          asset.sha256 !== attachment.sha256
+        )
+          throw new StateConflictError(
+            "Image attachment is not ready or has changed",
+          );
+      }
+      const fingerprint = attachments.length
+        ? JSON.stringify({ version: 1, text: input.content, attachments })
+        : input.content;
       const now = new Date().toISOString();
       const result = this.db
         .prepare(
           `UPDATE queue_items
-           SET payload_text = ?, payload_sha256 = ?, payload_bytes = ?,
+           SET payload_text = ?, payload_attachments_json = ?, payload_sha256 = ?, payload_bytes = ?,
+               media_state = ?, payload_run_input = NULL,
                revision = revision + 1, updated_at = ?
            WHERE id = ? AND state = 'queued' AND revision = ?`,
         )
         .run(
           input.content,
-          createHash("sha256").update(input.content, "utf8").digest("hex"),
+          attachmentsJson,
+          createHash("sha256").update(fingerprint, "utf8").digest("hex"),
           bytes,
+          attachments.length ? "pending" : "ready",
           now,
           queueItemId,
           input.expected_revision,
@@ -363,7 +420,11 @@ export class QueueRunService {
           expected_revision: input.expected_draft_revision,
         });
       }
-      if (current && current.content.length > 0 && !input.overwrite_nonempty) {
+      if (
+        current &&
+        (current.content.length > 0 || current.attachments_json !== "[]") &&
+        !input.overwrite_nonempty
+      ) {
         throw new DraftConflictError("Draft is not empty", {
           current_revision: current.revision,
         });
@@ -372,11 +433,12 @@ export class QueueRunService {
       if (current) {
         const updated = this.db
           .prepare(
-            `UPDATE drafts SET content = ?, revision = revision + 1, updated_at = ?
+            `UPDATE drafts SET content = ?, attachments_json = ?, revision = revision + 1, updated_at = ?
              WHERE conversation_id = ? AND revision = ?`,
           )
           .run(
             item.payload_text,
+            item.payload_attachments_json,
             now,
             item.conversation_id,
             input.expected_draft_revision,
@@ -388,10 +450,41 @@ export class QueueRunService {
           throw new DraftConflictError("Draft revision conflict");
         this.db
           .prepare(
-            `INSERT INTO drafts (conversation_id, content, revision, created_at, updated_at)
-             VALUES (?, ?, 1, ?, ?)`,
+            `INSERT INTO drafts (conversation_id, content, attachments_json, revision, created_at, updated_at)
+             VALUES (?, ?, ?, 1, ?, ?)`,
           )
-          .run(item.conversation_id, item.payload_text, now, now);
+          .run(
+            item.conversation_id,
+            item.payload_text,
+            item.payload_attachments_json,
+            now,
+            now,
+          );
+      }
+      if (
+        item.payload_attachments_json !== "[]" ||
+        (current?.attachments_json ?? "[]") !== "[]"
+      ) {
+        const sessionId = this.requireMutableConversation(
+          item.conversation_id,
+        ).hermes_session_id;
+        const assetIds = (
+          JSON.parse(item.payload_attachments_json) as AttachmentRef[]
+        ).map((attachment) => attachment.asset_id);
+        queueMediaRegistration(this.db, item.conversation_id, sessionId);
+        enqueueMediaSync(
+          this.db,
+          `draft_${item.conversation_id}`,
+          item.conversation_id,
+          "reference_put",
+          {
+            reference_id: `ref_draft_${item.conversation_id}`,
+            kind: "draft",
+            revision: current ? current.revision + 1 : 1,
+            session_id: sessionId,
+            asset_ids: assetIds,
+          },
+        );
       }
       return this.draftRepo.findByConversationId(item.conversation_id)!;
     });
@@ -568,6 +661,13 @@ export class QueueRunService {
       object: "emu_chat.draft",
       conversation_id: conversationId,
       content: draft?.content ?? "",
+      attachments:
+        this.mediaService?.findManyStored(
+          conversationId,
+          (JSON.parse(draft?.attachments_json ?? "[]") as AttachmentRef[]).map(
+            (attachment) => attachment.asset_id,
+          ),
+        ) ?? [],
       revision: draft?.revision ?? 0,
       updated_at: draft?.updated_at ?? null,
     };
@@ -598,6 +698,15 @@ export class QueueRunService {
       fifo_seq: item.fifo_seq,
       state: item.state,
       content: available ? item.payload_text : null,
+      attachments: available
+        ? (this.mediaService?.findManyStored(
+            item.conversation_id,
+            (JSON.parse(item.payload_attachments_json) as AttachmentRef[]).map(
+              (attachment) => attachment.asset_id,
+            ),
+          ) ?? [])
+        : [],
+      media_state: item.media_state,
       payload_bytes: item.payload_bytes,
       payload_available: available,
       recovery_expires_at: item.recovery_expires_at,

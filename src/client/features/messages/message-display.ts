@@ -1,4 +1,5 @@
 import type { MessageItem } from "../../../shared/api-schemas.js";
+import type { MediaAsset } from "../../../shared/media-schemas.js";
 
 export interface ToolCallItem {
   id: string;
@@ -9,6 +10,7 @@ export interface ToolCallItem {
   status?: "running" | "completed" | "failed" | undefined;
   ambiguous?: boolean | undefined;
   isError: boolean;
+  attachments?: MediaAsset[];
 }
 
 export type TurnStep =
@@ -53,7 +55,8 @@ export function getRenderableMessages(messages: MessageItem[]): MessageItem[] {
       Boolean(message.tool_name) ||
       Boolean(message.tool_call_id) ||
       Boolean(message.tool_calls && message.tool_calls.length > 0) ||
-      Boolean(message.reasoning?.trim()),
+      Boolean(message.reasoning?.trim()) ||
+      Boolean(message.attachments?.length),
   );
 }
 
@@ -268,6 +271,7 @@ function buildAssistantTurn(chunk: MessageItem[]): AssistantTurn {
 
       if (matchedToolStep) {
         matchedToolStep.tool.resultContent = msg.content;
+        if (msg.attachments) matchedToolStep.tool.attachments = msg.attachments;
         matchedToolStep.tool.isError = isToolError(msg.content);
         if (matchedToolStep.tool.name === "tool" && msg.tool_name) {
           matchedToolStep.tool.name = msg.tool_name;
@@ -277,6 +281,7 @@ function buildAssistantTurn(chunk: MessageItem[]): AssistantTurn {
           id: msg.tool_call_id || `tool_${msg.id}`,
           name: msg.tool_name || "tool",
           resultContent: msg.content,
+          ...(msg.attachments ? { attachments: msg.attachments } : {}),
           isError: isToolError(msg.content),
         };
         blocks.push({

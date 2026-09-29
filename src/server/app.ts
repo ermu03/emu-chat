@@ -35,6 +35,12 @@ import { statusRoutes } from "./http/routes/status.js";
 import { conversationRoutes } from "./http/routes/conversations.js";
 import { draftPreferencesRoutes } from "./http/routes/drafts-and-preferences.js";
 import { queueAndRunsRoutes } from "./http/routes/queue-and-runs.js";
+import { mediaRoutes } from "./http/routes/media.js";
+import { MediaClient } from "./media/client.js";
+import { MediaService } from "./media/service.js";
+import { MediaDispatchService } from "./media/dispatch.js";
+import { MediaSyncWorker } from "./media/sync.js";
+import { MediaBranchService } from "./media/branch.js";
 
 export interface ServerDependencies {
   db?: Database.Database;
@@ -44,6 +50,7 @@ export interface ServerDependencies {
   conversationService?: ConversationService;
   draftPreferencesService?: DraftPreferencesService;
   queueRunService?: QueueRunService;
+  mediaService?: MediaService;
 }
 
 export function buildServer(
@@ -172,7 +179,15 @@ export function buildServer(
   const draftRepo = new DraftRepository(db);
   const queueRepo = new QueueRepository(db);
   const runRepo = new RunRepository(db);
-  const dataRetention = new DataRetentionService(db, queueRepo);
+  const mediaClient = new MediaClient(config.hermesBaseUrl, config.mediaApiKey);
+  const mediaService =
+    dependencies.mediaService ?? new MediaService(db, convRepo, mediaClient);
+  const mediaSync = new MediaSyncWorker(db, mediaClient);
+  const dataRetention = new DataRetentionService(
+    db,
+    queueRepo,
+    mediaClient.isConfigured(),
+  );
 
   const hermesClient =
     dependencies.hermesClient ??
@@ -183,6 +198,9 @@ export function buildServer(
 
   const hermesAdapter =
     dependencies.hermesAdapter ?? new HermesAdapter(hermesClient);
+  const mediaBranches = mediaClient.isConfigured()
+    ? new MediaBranchService(db, hermesAdapter, mediaClient)
+    : undefined;
 
   const statusService =
     dependencies.statusService ?? new StatusService(hermesAdapter);
@@ -207,11 +225,18 @@ export function buildServer(
       queueRepo,
       runRepo,
       sseHub,
+      mediaSync,
+      mediaService,
+      mediaBranches,
     );
 
   const draftPreferencesService =
     dependencies.draftPreferencesService ??
-    new DraftPreferencesService(draftRepo, new PreferencesRepository(db));
+    new DraftPreferencesService(
+      draftRepo,
+      new PreferencesRepository(db),
+      mediaService,
+    );
 
   const coordinator = new AdmissionCoordinator(
     db,
@@ -221,9 +246,12 @@ export function buildServer(
     convRepo,
     hermesAdapter,
     sseHub,
+    new MediaDispatchService(db, mediaClient),
   );
   dataRetention.start();
   coordinator.start();
+  mediaSync.start();
+  mediaBranches?.start();
 
   const queueRunService =
     dependencies.queueRunService ??
@@ -235,6 +263,7 @@ export function buildServer(
       runRepo,
       leaseRepo,
       hermesAdapter,
+      mediaService,
       wakeCoordinator: () => coordinator.wake(),
       reconcileCoordinator: (localRunId) =>
         coordinator.reconcileRun(localRunId),
@@ -260,12 +289,16 @@ export function buildServer(
   server.addHook("preClose", async () => {
     stopCoordinator();
     dataRetention.stop();
+    await mediaSync.stop();
+    await mediaBranches?.stop();
     closeSseHub();
   });
 
   server.addHook("onClose", async () => {
     stopCoordinator();
     dataRetention.stop();
+    await mediaSync.stop();
+    await mediaBranches?.stop();
     closeSseHub();
     if (ownsDatabase && db.open) db.close();
   });
@@ -290,6 +323,11 @@ export function buildServer(
     prefix: "/api/v1",
     queueRunService,
     sseHub,
+  });
+
+  server.register(mediaRoutes, {
+    prefix: "/api/v1",
+    mediaService,
   });
 
   // Serve static client in production

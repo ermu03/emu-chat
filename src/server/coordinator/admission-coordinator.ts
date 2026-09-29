@@ -20,6 +20,7 @@ import {
 } from "../domain/errors.js";
 import { withImmediateTransaction } from "../db/transaction.js";
 import { logger } from "../logging.js";
+import type { MediaDispatchService } from "../media/dispatch.js";
 
 type LeasePair = { global: string; conversation: string };
 
@@ -44,6 +45,7 @@ export class AdmissionCoordinator {
     private readonly conversationRepo: ConversationRepository,
     private readonly hermesAdapter: HermesAdapter,
     private readonly sseHub: SSEHub,
+    private readonly mediaDispatch?: MediaDispatchService,
   ) {}
 
   start(intervalMs = 2000): void {
@@ -348,12 +350,20 @@ export class AdmissionCoordinator {
   private async submit(run: RunEntity, item: QueueItemEntity): Promise<void> {
     let requestStarted = false;
     try {
-      if (!item.payload_text || !item.dispatch_session_id)
+      if (item.payload_text === null || !item.dispatch_session_id)
         throw new HermesProtocolError("Queue payload is incomplete");
+      const attachments = JSON.parse(
+        item.payload_attachments_json,
+      ) as unknown[];
+      const prompt = attachments.length
+        ? await this.mediaDispatch?.prepare(item)
+        : item.payload_text;
+      if (prompt === undefined)
+        throw new HermesProtocolError("Image dispatch service is unavailable");
       requestStarted = true;
       const admission = await this.hermesAdapter.startRun(
         item.dispatch_session_id,
-        { prompt: item.payload_text, idempotency_key: item.idempotency_key },
+        { prompt, idempotency_key: item.idempotency_key },
       );
       if (this.stopped || !this.ownsRunLease(run.id, item.conversation_id))
         return;

@@ -37,6 +37,9 @@ import {
 } from "../domain/errors.js";
 import type { HermesAdapter } from "../hermes/adapter.js";
 import type { SSEHub } from "../sse/sse-hub.js";
+import type { MediaSyncWorker } from "../media/sync.js";
+import type { MediaService } from "../media/service.js";
+import type { MediaBranchService } from "../media/branch.js";
 import type {
   HermesMessageItem,
   HermesSessionDetailResponse,
@@ -56,6 +59,9 @@ export class ConversationService {
     private readonly queueRepo: QueueRepository,
     private readonly runRepo: RunRepository,
     private readonly sseHub: SSEHub,
+    private readonly mediaSync?: MediaSyncWorker,
+    private readonly mediaService?: MediaService,
+    private readonly mediaBranches?: MediaBranchService,
   ) {}
 
   async listConversations(
@@ -107,6 +113,10 @@ export class ConversationService {
     this.conversationRepo.updateLastSeen(conversation.id, remote.updated_at);
     const refreshed =
       this.conversationRepo.findById(conversation.id) ?? conversation;
+    this.mediaSync?.enqueueRegistration(
+      refreshed.id,
+      refreshed.hermes_session_id,
+    );
     return this.toDetail(refreshed, remote);
   }
 
@@ -130,10 +140,20 @@ export class ConversationService {
         upstream.session_id,
       );
     }
+    this.mediaSync?.enqueueRegistration(conversation.id, upstream.session_id);
 
-    const items = upstream.messages.map((message) =>
-      this.toMessageItem(message),
-    );
+    let items = upstream.messages.map((message) => this.toMessageItem(message));
+    if (this.mediaService) {
+      items = await this.mediaService.decorateHistory(conversation.id, items);
+      if (
+        items.some(
+          (item) => item.role === "tool" && item.tool_name === "image_generate",
+        )
+      )
+        void this.mediaService
+          .reconcile(conversation.id)
+          .catch(() => undefined);
+    }
     return {
       items,
       effective_hermes_session_id: upstream.session_id,
@@ -153,6 +173,7 @@ export class ConversationService {
       data.title === undefined ? {} : { title: data.title },
     );
     const conversation = this.ensureConversation(remote);
+    this.mediaSync?.enqueueRegistration(conversation.id, remote.id);
     return this.toDetail(conversation, remote);
   }
 
@@ -235,6 +256,21 @@ export class ConversationService {
       remote.id,
     );
     const fork = this.ensureConversation(remote);
+    this.mediaSync?.enqueueRegistration(fork.id, remote.id);
+    if (this.mediaBranches) {
+      this.mediaBranches.record(
+        conversation.id,
+        conversation.hermes_session_id,
+        fork.id,
+        remote.id,
+        remote.message_count,
+      );
+      try {
+        await this.mediaBranches.syncOne(fork.id);
+      } catch {
+        this.mediaBranches.wake();
+      }
+    }
     return this.toDetail(fork, remote);
   }
 
@@ -275,6 +311,9 @@ export class ConversationService {
       throw new LocalConflictError(
         "Cannot delete a conversation with an active queue item",
       );
+    }
+    if (this.mediaBranches?.hasPendingSource(conversation.id)) {
+      throw new LocalConflictError("图片分支关联尚未完成，请稍后重试删除");
     }
 
     // Mark synchronously before any upstream await. The coordinator already

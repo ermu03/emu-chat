@@ -229,3 +229,21 @@ graph TD
     FastPoll --> UI
     SlowPoll --> UI
 ```
+
+## 8. 图片工作流与恢复
+
+```mermaid
+flowchart LR
+  Browser[浏览器图片与文字] --> Draft[草稿 CAS]
+  Draft --> Queue[现有队列]
+  Queue --> Bind[登记会话、引用与提交身份]
+  Bind --> Run[Hermes /v1/runs]
+  Run --> Hook[插件 Hook]
+  Hook --> Capture[来源记录与后台采集]
+  Capture --> Asset[稳定图片资源]
+  Run --> History[Hermes 权威历史]
+  History --> Reconcile[历史补偿与附件对账]
+  Reconcile --> Asset
+```
+
+上传成功后如果草稿保存冲突，图片仍保留在当前会话，用户可重试加入草稿。Run 派发一旦开始，完整输入被冻结；网络重试沿用同一个 operation 和幂等键。工具输出与图片保存是两个状态，重试采集不会新建 Run。会话压缩后登记有效 session 别名；分支只继承已复制消息的图片引用。删除先阻止新引用，持久化插件 scope 删除任务，待所有引用解除后延迟清理原文件。

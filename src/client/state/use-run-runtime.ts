@@ -300,12 +300,14 @@ export function useRunRuntime(
   const handleEditQueueItem = async (
     queueItemId: string,
     content: string,
+    attachments: import("../../shared/media-schemas.js").AttachmentRef[],
     expectedRevision: number,
   ) => {
     const target = captureTarget();
     if (!target) return;
     const item = await apiClient.patchQueueItem(queueItemId, {
       content,
+      attachments,
       expected_revision: expectedRevision,
     });
     if (!applyQueueItem(target, item) && captureTarget(target.conversationId))

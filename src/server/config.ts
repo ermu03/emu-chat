@@ -7,6 +7,7 @@ const ConfigSchema = z.object({
   dataDir: z.string().default("./data"),
   hermesBaseUrl: z.string().url().default("http://127.0.0.1:8642"),
   hermesApiKey: z.string().default(""),
+  mediaApiKey: z.string().default(""),
   logLevel: z
     .enum(["trace", "debug", "info", "warn", "error", "fatal"])
     .default("info"),
@@ -20,6 +21,7 @@ export type AppConfig = {
   sqliteDbPath: string;
   hermesBaseUrl: string;
   hermesApiKey: string;
+  mediaApiKey?: string;
   logLevel: "trace" | "debug" | "info" | "warn" | "error" | "fatal";
   isProduction: boolean;
 };
@@ -33,6 +35,7 @@ export function loadConfig(
     dataDir: env["EMU_CHAT_DATA_DIR"],
     hermesBaseUrl: env["HERMES_BASE_URL"],
     hermesApiKey: env["HERMES_API_KEY"],
+    mediaApiKey: env["EMU_MEDIA_API_KEY"],
     logLevel: env["LOG_LEVEL"],
     nodeEnv: env["NODE_ENV"],
   });
@@ -47,6 +50,7 @@ export function loadConfig(
     sqliteDbPath,
     hermesBaseUrl: parsed.hermesBaseUrl.replace(/\/+$/, ""),
     hermesApiKey: parsed.hermesApiKey,
+    mediaApiKey: parsed.mediaApiKey,
     logLevel: parsed.logLevel,
     isProduction: parsed.nodeEnv === "production",
   };

@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { ApiClientError, apiClient } from "../api/client.js";
 import type { ConversationSummary } from "../../shared/api-schemas.js";
+import type { MediaAsset } from "../../shared/media-schemas.js";
 import type { PendingUserMessage } from "../features/messages/message-view.js";
 import type { PendingQueueItem } from "../features/queue/queue-panel.js";
 import {
@@ -24,6 +25,7 @@ type PendingSubmission = {
   requestId: string;
   conversationId: string;
   content: string;
+  attachments: MediaAsset[];
   isFollowUp: boolean;
 };
 
@@ -64,28 +66,34 @@ export function useMessageSend(
   );
   const pendingUserMessage = useMemo<PendingUserMessage | null>(() => {
     if (
-      activeQueueItem?.content &&
+      activeQueueItem &&
+      (activeQueueItem.content || activeQueueItem.attachments.length > 0) &&
       !hasPersistedQueueMessage(messages, activeQueueItem)
     ) {
       return {
         id: `queue:${activeQueueItem.id}`,
-        content: activeQueueItem.content,
+        content: activeQueueItem.content ?? "",
+        attachments: activeQueueItem.attachments,
       };
     }
 
     if (
-      runDisplay?.promptContent &&
+      runDisplay &&
+      (runDisplay.promptContent || runDisplay.operationId) &&
       runDisplay.phase !== "settled" &&
       !messages.some(
         (message) =>
           message.role === "user" &&
           message.id >= runDisplay.afterMessageId &&
-          message.content === runDisplay.promptContent,
+          (runDisplay.operationId
+            ? message.media_operation_id === runDisplay.operationId
+            : message.content === runDisplay.promptContent),
       )
     ) {
       return {
         id: `run-prompt:${runDisplay.runId}`,
-        content: runDisplay.promptContent,
+        content: runDisplay.promptContent ?? "",
+        attachments: activeQueueItem?.attachments ?? [],
       };
     }
 
@@ -96,6 +104,7 @@ export function useMessageSend(
       ? {
           id: `submission:${submission.requestId}`,
           content: submission.content,
+          attachments: submission.attachments,
         }
       : null;
   }, [activePendingSubmissions, activeQueueItem, messages, runDisplay]);
@@ -108,26 +117,35 @@ export function useMessageSend(
         transitionSnapshot.activeRun,
       );
       if (
-        queueItem?.content &&
+        queueItem &&
+        (queueItem.content || queueItem.attachments.length > 0) &&
         !hasPersistedQueueMessage(transitionSnapshot.messages, queueItem)
       ) {
-        return { id: `queue:${queueItem.id}`, content: queueItem.content };
+        return {
+          id: `queue:${queueItem.id}`,
+          content: queueItem.content ?? "",
+          attachments: queueItem.attachments,
+        };
       }
 
       const display = transitionSnapshot.runDisplay;
       if (
-        display?.promptContent &&
+        display &&
+        (display.promptContent || display.operationId) &&
         display.phase !== "settled" &&
         !transitionSnapshot.messages.some(
           (message) =>
             message.role === "user" &&
             message.id >= display.afterMessageId &&
-            message.content === display.promptContent,
+            (display.operationId
+              ? message.media_operation_id === display.operationId
+              : message.content === display.promptContent),
         )
       ) {
         return {
           id: `run-prompt:${display.runId}`,
-          content: display.promptContent,
+          content: display.promptContent ?? "",
+          attachments: queueItem?.attachments ?? [],
         };
       }
 
@@ -140,6 +158,7 @@ export function useMessageSend(
         ? {
             id: `submission:${submission.requestId}`,
             content: submission.content,
+            attachments: submission.attachments,
           }
         : null;
     }, [pendingSubmissions, transitionSnapshot]);
@@ -165,6 +184,7 @@ export function useMessageSend(
         .map((entry) => ({
           id: `submission:${entry.requestId}`,
           content: entry.content,
+          attachments: entry.attachments,
         })),
     [activePendingSubmissions],
   );
@@ -172,7 +192,11 @@ export function useMessageSend(
     (entry) => !entry.isFollowUp,
   );
 
-  const handleSend = async (content: string, expectedDraftRevision: number) => {
+  const handleSend = async (
+    content: string,
+    attachments: MediaAsset[],
+    expectedDraftRevision: number,
+  ) => {
     if (!activeConversationId) throw new Error("请先选择会话");
     const conversationId = activeConversationId;
     const target = captureTarget(conversationId);
@@ -206,6 +230,7 @@ export function useMessageSend(
         requestId: pending.requestId,
         conversationId,
         content,
+        attachments,
         isFollowUp,
       },
     ]);
@@ -248,6 +273,7 @@ export function useMessageSend(
       return {
         draft: {
           content: result.draft.content,
+          attachments: result.draft.attachments,
           revision: result.draft.revision,
         },
       };

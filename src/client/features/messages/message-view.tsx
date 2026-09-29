@@ -24,6 +24,8 @@ import {
   UserRound,
 } from "lucide-react";
 import type { MessageItem } from "../../../shared/api-schemas.js";
+import type { MediaAsset } from "../../../shared/media-schemas.js";
+import { MediaAssets } from "../media/media-assets.js";
 import {
   type AssistantTurn,
   type ToolCallItem,
@@ -53,6 +55,7 @@ export interface MessageViewProps {
   onStopGenerating?: (() => void) | undefined;
   onReconcile?: (() => void) | undefined;
   onSelectPrompt?: ((prompt: string) => void) | undefined;
+  onReuseImage?: ((asset: MediaAsset) => void) | undefined;
   artifactConversationId?: string | null;
   allowArtifacts?: boolean;
   onOpenArtifact?:
@@ -67,6 +70,7 @@ export interface MessageViewProps {
 export interface PendingUserMessage {
   id: string;
   content: string;
+  attachments?: MediaAsset[];
 }
 
 const PROMPT_STARTERS = [
@@ -105,6 +109,7 @@ export const MessageView: React.FC<MessageViewProps> = ({
   onStopGenerating,
   onReconcile,
   onSelectPrompt,
+  onReuseImage,
   artifactConversationId = null,
   allowArtifacts = false,
   onOpenArtifact,
@@ -128,6 +133,9 @@ export const MessageView: React.FC<MessageViewProps> = ({
                 name: block.name,
                 callContent: block.callContent,
                 resultContent: block.resultContent,
+                ...(block.attachments
+                  ? { attachments: block.attachments }
+                  : {}),
                 resultPreview: block.resultPreview,
                 status: block.status,
                 ambiguous: block.ambiguous,
@@ -148,7 +156,14 @@ export const MessageView: React.FC<MessageViewProps> = ({
       return [];
     }
     if (turn.kind === "user") {
-      return [<UserTurnRow key={turn.id} message={turn.message} />];
+      return [
+        <UserTurnRow
+          key={turn.id}
+          message={turn.message}
+          conversationId={artifactConversationId}
+          onReuseImage={onReuseImage}
+        />,
+      ];
     }
     if (turn.kind === "system") {
       return [<SystemTurnRow key={turn.id} message={turn.message} />];
@@ -160,6 +175,7 @@ export const MessageView: React.FC<MessageViewProps> = ({
         artifactConversationId={artifactConversationId}
         allowArtifacts={allowArtifacts}
         onOpenArtifact={onOpenArtifact}
+        onReuseImage={onReuseImage}
       />,
     ];
   });
@@ -168,6 +184,8 @@ export const MessageView: React.FC<MessageViewProps> = ({
       <PendingUserRow
         key={pendingUserMessage.id}
         message={pendingUserMessage}
+        conversationId={artifactConversationId}
+        onReuseImage={onReuseImage}
       />,
     );
   }
@@ -179,6 +197,7 @@ export const MessageView: React.FC<MessageViewProps> = ({
         livePhase={runDisplay?.phase === "syncing" ? "syncing" : "streaming"}
         onStopGenerating={onStopGenerating}
         onReconcile={onReconcile}
+        onReuseImage={onReuseImage}
       />,
     );
   }
@@ -305,8 +324,12 @@ export const MessageView: React.FC<MessageViewProps> = ({
 
 const UserTurnRow = memo(function UserTurnRow({
   message,
+  conversationId,
+  onReuseImage,
 }: {
   message: MessageItem;
+  conversationId?: string | null | undefined;
+  onReuseImage?: ((asset: MediaAsset) => void) | undefined;
 }) {
   return (
     <article className="message-row user">
@@ -321,7 +344,12 @@ const UserTurnRow = memo(function UserTurnRow({
           </span>
         </div>
         <div className="message-body">
-          <MarkdownContent text={message.content} />
+          {message.content && <MarkdownContent text={message.content} />}
+          <MediaAssets
+            assets={message.attachments ?? []}
+            conversationId={conversationId}
+            {...(onReuseImage ? { onReuse: onReuseImage } : {})}
+          />
         </div>
       </div>
     </article>
@@ -361,6 +389,7 @@ const AssistantTurnRow = memo(function AssistantTurnRow({
   artifactConversationId,
   allowArtifacts,
   onOpenArtifact,
+  onReuseImage,
 }: {
   turn: Pick<AssistantTurn, "timestamp" | "blocks">;
   livePhase?: "streaming" | "syncing" | undefined;
@@ -368,6 +397,7 @@ const AssistantTurnRow = memo(function AssistantTurnRow({
   onReconcile?: (() => void) | undefined;
   artifactConversationId?: string | null;
   allowArtifacts?: boolean;
+  onReuseImage?: ((asset: MediaAsset) => void) | undefined;
   onOpenArtifact?:
     | ((
         artifact: Artifact,
@@ -435,6 +465,8 @@ const AssistantTurnRow = memo(function AssistantTurnRow({
               <ToolStepItem
                 key={block.id}
                 tool={block.tool}
+                conversationId={artifactConversationId}
+                onReuseImage={onReuseImage}
                 open={expandedTools[ordinal] ?? block.tool.isError}
                 onToggle={(open) =>
                   setExpandedTools((current) => ({
@@ -502,10 +534,14 @@ const ToolStepItem = memo(function ToolStepItem({
   tool,
   open,
   onToggle,
+  conversationId,
+  onReuseImage,
 }: {
   tool: ToolCallItem;
   open: boolean;
   onToggle: (open: boolean) => void;
+  conversationId?: string | null | undefined;
+  onReuseImage?: ((asset: MediaAsset) => void) | undefined;
 }) {
   const isCompleted =
     tool.status === "completed" || tool.resultContent !== undefined;
@@ -524,45 +560,56 @@ const ToolStepItem = memo(function ToolStepItem({
       : tool.resultPreview?.trim();
 
   return (
-    <details
-      className="tool-call-card tool-item-card"
-      open={open}
-      onToggle={(event) => onToggle(event.currentTarget.open)}
-    >
-      <summary className="tool-call-summary">
-        <strong>{tool.name}</strong>
-        <span className={`tool-call-status ${tool.isError ? "danger" : ""}`}>
-          {statusLabel}
-        </span>
-        <ChevronDown
-          size={13}
-          strokeWidth={1.8}
-          className="tool-call-chevron"
-        />
-      </summary>
-      <div className="tool-call-details">
-        {tool.callContent && (
-          <div className="tool-io-section">
-            <span className="tool-io-label">输入</span>
-            <pre>{tool.callContent}</pre>
-          </div>
-        )}
-        {result && (
-          <div className="tool-io-section">
-            <span className="tool-io-label">输出</span>
-            <pre>{result}</pre>
-          </div>
-        )}
-        {!tool.callContent && !result && <pre>等待结果…</pre>}
-      </div>
-    </details>
+    <div className="tool-step-with-media">
+      <details
+        className="tool-call-card tool-item-card"
+        open={open}
+        onToggle={(event) => onToggle(event.currentTarget.open)}
+      >
+        <summary className="tool-call-summary">
+          <strong>{tool.name}</strong>
+          <span className={`tool-call-status ${tool.isError ? "danger" : ""}`}>
+            {statusLabel}
+          </span>
+          <ChevronDown
+            size={13}
+            strokeWidth={1.8}
+            className="tool-call-chevron"
+          />
+        </summary>
+        <div className="tool-call-details">
+          {tool.callContent && (
+            <div className="tool-io-section">
+              <span className="tool-io-label">输入</span>
+              <pre>{tool.callContent}</pre>
+            </div>
+          )}
+          {result && (
+            <div className="tool-io-section">
+              <span className="tool-io-label">输出</span>
+              <pre>{result}</pre>
+            </div>
+          )}
+          {!tool.callContent && !result && <pre>等待结果…</pre>}
+        </div>
+      </details>
+      <MediaAssets
+        assets={tool.attachments ?? []}
+        conversationId={conversationId}
+        {...(onReuseImage ? { onReuse: onReuseImage } : {})}
+      />
+    </div>
   );
 });
 
 const PendingUserRow = memo(function PendingUserRow({
   message,
+  conversationId,
+  onReuseImage,
 }: {
   message: PendingUserMessage;
+  conversationId?: string | null | undefined;
+  onReuseImage?: ((asset: MediaAsset) => void) | undefined;
 }) {
   return (
     <article
@@ -576,7 +623,14 @@ const PendingUserRow = memo(function PendingUserRow({
         <div className="message-meta">
           <span className="message-role">MuMu</span>
         </div>
-        <div className="message-body">{message.content}</div>
+        <div className="message-body">
+          {message.content}
+          <MediaAssets
+            assets={message.attachments ?? []}
+            conversationId={conversationId}
+            {...(onReuseImage ? { onReuse: onReuseImage } : {})}
+          />
+        </div>
       </div>
     </article>
   );

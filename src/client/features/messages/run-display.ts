@@ -1,4 +1,5 @@
 import type { MessageItem } from "../../../shared/api-schemas.js";
+import type { MediaAsset } from "../../../shared/media-schemas.js";
 
 export type RunDisplayBlock =
   | { kind: "text"; id: string; content: string }
@@ -10,6 +11,7 @@ export type RunDisplayBlock =
       resultPreview: string;
       callContent?: string | undefined;
       resultContent?: string;
+      attachments?: MediaAsset[];
       toolCallId?: string;
       ambiguous: boolean;
     };
@@ -18,6 +20,7 @@ export interface RunDisplay {
   runId: string;
   afterMessageId: number;
   promptContent: string | null;
+  operationId: string | null;
   phase: "streaming" | "syncing" | "settled";
   lastSequence: number;
   blocks: RunDisplayBlock[];
@@ -28,11 +31,13 @@ export function createRunDisplay(
   runId: string,
   afterMessageId: number,
   promptContent: string | null,
+  operationId: string | null = null,
 ): RunDisplay {
   return {
     runId,
     afterMessageId,
     promptContent,
+    operationId,
     phase: "streaming",
     lastSequence: 0,
     blocks: [],
@@ -172,6 +177,7 @@ export function hydrateRunDisplay(
               call?.content ??
               block.callContent,
             resultContent: result.content,
+            ...(result.attachments ? { attachments: result.attachments } : {}),
           }
         : block,
     );

@@ -17,6 +17,7 @@ export interface ConversationEntity {
 export interface DraftEntity {
   conversation_id: string;
   content: string;
+  attachments_json: string;
   revision: number;
   created_at: string;
   updated_at: string;
@@ -39,6 +40,9 @@ export interface QueueItemEntity {
     | "rejected"
     | "cancelled";
   payload_text: string | null;
+  payload_attachments_json: string;
+  payload_run_input: string | null;
+  media_state: "pending" | "ready" | "failed";
   payload_sha256: string;
   payload_bytes: number;
   revision: number;

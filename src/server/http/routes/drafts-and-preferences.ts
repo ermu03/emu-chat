@@ -34,6 +34,7 @@ export const draftPreferencesRoutes: FastifyPluginAsync<
         id,
         body.content,
         body.expected_revision,
+        body.attachments,
       );
       return reply.status(200).send(draft);
     },

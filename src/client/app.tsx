@@ -32,6 +32,7 @@ import { getErrorMessage } from "./state/app-shell-utils.js";
 import { useConversationView } from "./state/use-conversation-view.js";
 import { useRunRuntime } from "./state/use-run-runtime.js";
 import { useMessageSend } from "./state/use-message-send.js";
+import type { MediaAsset } from "../shared/media-schemas.js";
 
 type PreferencePatch = Partial<
   Pick<PreferencesResponse, "theme" | "sidebar_width">
@@ -79,6 +80,9 @@ export function AppShell() {
   const routeConversationIdRef = useRef(routeConversationId);
   const conversationListLoadRef = useRef(0);
   const composerRef = useRef<DraftComposerHandle | null>(null);
+  const handleReuseImage = useCallback((asset: MediaAsset) => {
+    composerRef.current?.addAsset(asset);
+  }, []);
   routeConversationIdRef.current = routeConversationId;
 
   const loadStatus = useCallback(async (recheck = false) => {
@@ -616,6 +620,11 @@ export function AppShell() {
                       ? (prompt) => composerRef.current?.selectPrompt(prompt)
                       : undefined
                   }
+                  onReuseImage={
+                    hasActiveConversationView && draft && !composerDisabled
+                      ? handleReuseImage
+                      : undefined
+                  }
                   artifactConversationId={activeConversationId}
                   allowArtifacts={
                     hasActiveConversationView &&
@@ -675,11 +684,16 @@ export function AppShell() {
                         ref={composerRef}
                         conversationId={activeConversationId}
                         initialDraft={draft.content}
+                        initialAttachments={draft.attachments}
                         initialRevision={draft.revision}
                         sendShortcut={preferences?.send_shortcut ?? "mod_enter"}
                         onSaveDraft={handleSaveDraft}
-                        onSend={async (content, revision) => {
-                          const result = await handleSend(content, revision);
+                        onSend={async (content, attachments, revision) => {
+                          const result = await handleSend(
+                            content,
+                            attachments,
+                            revision,
+                          );
                           return result;
                         }}
                         disabled={composerDisabled}
