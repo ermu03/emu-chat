@@ -11,7 +11,7 @@ import { unified } from "unified";
 import remarkParse from "remark-parse";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
-import { parse as parseHtml } from "parse5";
+import { parse as parseHtml, parseFragment as parseHtmlFragment } from "parse5";
 
 export type ArtifactKind = "html" | "svg";
 
@@ -23,7 +23,7 @@ export interface Artifact {
   readonly blockIndex: number;
   readonly contentHash: string;
   readonly kind: ArtifactKind;
-  readonly origin: "fence" | "raw-svg";
+  readonly origin: "fence" | "raw-svg" | "raw-html";
   readonly title: string;
   readonly filename: string;
   readonly source: string;
@@ -51,7 +51,7 @@ export function extractArtifacts(
   if (
     !markdown.includes("```") &&
     !markdown.includes("~~~") &&
-    !markdown.includes("<svg")
+    !/<[a-z][\w:-]*\b/i.test(markdown)
   )
     return artifacts;
   const tree = parser.parse(markdown) as Root;
@@ -83,17 +83,32 @@ export function extractArtifacts(
     if (node.type === "html") {
       const offset = node.position?.start.offset;
       const end = node.position?.end.offset;
-      if (
-        offset !== undefined &&
-        end !== undefined &&
-        /^<svg\b/i.test(node.value)
-      )
+      if (offset === undefined || end === undefined) return;
+      if (/^<svg\b/i.test(node.value))
         blocks.push({
           offset,
           source: markdown.slice(offset, end),
           language: "svg",
           origin: "raw-svg",
         });
+      else {
+        const raw = markdown.slice(offset, end);
+        const completeDocument =
+          raw.length <= MAX_ARTIFACT_BYTES && isCompleteHtml(raw);
+        const fragmentEnd = completeDocument
+          ? raw.length
+          : completeHtmlFragmentEnd(raw.slice(0, MAX_ARTIFACT_BYTES + 1));
+        if (
+          fragmentEnd !== null &&
+          !raw.slice(fragmentEnd).trimStart().startsWith("<")
+        )
+          blocks.push({
+            offset,
+            source: raw.slice(0, fragmentEnd),
+            language: "html",
+            origin: "raw-html",
+          });
+      }
       return;
     }
     if (node.type === "paragraph") {
@@ -115,7 +130,7 @@ export function extractArtifacts(
     if (new TextEncoder().encode(block.source).byteLength > MAX_ARTIFACT_BYTES)
       continue;
     const candidate = classifyArtifact(block.language, block.source);
-    if (!candidate || (block.origin === "raw-svg" && !candidate.previewable))
+    if (!candidate || (block.origin !== "fence" && !candidate.previewable))
       continue;
     const contentHash = hashSource(block.source);
     const title = candidate.title.slice(0, 120);
@@ -169,9 +184,9 @@ function findInlineSvgSpans(
   return spans;
 }
 
-// Render validated, unfenced SVG as an ordinary code block at its original
-// location. ReactMarkdown still escapes raw HTML when no artifact is admitted.
-export function remarkRawSvgArtifacts(artifacts: Map<number, Artifact>) {
+// Render validated, unfenced artifacts as code blocks at their original
+// location. ReactMarkdown still escapes raw HTML when none is admitted.
+export function remarkRawArtifacts(artifacts: Map<number, Artifact>) {
   return (tree: Root) => {
     const visit = (parent: Root | Blockquote | ListItem) => {
       const children = parent.children as RootContent[];
@@ -180,13 +195,33 @@ export function remarkRawSvgArtifacts(artifacts: Map<number, Artifact>) {
         if (!child) continue;
         if (child.type === "html") {
           const artifact = artifacts.get(child.position?.start.offset ?? -1);
-          if (artifact?.origin === "raw-svg")
-            children[index] = {
+          if (artifact && artifact.origin !== "fence") {
+            const remainder = child.value.slice(artifact.source.length);
+            const code: Code = {
               type: "code",
-              lang: "svg",
+              lang: artifact.kind,
               value: artifact.source,
-              position: child.position,
+              position: child.position
+                ? {
+                    start: child.position.start,
+                    end: advancePoint(child.position.start, artifact.source),
+                  }
+                : undefined,
             };
+            if (remainder) {
+              children.splice(index, 1, code, {
+                type: "html",
+                value: remainder,
+                position: child.position
+                  ? {
+                      start: code.position!.end,
+                      end: child.position.end,
+                    }
+                  : undefined,
+              });
+              index++;
+            } else children[index] = code;
+          }
         } else if (child.type === "paragraph") {
           const replacements = splitRawSvgParagraph(child, artifacts);
           if (replacements) {
@@ -202,6 +237,22 @@ export function remarkRawSvgArtifacts(artifacts: Map<number, Artifact>) {
     };
     visit(tree);
   };
+}
+
+function advancePoint(
+  start: NonNullable<Code["position"]>["start"],
+  source: string,
+): NonNullable<Code["position"]>["end"] {
+  let line = start.line;
+  let column = start.column;
+  for (let index = 0; index < source.length; index++) {
+    const char = source[index];
+    if (char === "\n") {
+      line++;
+      column = 1;
+    } else column++;
+  }
+  return { line, column, offset: (start.offset ?? 0) + source.length };
 }
 
 function splitRawSvgParagraph(
@@ -312,18 +363,87 @@ function classifyArtifact(
       : null;
   }
 
-  if (language !== "html" || !isCompleteHtml(source)) return null;
+  if (language !== "html") return null;
+  const completeDocument = isCompleteHtml(source);
+  const fragmentEnd = completeDocument ? null : completeHtmlFragmentEnd(source);
+  if (
+    !completeDocument &&
+    (fragmentEnd === null || source.slice(fragmentEnd).trim())
+  )
+    return null;
   return {
     kind: "html",
-    title: parseHtmlTitle(source) || "HTML 成果",
+    title: (completeDocument && parseHtmlTitle(source)) || "HTML 成果",
     previewable: true,
   };
 }
 
 interface HtmlNode {
   nodeName: string;
+  tagName?: string;
   childNodes?: HtmlNode[];
   value?: string;
+  sourceCodeLocation?: {
+    startOffset: number;
+    endOffset: number;
+    endTag?: { startOffset: number };
+  };
+}
+
+const VOID_HTML_ELEMENTS = new Set([
+  "area",
+  "base",
+  "br",
+  "col",
+  "embed",
+  "hr",
+  "img",
+  "input",
+  "link",
+  "meta",
+  "param",
+  "source",
+  "track",
+  "wbr",
+]);
+
+function completeHtmlFragmentEnd(source: string): number | null {
+  const errors: string[] = [];
+  const fragment = parseHtmlFragment(source, {
+    sourceCodeLocationInfo: true,
+    onParseError: (error) => errors.push(error.code),
+  }) as HtmlNode;
+  if (errors.length) return null;
+  const first = fragment.childNodes?.find(
+    (node) => node.nodeName !== "#text" || Boolean(node.value?.trim()),
+  );
+  const location = first?.sourceCodeLocation;
+  if (
+    !first?.tagName ||
+    !location?.endTag ||
+    source.slice(0, location.startOffset).trim() ||
+    first.tagName === "html" ||
+    first.tagName === "head" ||
+    first.tagName === "body" ||
+    !hasExplicitHtmlClosures(first, source)
+  )
+    return null;
+  return location.endOffset;
+}
+
+function hasExplicitHtmlClosures(node: HtmlNode, source: string): boolean {
+  if (node.tagName && node.sourceCodeLocation) {
+    const location = node.sourceCodeLocation;
+    if (
+      !VOID_HTML_ELEMENTS.has(node.tagName) &&
+      !location.endTag &&
+      !source.slice(location.startOffset, location.endOffset).endsWith("/>")
+    )
+      return false;
+  }
+  return (node.childNodes ?? []).every((child) =>
+    hasExplicitHtmlClosures(child, source),
+  );
 }
 
 function parseHtmlTitle(source: string): string {

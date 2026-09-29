@@ -254,8 +254,9 @@ describe("AppShell async flows", () => {
     );
     const first = conversation("cv_artifact_first", "First");
     const second = conversation("cv_artifact_second", "Second");
-    const html =
-      "```html\n<html><head><title>Timer</title></head><body><button>Start</button></body></html>\n```";
+    const htmlFragment =
+      '<div style="background:#151921"><span>Active</span></div>';
+    const html = `\`\`\`html\n${htmlFragment}\n\`\`\``;
     const svg =
       '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><rect width="20" height="20"/></svg>';
     mockCommonApi([first, second]);
@@ -271,6 +272,12 @@ describe("AppShell async flows", () => {
                 3,
                 first.hermes_session_id,
                 "assistant",
+                `前面的说明：\n\n${htmlFragment}\n后面的说明。`,
+              ),
+              message(
+                4,
+                first.hermes_session_id,
+                "assistant",
                 `前面的说明：\n\n${svg}\n后面的说明。`,
               ),
             ]
@@ -283,9 +290,10 @@ describe("AppShell async flows", () => {
         <AppShell />
       </MemoryRouter>,
     );
-    const [preview, rawSvgPreview] = await screen.findAllByRole("button", {
-      name: "打开预览",
-    });
+    const [preview, rawHtmlPreview, rawSvgPreview] = await screen.findAllByRole(
+      "button",
+      { name: "打开预览" },
+    );
     const composer = screen.getByRole("textbox", {
       name: "消息输入框",
     }) as HTMLTextAreaElement;
@@ -301,6 +309,14 @@ describe("AppShell async flows", () => {
       expect(document.querySelector(".artifact-panel")).toBeNull(),
     );
     await waitFor(() => expect(document.activeElement).toBe(preview));
+    fireEvent.click(rawHtmlPreview!);
+    const htmlFrame = document.querySelector(".artifact-html-frame");
+    expect(htmlFrame?.getAttribute("srcdoc")).toContain(htmlFragment);
+    expect(htmlFrame?.getAttribute("srcdoc")).not.toContain("后面的说明。");
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() =>
+      expect(document.querySelector(".artifact-panel")).toBeNull(),
+    );
     fireEvent.click(rawSvgPreview!);
     expect(document.querySelector(".artifact-svg-stage img")).not.toBeNull();
     fireEvent.keyDown(document, { key: "Escape" });
