@@ -9,6 +9,8 @@ import type {
 import { ConversationList } from "./features/conversations/conversation-list.js";
 import { UNTITLED_CONVERSATION_LABEL } from "./features/conversations/conversation-title.js";
 import { MessageView } from "./features/messages/message-view.js";
+import { ArtifactPanel } from "./features/artifacts/artifact-panel.js";
+import { useArtifactPreview } from "./features/artifacts/use-artifact-preview.js";
 import {
   DraftComposer,
   type DraftComposerHandle,
@@ -63,6 +65,7 @@ export function AppShell() {
   const [activeConversationId, setActiveConversationId] = useState<
     string | null
   >(null);
+  const artifactPreview = useArtifactPreview(activeConversationId);
   const [preferences, setPreferences] = useState<PreferencesResponse | null>(
     null,
   );
@@ -554,131 +557,155 @@ export function AppShell() {
               </div>
             )}
 
-            <MessageView
-              key={
-                hasTargetMessages
-                  ? activeConversationId
-                  : (transitionSnapshot?.conversationId ?? activeConversationId)
-              }
-              messages={
-                hasTargetMessages
-                  ? messages
-                  : (transitionSnapshot?.messages ?? [])
-              }
-              loading={!hasTargetMessages && !transitionSnapshot}
-              hasMoreEarlier={hasActiveConversationView && hasMoreEarlier}
-              loadingEarlier={hasActiveConversationView && loadingEarlier}
-              onLoadEarlier={handleLoadEarlier}
-              pendingUserMessage={
-                hasTargetMessages
-                  ? pendingUserMessage
-                  : transitionPendingUserMessage
-              }
-              isGenerating={
-                hasTargetMessages
-                  ? isAssistantReplying
-                  : transitionIsAssistantReplying
-              }
-              runDisplay={
-                hasTargetMessages
-                  ? runDisplay
-                  : (transitionSnapshot?.runDisplay ?? null)
-              }
-              activeRunId={
-                hasTargetMessages
-                  ? (visibleRun?.id ?? null)
-                  : (transitionSnapshot?.activeRun?.id ?? null)
-              }
-              onStopGenerating={
-                showStop ? () => void handleStopRun() : undefined
-              }
-              onReconcile={
-                showReconcile
-                  ? () => void handleReconcile()
-                  : hasTargetMessages &&
-                      runDisplay?.phase === "syncing" &&
-                      activeConversationId
-                    ? () =>
-                        void runtime.refreshRuntime(
-                          activeConversationId,
-                          runDisplay.runId,
-                        )
-                    : undefined
-              }
-              onSelectPrompt={
-                hasActiveConversationView && draft && !composerDisabled
-                  ? (prompt) => composerRef.current?.selectPrompt(prompt)
-                  : undefined
-              }
-            />
+            <div className="workspace-body">
+              <div className="chat-column">
+                <MessageView
+                  key={
+                    hasTargetMessages
+                      ? activeConversationId
+                      : (transitionSnapshot?.conversationId ??
+                        activeConversationId)
+                  }
+                  messages={
+                    hasTargetMessages
+                      ? messages
+                      : (transitionSnapshot?.messages ?? [])
+                  }
+                  loading={!hasTargetMessages && !transitionSnapshot}
+                  hasMoreEarlier={hasActiveConversationView && hasMoreEarlier}
+                  loadingEarlier={hasActiveConversationView && loadingEarlier}
+                  onLoadEarlier={handleLoadEarlier}
+                  pendingUserMessage={
+                    hasTargetMessages
+                      ? pendingUserMessage
+                      : transitionPendingUserMessage
+                  }
+                  isGenerating={
+                    hasTargetMessages
+                      ? isAssistantReplying
+                      : transitionIsAssistantReplying
+                  }
+                  runDisplay={
+                    hasTargetMessages
+                      ? runDisplay
+                      : (transitionSnapshot?.runDisplay ?? null)
+                  }
+                  activeRunId={
+                    hasTargetMessages
+                      ? (visibleRun?.id ?? null)
+                      : (transitionSnapshot?.activeRun?.id ?? null)
+                  }
+                  onStopGenerating={
+                    showStop ? () => void handleStopRun() : undefined
+                  }
+                  onReconcile={
+                    showReconcile
+                      ? () => void handleReconcile()
+                      : hasTargetMessages &&
+                          runDisplay?.phase === "syncing" &&
+                          activeConversationId
+                        ? () =>
+                            void runtime.refreshRuntime(
+                              activeConversationId,
+                              runDisplay.runId,
+                            )
+                        : undefined
+                  }
+                  onSelectPrompt={
+                    hasActiveConversationView && draft && !composerDisabled
+                      ? (prompt) => composerRef.current?.selectPrompt(prompt)
+                      : undefined
+                  }
+                  artifactConversationId={activeConversationId}
+                  allowArtifacts={
+                    hasActiveConversationView &&
+                    !isLiveRun(visibleRun) &&
+                    !hasPendingPrimarySubmission &&
+                    (runDisplay === null || runDisplay.phase === "settled")
+                  }
+                  onOpenArtifact={artifactPreview.openArtifact}
+                />
 
-            <div className="composer-shell">
-              <div className="composer-inner">
-                {admissionReviewItem && activeConversationId && (
-                  <AdmissionReviewPanel
-                    key={admissionReviewItem.id}
-                    item={admissionReviewItem}
-                    onRefreshHistory={async () => {
-                      const target = view.captureTarget(activeConversationId);
-                      if (!target) return;
-                      await view.refreshLatestMessages(
-                        target,
-                        admissionReviewItem.local_run_id ?? undefined,
-                      );
-                      if (view.isCurrentTarget(target))
-                        await runtime.refreshRuntime(target.conversationId);
-                    }}
-                    onResumeQueue={async () => {
-                      const target = view.captureTarget(activeConversationId);
-                      if (!target) return;
-                      const version = view.readRuntime(target)?.queueVersion;
-                      const resumed = await apiClient.resumeQueue(
-                        target.conversationId,
-                      );
-                      view.applyQueue(target, resumed, version);
-                      if (view.isCurrentTarget(target))
-                        void runtime.refreshRuntime(target.conversationId);
-                    }}
-                  />
-                )}
-                {queueOpen &&
-                  (queuedMessages.length > 0 ||
-                    pendingQueueItems.length > 0) && (
-                    <QueuePanel
-                      isOpen={queueOpen}
-                      onClose={closeQueuePanel}
-                      items={queuedMessages}
-                      pendingItems={pendingQueueItems}
-                      onCancelItem={handleCancelQueueItem}
-                      onEditItem={handleEditQueueItem}
-                    />
-                  )}
-                {hasActiveConversationView && draft ? (
-                  <DraftComposer
-                    ref={composerRef}
-                    conversationId={activeConversationId}
-                    initialDraft={draft.content}
-                    initialRevision={draft.revision}
-                    sendShortcut={preferences?.send_shortcut ?? "mod_enter"}
-                    onSaveDraft={handleSaveDraft}
-                    onSend={async (content, revision) => {
-                      const result = await handleSend(content, revision);
-                      return result;
-                    }}
-                    disabled={composerDisabled}
-                    sendDisabled={sendDisabled}
-                  />
-                ) : (
-                  <div className="composer-container composer-loading">
-                    正在准备输入框...
+                <div className="composer-shell">
+                  <div className="composer-inner">
+                    {admissionReviewItem && activeConversationId && (
+                      <AdmissionReviewPanel
+                        key={admissionReviewItem.id}
+                        item={admissionReviewItem}
+                        onRefreshHistory={async () => {
+                          const target =
+                            view.captureTarget(activeConversationId);
+                          if (!target) return;
+                          await view.refreshLatestMessages(
+                            target,
+                            admissionReviewItem.local_run_id ?? undefined,
+                          );
+                          if (view.isCurrentTarget(target))
+                            await runtime.refreshRuntime(target.conversationId);
+                        }}
+                        onResumeQueue={async () => {
+                          const target =
+                            view.captureTarget(activeConversationId);
+                          if (!target) return;
+                          const version =
+                            view.readRuntime(target)?.queueVersion;
+                          const resumed = await apiClient.resumeQueue(
+                            target.conversationId,
+                          );
+                          view.applyQueue(target, resumed, version);
+                          if (view.isCurrentTarget(target))
+                            void runtime.refreshRuntime(target.conversationId);
+                        }}
+                      />
+                    )}
+                    {queueOpen &&
+                      (queuedMessages.length > 0 ||
+                        pendingQueueItems.length > 0) && (
+                        <QueuePanel
+                          isOpen={queueOpen}
+                          onClose={closeQueuePanel}
+                          items={queuedMessages}
+                          pendingItems={pendingQueueItems}
+                          onCancelItem={handleCancelQueueItem}
+                          onEditItem={handleEditQueueItem}
+                        />
+                      )}
+                    {hasActiveConversationView && draft ? (
+                      <DraftComposer
+                        ref={composerRef}
+                        conversationId={activeConversationId}
+                        initialDraft={draft.content}
+                        initialRevision={draft.revision}
+                        sendShortcut={preferences?.send_shortcut ?? "mod_enter"}
+                        onSaveDraft={handleSaveDraft}
+                        onSend={async (content, revision) => {
+                          const result = await handleSend(content, revision);
+                          return result;
+                        }}
+                        disabled={composerDisabled}
+                        sendDisabled={sendDisabled}
+                      />
+                    ) : (
+                      <div className="composer-container composer-loading">
+                        正在准备输入框...
+                      </div>
+                    )}
+                    {status?.status !== "healthy" && (
+                      <div className="composer-hint">
+                        Hermes 恢复后即可发送，草稿会继续保存。
+                      </div>
+                    )}
                   </div>
-                )}
-                {status?.status !== "healthy" && (
-                  <div className="composer-hint">
-                    Hermes 恢复后即可发送，草稿会继续保存。
-                  </div>
-                )}
+                </div>
               </div>
+              {artifactPreview.selection && (
+                <ArtifactPanel
+                  key={artifactPreview.selection.instanceId}
+                  artifact={artifactPreview.selection.artifact}
+                  initialTab={artifactPreview.selection.initialTab}
+                  onClose={artifactPreview.closeArtifact}
+                />
+              )}
             </div>
           </>
         ) : (

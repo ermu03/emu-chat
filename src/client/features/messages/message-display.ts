@@ -14,7 +14,14 @@ export interface ToolCallItem {
 export type TurnStep =
   | { kind: "reasoning"; id: string; content: string }
   | { kind: "tool"; id: string; tool: ToolCallItem }
-  | { kind: "text"; id: string; content: string };
+  | {
+      kind: "text";
+      id: string;
+      content: string;
+      messageId?: number;
+      sessionId?: string;
+      artifactEligible?: boolean;
+    };
 
 export interface AssistantTurn {
   kind: "assistant_turn";
@@ -180,6 +187,9 @@ function buildAssistantTurn(chunk: MessageItem[]): AssistantTurn {
             kind: "text",
             id: `step_text_${msg.id}`,
             content: msg.content.trim(),
+            messageId: msg.id,
+            sessionId: msg.session_id,
+            artifactEligible: false,
           });
         }
         for (const call of msg.tool_calls) {
@@ -213,6 +223,9 @@ function buildAssistantTurn(chunk: MessageItem[]): AssistantTurn {
           kind: "text",
           id: `step_text_${msg.id}`,
           content: msg.content.trim(),
+          messageId: msg.id,
+          sessionId: msg.session_id,
+          artifactEligible: true,
         });
       }
     } else if (msg.role === "tool") {

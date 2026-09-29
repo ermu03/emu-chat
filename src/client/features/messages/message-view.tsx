@@ -32,6 +32,13 @@ import {
   groupMessagesIntoTurns,
 } from "./message-display.js";
 import type { RunDisplay } from "./run-display.js";
+import {
+  downloadArtifact,
+  extractArtifacts,
+  type Artifact,
+  type ArtifactSource,
+} from "../artifacts/artifact.js";
+import type { ArtifactTab } from "../artifacts/use-artifact-preview.js";
 
 export interface MessageViewProps {
   messages: MessageItem[];
@@ -46,6 +53,15 @@ export interface MessageViewProps {
   onStopGenerating?: (() => void) | undefined;
   onReconcile?: (() => void) | undefined;
   onSelectPrompt?: ((prompt: string) => void) | undefined;
+  artifactConversationId?: string | null;
+  allowArtifacts?: boolean;
+  onOpenArtifact?:
+    | ((
+        artifact: Artifact,
+        trigger: HTMLButtonElement,
+        tab: ArtifactTab,
+      ) => void)
+    | undefined;
 }
 
 export interface PendingUserMessage {
@@ -89,6 +105,9 @@ export const MessageView: React.FC<MessageViewProps> = ({
   onStopGenerating,
   onReconcile,
   onSelectPrompt,
+  artifactConversationId = null,
+  allowArtifacts = false,
+  onOpenArtifact,
 }) => {
   const turns = useMemo(() => groupMessagesIntoTurns(messages), [messages]);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -138,6 +157,9 @@ export const MessageView: React.FC<MessageViewProps> = ({
       <AssistantTurnRow
         key={turn.id === canonicalTurnId ? `run:${runDisplay?.runId}` : turn.id}
         turn={turn}
+        artifactConversationId={artifactConversationId}
+        allowArtifacts={allowArtifacts}
+        onOpenArtifact={onOpenArtifact}
       />,
     ];
   });
@@ -336,11 +358,23 @@ const AssistantTurnRow = memo(function AssistantTurnRow({
   livePhase,
   onStopGenerating,
   onReconcile,
+  artifactConversationId,
+  allowArtifacts,
+  onOpenArtifact,
 }: {
   turn: Pick<AssistantTurn, "timestamp" | "blocks">;
   livePhase?: "streaming" | "syncing" | undefined;
   onStopGenerating?: (() => void) | undefined;
   onReconcile?: (() => void) | undefined;
+  artifactConversationId?: string | null;
+  allowArtifacts?: boolean;
+  onOpenArtifact?:
+    | ((
+        artifact: Artifact,
+        trigger: HTMLButtonElement,
+        tab: ArtifactTab,
+      ) => void)
+    | undefined;
 }) {
   const [expandedTools, setExpandedTools] = useState<Record<number, boolean>>(
     {},
@@ -430,7 +464,23 @@ const AssistantTurnRow = memo(function AssistantTurnRow({
               key={block.id}
               className={`message-body ${livePhase === "streaming" && index === turn.blocks.length - 1 ? "is-streaming" : ""}`}
             >
-              <MarkdownContent text={block.content} />
+              <MarkdownContent
+                text={block.content}
+                artifactSource={
+                  allowArtifacts &&
+                  artifactConversationId &&
+                  block.artifactEligible &&
+                  block.messageId !== undefined &&
+                  block.sessionId
+                    ? {
+                        conversationId: artifactConversationId,
+                        sessionId: block.sessionId,
+                        messageId: block.messageId,
+                      }
+                    : undefined
+                }
+                onOpenArtifact={onOpenArtifact}
+              />
             </div>
           );
         })}
@@ -535,9 +585,19 @@ const PendingUserRow = memo(function PendingUserRow({
 const CodeBlock = memo(function CodeBlock({
   className,
   children,
+  artifact,
+  onOpenArtifact,
 }: {
   className?: string | undefined;
   children: React.ReactNode;
+  artifact?: Artifact | undefined;
+  onOpenArtifact?:
+    | ((
+        artifact: Artifact,
+        trigger: HTMLButtonElement,
+        tab: ArtifactTab,
+      ) => void)
+    | undefined;
 }) {
   const [copied, setCopied] = useState(false);
   const language = className?.match(/language-([\w-]+)/)?.[1] ?? "";
@@ -555,7 +615,7 @@ const CodeBlock = memo(function CodeBlock({
       return "";
     };
 
-    const textToCopy = extractText(children);
+    const textToCopy = artifact?.source ?? extractText(children);
     if (!textToCopy) return;
 
     if (navigator.clipboard?.writeText) {
@@ -567,7 +627,7 @@ const CodeBlock = memo(function CodeBlock({
         })
         .catch(() => {});
     }
-  }, [children]);
+  }, [artifact, children]);
 
   return (
     <div className="message-code">
@@ -587,6 +647,41 @@ const CodeBlock = memo(function CodeBlock({
           )}
           <span>{copied ? "已复制" : "复制代码"}</span>
         </button>
+        {artifact && (
+          <div className="artifact-code-actions">
+            <span className="artifact-code-name" title={artifact.title}>
+              {artifact.title}
+            </span>
+            {artifact.previewable ? (
+              <button
+                type="button"
+                onClick={(event) =>
+                  onOpenArtifact?.(artifact, event.currentTarget, "preview")
+                }
+              >
+                打开预览
+              </button>
+            ) : (
+              <span
+                className="artifact-code-invalid"
+                title="请输出完整独立的 SVG"
+              >
+                SVG 无效
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={(event) =>
+                onOpenArtifact?.(artifact, event.currentTarget, "source")
+              }
+            >
+              查看源码
+            </button>
+            <button type="button" onClick={() => downloadArtifact(artifact)}>
+              下载
+            </button>
+          </div>
+        )}
       </div>
       <pre>
         <code className={className}>{children}</code>
@@ -597,9 +692,31 @@ const CodeBlock = memo(function CodeBlock({
 
 const MarkdownContent = memo(function MarkdownContent({
   text,
+  artifactSource,
+  onOpenArtifact,
 }: {
   text: string;
+  artifactSource?: ArtifactSource | undefined;
+  onOpenArtifact?:
+    | ((
+        artifact: Artifact,
+        trigger: HTMLButtonElement,
+        tab: ArtifactTab,
+      ) => void)
+    | undefined;
 }) {
+  const artifacts = useMemo(
+    () =>
+      artifactSource
+        ? extractArtifacts(text, artifactSource)
+        : new Map<number, Artifact>(),
+    [
+      text,
+      artifactSource?.conversationId,
+      artifactSource?.sessionId,
+      artifactSource?.messageId,
+    ],
+  );
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm, remarkMath]}
@@ -608,7 +725,7 @@ const MarkdownContent = memo(function MarkdownContent({
         pre({ children }) {
           return <>{children}</>;
         },
-        code({ className, children, ...props }) {
+        code({ className, children, node, ...props }) {
           const isInline =
             !className &&
             typeof children === "string" &&
@@ -620,7 +737,19 @@ const MarkdownContent = memo(function MarkdownContent({
               </code>
             );
           }
-          return <CodeBlock className={className}>{children}</CodeBlock>;
+          return (
+            <CodeBlock
+              className={className}
+              artifact={
+                node?.position?.start.offset === undefined
+                  ? undefined
+                  : artifacts.get(node.position.start.offset)
+              }
+              onOpenArtifact={onOpenArtifact}
+            >
+              {children}
+            </CodeBlock>
+          );
         },
       }}
     >

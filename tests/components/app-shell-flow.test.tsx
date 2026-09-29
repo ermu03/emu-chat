@@ -243,6 +243,56 @@ afterEach(() => {
 });
 
 describe("AppShell async flows", () => {
+  it("runs only saved assistant artifacts and clears the selected preview on conversation switch", async () => {
+    const first = conversation("cv_artifact_first", "First");
+    const second = conversation("cv_artifact_second", "Second");
+    const html =
+      "```html\n<html><head><title>Timer</title></head><body><button>Start</button></body></html>\n```";
+    mockCommonApi([first, second]);
+    vi.spyOn(apiClient, "getQueue").mockImplementation(async (id) => queue(id));
+    vi.spyOn(apiClient, "listMessages").mockImplementation(async (id) =>
+      messageList(
+        id,
+        id === first.conversation_id
+          ? [
+              message(1, first.hermes_session_id, "user", html),
+              message(2, first.hermes_session_id, "assistant", html),
+            ]
+          : [],
+      ),
+    );
+
+    render(
+      <MemoryRouter initialEntries={["/conversations/cv_artifact_first"]}>
+        <AppShell />
+      </MemoryRouter>,
+    );
+    const preview = await screen.findByRole("button", { name: "打开预览" });
+    const composer = screen.getByRole("textbox", {
+      name: "消息输入框",
+    }) as HTMLTextAreaElement;
+    fireEvent.change(composer, {
+      target: { value: "Please add a pause button" },
+    });
+    fireEvent.click(preview);
+    expect(document.querySelector(".artifact-html-frame")).not.toBeNull();
+    expect(composer.value).toBe("Please add a pause button");
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() =>
+      expect(document.querySelector(".artifact-panel")).toBeNull(),
+    );
+    await waitFor(() => expect(document.activeElement).toBe(preview));
+    fireEvent.click(preview);
+
+    fireEvent.click(
+      screen.getByText("Second", { selector: ".conversation-title" }),
+    );
+    await waitFor(() =>
+      expect(document.querySelector(".artifact-panel")).toBeNull(),
+    );
+    expect(screen.queryByRole("button", { name: "打开预览" })).toBeNull();
+  });
   it("keeps an untitled session untitled when editing without changes or pinning", async () => {
     const untitled = conversation("cv_untitled", "");
     mockCommonApi([untitled]);
