@@ -163,9 +163,8 @@ flowchart TD
     AppShell --> Runtime
     AppShell --> Send
     
-    Sidebar --> ConversationList["ConversationList<br/>(会话列表、重命名与侧栏调宽)"]
+    Sidebar --> ConversationList["ConversationList<br/>(会话、连接状态与重检、侧栏调宽)"]
     Main --> Toolbar["顶部工具栏<br/>(标题重命名、主题切换)"]
-    Main --> StatusBar["StatusBar<br/>(展示 Hermes 连接状态)"]
     
     Main --> MessageView["MessageView<br/>(渲染已有聊天记录，流式更新)"]
     Main --> QueuePanel["QueuePanel<br/>(折叠/展开，管理待发序列)"]
@@ -174,7 +173,7 @@ flowchart TD
     Overlay --> ApprovalDialog["ApprovalDialog<br/>(需要用户介入批准的流程)"]
 ```
 
-页面没有设置抽屉；当前提供主题快捷切换和侧栏拖拽调宽。主题、侧栏宽度与发送快捷键的持久化接口仍由 `DraftPreferencesService` 提供。
+页面没有专用设置抽屉；当前提供主题快捷切换和侧栏拖拽调宽。主题、侧栏宽度与发送快捷键的持久化接口仍由 `DraftPreferencesService` 提供。
 
 ## 5. 前后端共享层 (`src/shared/`)
 

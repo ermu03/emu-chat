@@ -6,7 +6,6 @@ import type {
   ConversationSummary,
   PreferencesResponse,
 } from "../shared/api-schemas.js";
-import { StatusBar } from "./features/status/status-bar.js";
 import { ConversationList } from "./features/conversations/conversation-list.js";
 import { MessageView } from "./features/messages/message-view.js";
 import {
@@ -57,6 +56,7 @@ export function AppShell() {
 
   const [status, setStatus] = useState<ConnectionStatusResponse | null>(null);
   const [statusLoading, setStatusLoading] = useState(false);
+  const [statusError, setStatusError] = useState<string | null>(null);
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [conversationsLoading, setConversationsLoading] = useState(false);
   const [activeConversationId, setActiveConversationId] = useState<
@@ -79,6 +79,7 @@ export function AppShell() {
 
   const loadStatus = useCallback(async (recheck = false) => {
     setStatusLoading(true);
+    setStatusError(null);
     try {
       const data = recheck
         ? await apiClient.recheckStatus()
@@ -86,7 +87,8 @@ export function AppShell() {
       setStatus(data);
     } catch (error) {
       setStatus(null);
-      setWorkspaceError(getErrorMessage(error, "无法读取 Hermes 连接状态"));
+      const message = getErrorMessage(error, "无法读取 Hermes 连接状态");
+      setStatusError(message);
     } finally {
       setStatusLoading(false);
     }
@@ -411,7 +413,10 @@ export function AppShell() {
         onToggleCollapse={() => setSidebarCollapsed((collapsed) => !collapsed)}
         mobileOpen={sidebarOpen}
         onMobileClose={() => setSidebarOpen(false)}
-        status={status?.status}
+        status={status}
+        statusLoading={statusLoading}
+        statusError={statusError}
+        onRecheckStatus={() => void loadStatus(true)}
       />
 
       <main className="app-main">
@@ -509,12 +514,6 @@ export function AppShell() {
                 </button>
               </div>
             </header>
-
-            <StatusBar
-              status={status}
-              loading={statusLoading}
-              onRecheck={() => void loadStatus(true)}
-            />
 
             {activeConversationId && !hasTargetMessages && (
               <div
@@ -720,11 +719,6 @@ export function AppShell() {
                 </button>
               </div>
             </header>
-            <StatusBar
-              status={status}
-              loading={statusLoading}
-              onRecheck={() => void loadStatus(true)}
-            />
             <div className="message-empty">
               <div className="empty-greeting">
                 <div className="empty-greeting-mark" aria-hidden="true">

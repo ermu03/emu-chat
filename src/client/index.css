@@ -403,7 +403,8 @@ textarea:focus-visible {
 
 .conversation-sidebar.is-collapsed .brand-name,
 .conversation-sidebar.is-collapsed .conversation-list-scroll,
-.conversation-sidebar.is-collapsed .sidebar-footer span:not(.status-dot) {
+.conversation-sidebar.is-collapsed .sidebar-status-copy,
+.conversation-sidebar.is-collapsed .sidebar-footer-provider {
   display: none;
 }
 
@@ -423,7 +424,10 @@ textarea:focus-visible {
 }
 
 .conversation-sidebar.is-collapsed .sidebar-footer {
+  flex-direction: column;
   justify-content: center;
+  gap: 10px;
+  margin-top: auto;
   padding-right: 0;
   padding-left: 0;
 }
@@ -614,8 +618,44 @@ textarea:focus-visible {
 }
 
 .sidebar-footer .status-dot {
+  flex: 0 0 7px;
   width: 7px;
   height: 7px;
+}
+
+.sidebar-status-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1.35;
+}
+
+.sidebar-status-detail {
+  color: var(--ink-faint);
+  overflow-wrap: anywhere;
+}
+
+.sidebar-status-recheck {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  color: var(--accent);
+  background: transparent;
+}
+
+.sidebar-status-recheck:hover:not(:disabled) {
+  background: var(--surface-subtle);
+}
+
+.sidebar-status-recheck:disabled {
+  cursor: wait;
+  opacity: 0.55;
 }
 
 .sidebar-footer-provider {
@@ -741,30 +781,6 @@ textarea:focus-visible {
 .status-dot.error {
   background: var(--danger);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 22%, transparent);
-}
-
-.status-strip {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 34px;
-  padding: 0 22px;
-  border-bottom: 1px solid var(--line);
-  color: var(--ink-soft);
-  font-size: 12px;
-  background: color-mix(in srgb, var(--surface-subtle) 60%, transparent);
-}
-
-.status-strip button {
-  margin-left: auto;
-  color: var(--accent);
-  background: transparent;
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.status-strip button:hover {
-  text-decoration: underline;
 }
 
 /* Message stream */
@@ -2179,12 +2195,6 @@ details[open] > summary .tool-call-chevron {
 
   .composer-footer {
     padding-left: 12px;
-  }
-
-  .status-strip {
-    min-height: 32px;
-    padding-right: 14px;
-    padding-left: 14px;
   }
 }
 

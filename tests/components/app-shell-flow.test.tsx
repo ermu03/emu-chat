@@ -14,6 +14,7 @@ import { apiClient } from "../../src/client/api/client.js";
 import type {
   ConversationDetailResponse,
   ConversationSummary,
+  ConnectionStatusResponse,
   DraftResponse,
   MessageItem,
   MessageListResponse,
@@ -242,6 +243,80 @@ afterEach(() => {
 });
 
 describe("AppShell async flows", () => {
+  it("restores sending from the sidebar after status failures without losing the draft", async () => {
+    const summary = conversation("cv_status_recheck", "Status recovery");
+    const firstRecheck = deferred<ConnectionStatusResponse>();
+    const secondRecheck = deferred<ConnectionStatusResponse>();
+    mockCommonApi([summary]);
+    vi.spyOn(apiClient, "getStatus").mockRejectedValueOnce(
+      new Error("首次状态请求失败"),
+    );
+    const recheck = vi
+      .spyOn(apiClient, "recheckStatus")
+      .mockImplementationOnce(() => firstRecheck.promise)
+      .mockImplementationOnce(() => secondRecheck.promise);
+    vi.spyOn(apiClient, "getQueue").mockResolvedValue(
+      queue(summary.conversation_id),
+    );
+    vi.spyOn(apiClient, "listMessages").mockImplementation(async (id) =>
+      messageList(id, []),
+    );
+    vi.spyOn(apiClient, "getDraft").mockResolvedValue(
+      draft(summary.conversation_id, "未发送草稿", 1),
+    );
+    vi.spyOn(apiClient, "putDraft").mockImplementation(async (id, body) =>
+      draft(id, body.content, body.expected_revision + 1),
+    );
+
+    render(
+      <MemoryRouter initialEntries={["/conversations/cv_status_recheck"]}>
+        <AppShell />
+      </MemoryRouter>,
+    );
+    const input = (await screen.findByRole("textbox", {
+      name: "消息输入框",
+    })) as HTMLTextAreaElement;
+    await screen.findByText("首次状态请求失败");
+    fireEvent.change(input, { target: { value: "未发送草稿，继续写" } });
+    const sendButton = screen.getByRole("button", { name: /发送（/ });
+    expect((sendButton as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "折叠侧栏" }));
+    const sidebar = screen.getByRole("complementary", { name: "会话列表" });
+    expect(sidebar.classList.contains("is-collapsed")).toBe(true);
+    const recheckButton = screen.getByRole("button", {
+      name: "重新检测 Hermes 连接状态",
+    }) as HTMLButtonElement;
+    fireEvent.click(recheckButton);
+    await waitFor(() => expect(recheck).toHaveBeenCalledOnce());
+    expect(recheckButton.disabled).toBe(true);
+    await act(async () => firstRecheck.reject(new Error("重检暂时失败")));
+    expect(recheckButton.disabled).toBe(false);
+    expect(input.value).toBe("未发送草稿，继续写");
+
+    fireEvent.click(screen.getByRole("button", { name: "打开会话列表" }));
+    expect(sidebar.classList.contains("is-mobile-open")).toBe(true);
+    expect(sidebar.classList.contains("is-collapsed")).toBe(false);
+    fireEvent.click(recheckButton);
+    await waitFor(() => expect(recheck).toHaveBeenCalledTimes(2));
+    expect(recheckButton.disabled).toBe(true);
+    await act(async () =>
+      secondRecheck.resolve({
+        status: "healthy",
+        hermes_version: "0.21",
+        missing_capabilities: [],
+        last_checked_at: "2026-09-23T00:00:00Z",
+        suggested_action: "none",
+        lan_http_warning: true,
+        pwa_secure_context_required: true,
+      }),
+    );
+    await waitFor(() =>
+      expect((sendButton as HTMLButtonElement).disabled).toBe(false),
+    );
+    expect(input.value).toBe("未发送草稿，继续写");
+  });
+
   it("saves a selected prompt before sending and keeps it available after a failed save", async () => {
     const summary = conversation("cv_prompt", "Prompt");
     const prompt = "请帮我梳理当前系统的核心分层、模块职责与数据流向。";

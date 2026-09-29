@@ -8,9 +8,13 @@ import {
   Pencil,
   Pin,
   PinOff,
+  RefreshCw,
   Trash2,
 } from "lucide-react";
-import type { ConversationSummary } from "../../../shared/api-schemas.js";
+import type {
+  ConnectionStatusResponse,
+  ConversationSummary,
+} from "../../../shared/api-schemas.js";
 
 export interface ConversationListProps {
   conversations: ConversationSummary[];
@@ -26,7 +30,10 @@ export interface ConversationListProps {
   onToggleCollapse: () => void;
   mobileOpen?: boolean;
   onMobileClose?: () => void;
-  status?: string | undefined;
+  status: ConnectionStatusResponse | null;
+  statusLoading: boolean;
+  statusError: string | null;
+  onRecheckStatus: () => void;
   sidebarWidth?: number;
   onSidebarWidthChange?: (width: number) => void;
   onSidebarWidthCommit?: (width: number) => void;
@@ -48,6 +55,9 @@ export const ConversationList: React.FC<ConversationListProps> = ({
   mobileOpen = false,
   onMobileClose,
   status,
+  statusLoading,
+  statusError,
+  onRecheckStatus,
   sidebarWidth = 300,
   onSidebarWidthChange,
   onSidebarWidthCommit,
@@ -61,6 +71,18 @@ export const ConversationList: React.FC<ConversationListProps> = ({
 
   const pinned = conversations.filter((conversation) => conversation.pinned);
   const recent = conversations.filter((conversation) => !conversation.pinned);
+  const statusLabel = getStatusLabel(status, statusLoading, statusError);
+  const statusDetail = getStatusDetail(status, statusError);
+  const showRecheck = statusLoading || status?.status !== "healthy";
+  const statusDotTone = statusError
+    ? "error"
+    : status?.status === "healthy"
+      ? "healthy"
+      : status?.status === "degraded"
+        ? "degraded"
+        : status && status.status !== "checking"
+          ? "error"
+          : "";
 
   const select = (id: string) => {
     onSelect(id);
@@ -200,11 +222,39 @@ export const ConversationList: React.FC<ConversationListProps> = ({
 
       <div className="sidebar-footer">
         <span
-          className={`status-dot ${status === "healthy" ? "healthy" : status === "degraded" ? "degraded" : status ? "error" : ""}`}
+          className={`status-dot ${statusDotTone}`}
           aria-hidden="true"
+          title={statusDetail ? `${statusLabel}：${statusDetail}` : statusLabel}
         />
-        <span>{getStatusLabel(status)}</span>
-        <span className="sidebar-footer-provider">Hermes</span>
+        <span className="sidebar-status-copy" aria-live="polite">
+          <span className="sidebar-status-label">{statusLabel}</span>
+          {statusDetail && (
+            <span
+              className="sidebar-status-detail"
+              title={status?.missing_capabilities.join("、") || undefined}
+            >
+              {statusDetail}
+            </span>
+          )}
+        </span>
+        {showRecheck ? (
+          <button
+            type="button"
+            className="sidebar-status-recheck"
+            onClick={onRecheckStatus}
+            disabled={statusLoading}
+            aria-label="重新检测 Hermes 连接状态"
+            title={
+              statusLoading
+                ? "正在检测 Hermes 连接状态"
+                : "重新检测 Hermes 连接状态"
+            }
+          >
+            <RefreshCw size={15} className={statusLoading ? "spin" : ""} />
+          </button>
+        ) : (
+          <span className="sidebar-footer-provider">Hermes</span>
+        )}
       </div>
 
       {!collapsed && !mobileOpen && (
@@ -533,8 +583,14 @@ function formatRelativeDate(value: number): string {
   return date.toLocaleDateString([], { month: "numeric", day: "numeric" });
 }
 
-function getStatusLabel(status?: string): string {
-  switch (status) {
+function getStatusLabel(
+  status: ConnectionStatusResponse | null,
+  loading: boolean,
+  error: string | null,
+): string {
+  if (error) return "Hermes 状态读取失败";
+  if (!status) return loading ? "正在检查 Hermes" : "Hermes 状态未知";
+  switch (status.status) {
     case "healthy":
       return "Hermes 在线";
     case "degraded":
@@ -545,7 +601,33 @@ function getStatusLabel(status?: string): string {
       return "Hermes 认证失败";
     case "incompatible":
       return "Hermes 契约不兼容";
-    default:
+    case "config_error":
+      return "Hermes 配置错误";
+    case "checking":
       return "正在检查 Hermes";
+    default:
+      return "Hermes 状态未知";
+  }
+}
+
+function getStatusDetail(
+  status: ConnectionStatusResponse | null,
+  error: string | null,
+): string | null {
+  if (error) return error;
+  switch (status?.status) {
+    case "degraded":
+      return "检查 Hermes 服务后重新检测。";
+    case "unavailable":
+      return "检查 Hermes 服务与网络连接。";
+    case "auth_failed":
+    case "config_error":
+      return "检查服务端 Hermes 配置。";
+    case "incompatible":
+      return status.missing_capabilities.length
+        ? `缺少 ${status.missing_capabilities.length} 项能力，请升级或重新配置 Hermes。`
+        : "请升级或重新配置 Hermes。";
+    default:
+      return null;
   }
 }

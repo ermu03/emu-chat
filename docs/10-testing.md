@@ -18,7 +18,7 @@
 | 单元 | `tests/unit/sse-hub-contract.test.ts` | 浏览器 SSE 广播、断线重放、缺口和缓冲限制 |
 | 集成 | `tests/integration/phase4-queue-runs.test.ts` | 草稿原子入队与幂等、派发事务回滚、丢失准入响应后的原 Run 恢复、四次不明结果的人工核对与全局槽位释放、审批与终态对账、恢复正文到期限制，以及服务重建恢复 |
 | 组件 | `tests/components/react-components.test.tsx` | 删除前复选确认、发送失败保留草稿、旧保存 ACK 不覆盖新输入；建议卡片保存期间的编辑防丢失 |
-| 组件 | `tests/components/app-shell-flow.test.tsx` | 延迟重命名后切换会话仍能编辑且原会话缓存更新、非当前会话置顶、A → B → A 后旧 Run 响应隔离；发送占位、逐个工具 SSE 与终态交接；长会话分页及缓存游标恢复；建议文本保存与失败重试 |
+| 组件 | `tests/components/app-shell-flow.test.tsx` | 状态请求与重检失败后通过折叠侧栏和移动抽屉恢复发送且保留草稿；延迟重命名与 A → B → A 旧响应隔离；发送占位、逐个工具 SSE 与终态交接；长会话分页及缓存游标恢复；建议文本保存与失败重试 |
 
 集成测试用 `FakeHermesServer` 提供可控的 Hermes HTTP/SSE 服务，用内存 SQLite 隔离用例；协议测试使用 `tests/fixtures/hermes/real-hermes-021.fixture.ts` 中的匿名报文。重建恢复用例会关闭并重建 Fastify 实例，沿用同一数据库和 Fake Hermes，覆盖已接纳 Run 与结果不明的准入；单元测试用待定 Promise 验证响应返回前的协调器重建。它们不启动或杀死独立操作系统进程。
 

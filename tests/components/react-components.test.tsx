@@ -55,6 +55,10 @@ describe("high-risk component interactions", () => {
         loading={false}
         collapsed={false}
         onToggleCollapse={vi.fn()}
+        status={null}
+        statusLoading={false}
+        statusError={null}
+        onRecheckStatus={vi.fn()}
       />,
     );
 
