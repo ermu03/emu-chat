@@ -8,7 +8,7 @@ Status: implemented
 
 ## Decision
 
-- 从已保存的助手正文识别已闭合的 Markdown 代码围栏。`html` 中的完整文档，以及 `svg`、`xml`、`html` 中完整的独立 SVG 根元素可成为成果；普通片段、未闭合围栏、思考、工具输出、用户消息及流式回合没有预览入口。超过 256 KiB 的代码块继续作为普通代码。Markdown AST 提供代码原文和位置；HTML 标题用不创建浏览器元素的 parse5 读取，SVG 用 XML 解析并拒绝 DOCTYPE、实体声明和解析错误。显式 `svg` 围栏无效时保留源码与下载入口，预览不可用。后来对正文中完整裸 SVG 的识别范围扩展见[修复笔记](../bug-fix/2026-09-29-recognize-unfenced-svg-in-assistant-replies.md)。
+- 从已保存的助手正文识别已闭合的 Markdown 代码围栏。`html` 中的完整文档，以及 `svg`、`xml`、`html` 中完整的独立 SVG 根元素可成为成果；普通片段、未闭合围栏、思考、工具输出、用户消息及流式回合没有预览入口。超过 256 KiB 的代码块继续作为普通代码。Markdown AST 提供代码原文和位置；HTML 标题用不创建浏览器元素的 parse5 读取，SVG 用 XML 解析并拒绝 DOCTYPE、实体声明和解析错误。显式 `svg` 围栏无效时按普通代码块显示、可复制，预览不可用。后来对正文中完整裸 SVG 的识别范围扩展见[修复笔记](../bug-fix/2026-09-29-recognize-unfenced-svg-in-assistant-replies.md)；成果按钮布局的收窄见[简化笔记](../simplification/2026-09-29-simplify-artifact-actions.md)。
 - 成果引用包含本地会话 ID、Hermes 会话 ID、消息 ID、代码块序号和内容标识。面板持有选中时的源码快照；新消息和历史分页不会替换正在查看的作品。切换会话或关闭面板会销毁当前预览，SVG Blob URL 同时撤销。没有成果正文数据库、服务端文件读取或自动版本归并。
 - 桌面宽屏在聊天右侧打开单个面板，窄屏覆盖全屏；草稿编辑器和消息视图不因开关面板而卸载。HTML、SVG 都能切换预览和源码、复制原文并下载原始文件；HTML 可主动重新运行。首次只查看源码时不创建 iframe。SVG 用 `<img>` 显示，提供缩放、适应面板及三种观察背景，背景不写入文件。
 - HTML 放在只有 `allow-scripts` 的 sandbox iframe 中。应用在 `srcdoc` 的任何用户内容之前写入 CSP：允许内联脚本和样式以及数据图片/字体，阻止常见外部资源、fetch、嵌套框架、插件、表单、worker 和 base URI；不授予同源、顶层导航、弹窗或下载能力。源码与下载不包含这段包装。SVG 使用 `image/svg+xml` Blob URL 和 `<img>` 图片上下文，不以内联 DOM 或文档 iframe 呈现。父页面不向作品提供凭据、草稿、历史或 API 桥接。

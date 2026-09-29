@@ -33,7 +33,6 @@ import {
 } from "./message-display.js";
 import type { RunDisplay } from "./run-display.js";
 import {
-  downloadArtifact,
   extractArtifacts,
   remarkRawSvgArtifacts,
   type Artifact,
@@ -634,54 +633,31 @@ const CodeBlock = memo(function CodeBlock({
     <div className="message-code">
       <div className="message-code-header">
         <span className="message-code-label">{language || "code"}</span>
-        <button
-          type="button"
-          className={`message-code-copy-btn ${copied ? "is-copied" : ""}`}
-          onClick={handleCopy}
-          aria-label={copied ? "已复制" : "复制代码"}
-          title={copied ? "已复制" : "复制代码"}
-        >
-          {copied ? (
-            <Check size={13} strokeWidth={2.2} />
-          ) : (
-            <Copy size={13} strokeWidth={1.8} />
-          )}
-          <span>{copied ? "已复制" : "复制代码"}</span>
-        </button>
-        {artifact && (
-          <div className="artifact-code-actions">
-            <span className="artifact-code-name" title={artifact.title}>
-              {artifact.title}
-            </span>
-            {artifact.previewable ? (
-              <button
-                type="button"
-                onClick={(event) =>
-                  onOpenArtifact?.(artifact, event.currentTarget, "preview")
-                }
-              >
-                打开预览
-              </button>
+        {artifact?.previewable ? (
+          <button
+            type="button"
+            className="message-code-copy-btn artifact-code-preview-btn"
+            onClick={(event) =>
+              onOpenArtifact?.(artifact, event.currentTarget, "preview")
+            }
+          >
+            打开预览
+          </button>
+        ) : (
+          <button
+            type="button"
+            className={`message-code-copy-btn ${copied ? "is-copied" : ""}`}
+            onClick={handleCopy}
+            aria-label={copied ? "已复制" : "复制代码"}
+            title={copied ? "已复制" : "复制代码"}
+          >
+            {copied ? (
+              <Check size={13} strokeWidth={2.2} />
             ) : (
-              <span
-                className="artifact-code-invalid"
-                title="请输出完整独立的 SVG"
-              >
-                SVG 无效
-              </span>
+              <Copy size={13} strokeWidth={1.8} />
             )}
-            <button
-              type="button"
-              onClick={(event) =>
-                onOpenArtifact?.(artifact, event.currentTarget, "source")
-              }
-            >
-              查看源码
-            </button>
-            <button type="button" onClick={() => downloadArtifact(artifact)}>
-              下载
-            </button>
-          </div>
+            <span>{copied ? "已复制" : "复制代码"}</span>
+          </button>
         )}
       </div>
       <pre>

@@ -21,7 +21,7 @@ emu-chat 作为 Hermes Agent 的单用户 Web 工作台，核心状态机与后�
    - 全局引入纤细半透明圆角药丸滚动条及平滑贝塞尔曲线微动效（`cubic-bezier(0.16, 1, 0.3, 1)`）。
 
 2. **代码块顶栏与一键复制功能**（[src/client/features/messages/message-view.tsx](../../../../src/client/features/messages/message-view.tsx)）：
-   - 封装独立 `CodeBlock` 组件，为多行代码块提供暗色磨砂顶栏，左侧显示语言药丸标签，右侧提供一键复制按钮。
+   - 封装独立 `CodeBlock` 组件，为多行代码块提供暗色磨砂顶栏，左侧显示语言标签，右侧提供一键复制按钮；可预览成果后来改为只显示“打开预览”，见[成果操作简化](../simplification/2026-09-29-simplify-artifact-actions.md)。
    - 复制触发后提取纯文本并写入剪贴板，平滑切换为绿色对勾图标与「已复制」状态，2 秒后自动恢复。
    - 区分块级代码与普通行内代码，确保段落中的单个行内代码正常应用内联胶囊样式。
 

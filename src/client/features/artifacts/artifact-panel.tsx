@@ -133,24 +133,6 @@ export function ArtifactPanel({
       className="artifact-panel"
       aria-label={`${artifact.title} 成果面板`}
     >
-      <header className="artifact-panel-header">
-        <div className="artifact-panel-heading">
-          <span className="artifact-panel-type">
-            {artifact.kind.toUpperCase()}
-          </span>
-          <strong title={artifact.title}>{artifact.title}</strong>
-        </div>
-        <button
-          ref={closeRef}
-          type="button"
-          className="artifact-panel-close"
-          onClick={onClose}
-          aria-label="返回聊天"
-          title="关闭成果面板"
-        >
-          <X size={17} />
-        </button>
-      </header>
       <div className="artifact-panel-actions">
         <div className="artifact-tabs" role="tablist" aria-label="成果视图">
           <button
@@ -199,6 +181,16 @@ export function ArtifactPanel({
             aria-label="下载成果"
           >
             <Download size={15} />
+          </button>
+          <button
+            ref={closeRef}
+            type="button"
+            className="artifact-panel-close"
+            onClick={onClose}
+            aria-label="返回聊天"
+            title="关闭成果面板"
+          >
+            <X size={17} />
           </button>
         </div>
       </div>
@@ -292,11 +284,11 @@ export function ArtifactPanel({
           </pre>
         </div>
       </div>
-      <footer className="artifact-panel-footer">
-        {artifact.kind === "html"
-          ? "预览阻止普通外部资源与请求，但作品自身跳转仍可能发出网络请求。下载后打开不受面板限制。"
-          : "SVG 按图片预览；下载后作为文档打开不受图片环境限制。"}
-      </footer>
+      {artifact.kind === "html" && (
+        <footer className="artifact-panel-footer">
+          预览阻止普通外部资源与请求，但作品自身跳转仍可能发出网络请求。下载后打开不受面板限制。
+        </footer>
+      )}
     </aside>
   );
 }

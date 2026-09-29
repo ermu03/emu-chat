@@ -1153,7 +1153,6 @@ textarea:focus-visible {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  flex-wrap: wrap;
   gap: 5px 12px;
   padding: 8px 14px;
   background: #1b212b;
@@ -1161,12 +1160,16 @@ textarea:focus-visible {
 }
 
 .message-code-label {
+  min-width: 0;
+  overflow: hidden;
   color: #94a3b8;
   font-family: var(--font-mono);
   font-size: 11.5px;
   font-weight: 600;
   text-transform: lowercase;
   letter-spacing: 0.04em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .message-code-copy-btn {
@@ -1191,41 +1194,13 @@ textarea:focus-visible {
   color: var(--success);
 }
 
-.artifact-code-actions {
-  display: flex;
-  flex: 1 0 100%;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  padding-top: 4px;
-  border-top: 1px solid #28313e;
-}
-
-.artifact-code-name {
-  max-width: 180px;
-  overflow: hidden;
-  color: #cbd5e1;
-  font-size: 12px;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.artifact-code-actions button {
-  padding: 3px 5px;
+.artifact-code-preview-btn {
   color: #5eead4;
-  background: transparent;
-  font-size: 11.5px;
 }
 
-.artifact-code-actions button:hover {
+.artifact-code-preview-btn:hover {
   color: #ccfbf1;
   text-decoration: underline;
-}
-
-.artifact-code-invalid {
-  color: #fbbf24;
-  font-size: 11.5px;
 }
 
 .artifact-panel {
@@ -1240,7 +1215,6 @@ textarea:focus-visible {
   box-shadow: -12px 0 28px rgb(0 0 0 / 5%);
 }
 
-.artifact-panel-header,
 .artifact-panel-actions {
   display: flex;
   align-items: center;
@@ -1249,30 +1223,6 @@ textarea:focus-visible {
   flex: 0 0 auto;
   padding: 10px 14px;
   border-bottom: 1px solid var(--line);
-}
-
-.artifact-panel-heading {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  min-width: 0;
-}
-
-.artifact-panel-heading strong {
-  overflow: hidden;
-  font-size: 13.5px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.artifact-panel-type {
-  padding: 2px 6px;
-  border-radius: 4px;
-  color: var(--accent-strong);
-  background: var(--accent-wash);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 700;
 }
 
 .artifact-panel-close,
