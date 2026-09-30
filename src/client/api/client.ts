@@ -182,6 +182,19 @@ class EmuChatApiClient {
     );
   }
 
+  listMediaAssets(
+    conversationId: string,
+    params: { tool_call_id: string; limit?: number },
+  ): Promise<{ data: MediaAsset[]; next_cursor: string | null }> {
+    const searchParams = new URLSearchParams({
+      tool_call_id: params.tool_call_id,
+    });
+    if (params.limit) searchParams.set("limit", String(params.limit));
+    return this.request(
+      `/api/v1/conversations/${conversationId}/media/assets?${searchParams}`,
+    );
+  }
+
   retryMediaCapture(
     conversationId: string,
     assetId: string,

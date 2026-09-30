@@ -11,6 +11,8 @@ import {
 import { MemoryRouter } from "react-router-dom";
 import { AppShell } from "../../src/client/app.js";
 import { apiClient } from "../../src/client/api/client.js";
+import { MediaAssets } from "../../src/client/features/media/media-assets.js";
+import type { MediaAsset } from "../../src/shared/media-schemas.js";
 import type {
   ConversationDetailResponse,
   ConversationSummary,
@@ -249,6 +251,51 @@ afterEach(() => {
 });
 
 describe("AppShell async flows", () => {
+  it("updates a retried image card when the plugin reports it ready", async () => {
+    const failedAsset: MediaAsset = {
+      asset_id: "asset_retry_image",
+      status: "capture_failed",
+      source: {
+        kind: "tool",
+        session_id: "session_retry",
+        turn_id: "turn_retry",
+        tool_call_id: "call_retry",
+        output_index: 0,
+      },
+      mime_type: "image/png",
+      byte_size: 128,
+      width: 64,
+      height: 64,
+      sha256: "b".repeat(64),
+      file_name: "retry.png",
+      content_url: "/retry.png",
+    };
+    let polls = 0;
+    vi.spyOn(apiClient, "retryMediaCapture").mockResolvedValue({
+      accepted: true,
+    });
+    vi.spyOn(apiClient, "listMediaAssets").mockImplementation(async () => {
+      polls += 1;
+      return {
+        data: [{ ...failedAsset, status: polls > 1 ? "ready" : "pending" }],
+        next_cursor: null,
+      };
+    });
+
+    render(
+      <MediaAssets assets={[failedAsset]} conversationId="cv_retry_image" />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "重试保存" }));
+
+    await waitFor(
+      () =>
+        expect(screen.getByRole("img", { name: "retry.png" })).toBeDefined(),
+      { timeout: 5_000 },
+    );
+    expect(apiClient.retryMediaCapture).toHaveBeenCalledOnce();
+    expect(apiClient.listMediaAssets).toHaveBeenCalled();
+  });
+
   it("runs only saved assistant artifacts and clears the selected preview on conversation switch", async () => {
     const NativeURL = URL;
     vi.stubGlobal(
@@ -1240,4 +1287,143 @@ describe("AppShell async flows", () => {
     );
     expect(apiClient.listMessages).toHaveBeenCalledTimes(5);
   });
+
+  it("refreshes a generated image that becomes ready after the Run settles", async () => {
+    const summary = conversation("cv_image_capture", "Images");
+    mockCommonApi([summary]);
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const pendingSend =
+      deferred<Awaited<ReturnType<typeof apiClient.sendMessage>>>();
+    const queueItem: QueueItemResponse = {
+      ...acceptedItem(
+        summary.conversation_id,
+        "qi_image",
+        "run_image",
+        "Generate an image",
+      ),
+      operation_id: "op_image",
+    };
+    const liveRun = runningRun(queueItem);
+    let currentQueue = queue(summary.conversation_id);
+    let currentRun = liveRun;
+    let terminal = false;
+    let historyRequests = 0;
+    let imageReady = false;
+    const asset = {
+      asset_id: "asset_review_image",
+      source: {
+        kind: "tool" as const,
+        session_id: summary.hermes_session_id,
+        turn_id: "turn_image",
+        tool_call_id: "call_image",
+        output_index: 0,
+      },
+      mime_type: "image/png",
+      byte_size: 128,
+      width: 64,
+      height: 64,
+      sha256: "a".repeat(64),
+      file_name: "review.png",
+      content_url: "/review.png",
+    };
+
+    vi.spyOn(apiClient, "getQueue").mockImplementation(
+      async () => currentQueue,
+    );
+    vi.spyOn(apiClient, "getRun").mockImplementation(async () => currentRun);
+    vi.spyOn(apiClient, "listMessages").mockImplementation(async (id) => {
+      if (!terminal) return messageList(id, []);
+      historyRequests += 1;
+      if (historyRequests >= 4) imageReady = true;
+      const rows: MessageItem[] = [
+        message(1, summary.hermes_session_id, "user", "Generate an image"),
+        {
+          ...message(2, summary.hermes_session_id, "assistant", ""),
+          tool_calls: [{ id: "call_image", name: "image_generate" }],
+        },
+        {
+          ...message(3, summary.hermes_session_id, "assistant", ""),
+          role: "tool",
+          tool_name: "image_generate",
+          tool_call_id: "call_image",
+          attachments: [{ ...asset, status: imageReady ? "ready" : "pending" }],
+        },
+        message(4, summary.hermes_session_id, "assistant", "Done"),
+      ];
+      return messageList(id, rows);
+    });
+    vi.spyOn(apiClient, "putDraft").mockResolvedValue(
+      draft(summary.conversation_id, "Generate an image", 1),
+    );
+    vi.spyOn(apiClient, "sendMessage").mockImplementation(
+      () => pendingSend.promise,
+    );
+
+    render(
+      <MemoryRouter
+        initialEntries={[`/conversations/${summary.conversation_id}`]}
+      >
+        <AppShell />
+      </MemoryRouter>,
+    );
+    const input = await screen.findByRole("textbox", { name: "消息输入框" });
+    fireEvent.change(input, { target: { value: "Generate an image" } });
+    fireEvent.keyDown(input, { key: "Enter", ctrlKey: true });
+    await waitFor(() => expect(apiClient.sendMessage).toHaveBeenCalledOnce());
+    currentQueue = queue(summary.conversation_id, [queueItem]);
+    await act(async () => {
+      pendingSend.resolve({
+        object: "emu_chat.message_submission",
+        replayed: false,
+        queue_item: queueItem,
+        draft: draft(summary.conversation_id, "", 2),
+      });
+    });
+    await waitFor(() => expect(FakeEventSource.instances.length).toBe(1));
+    const source = FakeEventSource.instances[0]!;
+    act(() => {
+      source.emit("run.event", {
+        local_run_id: "run_image",
+        local_seq: 1,
+        type: "tool.started",
+        payload: { tool: "image_generate" },
+      });
+      source.emit("run.event", {
+        local_run_id: "run_image",
+        local_seq: 2,
+        type: "tool.completed",
+        payload: {
+          tool: "image_generate",
+          preview: "Image generated",
+          error: false,
+        },
+      });
+    });
+    currentQueue = queue(summary.conversation_id, [
+      { ...queueItem, state: "done" },
+    ]);
+    currentRun = {
+      ...liveRun,
+      local_state: "reconciled",
+      upstream_status: "completed",
+    };
+    terminal = true;
+    act(() => {
+      source.emit("run.event", {
+        local_run_id: "run_image",
+        local_seq: 3,
+        type: "run.completed",
+        payload: {},
+      });
+    });
+
+    expect(
+      await screen.findByRole(
+        "img",
+        { name: "review.png" },
+        { timeout: 8_000 },
+      ),
+    ).toBeDefined();
+    expect(historyRequests).toBeGreaterThanOrEqual(4);
+  }, 12_000);
 });

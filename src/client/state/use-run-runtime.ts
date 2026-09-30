@@ -35,6 +35,7 @@ export function useRunRuntime(
     visibleQueue,
     activeQueueItem,
     runDisplay,
+    messages,
   } = view;
   const [streamNotice, setStreamNotice] = useState<string | null>(null);
   const lastConversationListRefreshRunIdRef = useRef<string | null>(null);
@@ -265,6 +266,66 @@ export function useRunRuntime(
     !isLiveRun(visibleRun) && activeQueueItem?.local_run_id === null
       ? 300
       : 2_500;
+
+  const pendingImageRunId = useMemo(() => {
+    if (
+      !runDisplay ||
+      runDisplay.phase !== "settled" ||
+      !runDisplay.blocks.some(
+        (block) =>
+          block.kind === "tool" &&
+          block.name === "image_generate" &&
+          block.status === "completed",
+      )
+    )
+      return null;
+
+    const toolResults = messages.filter(
+      (message) =>
+        message.id > runDisplay.afterMessageId &&
+        message.role === "tool" &&
+        message.tool_name === "image_generate",
+    );
+    const stillSaving =
+      toolResults.length === 0 ||
+      toolResults.some(
+        (message) =>
+          !message.attachments?.length ||
+          message.attachments.some((asset) => asset.status === "pending"),
+      );
+    return stillSaving ? runDisplay.runId : null;
+  }, [messages, runDisplay]);
+
+  useEffect(() => {
+    if (!activeConversationId || !pendingImageRunId) return;
+    const target = captureTarget(activeConversationId);
+    if (!target) return;
+
+    const deadline = Date.now() + 90_000;
+    let inFlight = false;
+    const refreshImages = async () => {
+      if (inFlight || Date.now() >= deadline || !isCurrentTarget(target))
+        return;
+      inFlight = true;
+      try {
+        await refreshLatestMessages(target, pendingImageRunId);
+      } catch {
+        // A later bounded attempt can recover transient history or plugin errors.
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    void refreshImages();
+    const timer = window.setInterval(() => void refreshImages(), 2_500);
+    return () => window.clearInterval(timer);
+  }, [
+    activeConversationId,
+    captureTarget,
+    isCurrentTarget,
+    pendingImageRunId,
+    refreshLatestMessages,
+  ]);
 
   useEffect(() => {
     if (!activeConversationId || !shouldPollRuntime) return;

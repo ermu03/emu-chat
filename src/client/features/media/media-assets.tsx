@@ -27,80 +27,156 @@ export function MediaAssets({
 }) {
   const [selected, setSelected] = useState<MediaAsset | null>(null);
   const [retrying, setRetrying] = useState<string | null>(null);
+  const [retryOverrides, setRetryOverrides] = useState<
+    Record<string, MediaAsset>
+  >({});
   const [error, setError] = useState<string | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const retryDetailsRef = useRef<{
+    assetId: string;
+    conversationId: string;
+    toolCallId: string;
+    deadline: number;
+  } | null>(null);
   useEffect(() => {
     setSelected(null);
+    setRetrying(null);
+    setRetryOverrides({});
+    setError(null);
+    retryDetailsRef.current = null;
   }, [conversationId]);
+
+  useEffect(() => {
+    if (!retrying || !conversationId) return;
+    const retry = retryDetailsRef.current;
+    if (
+      !retry ||
+      retry.assetId !== retrying ||
+      retry.conversationId !== conversationId
+    )
+      return;
+
+    let active = true;
+    let inFlight = false;
+    const refresh = async () => {
+      if (inFlight) return;
+      if (Date.now() >= retry.deadline) {
+        retryDetailsRef.current = null;
+        setRetrying((current) => (current === retrying ? null : current));
+        return;
+      }
+      inFlight = true;
+      try {
+        const result = await apiClient.listMediaAssets(conversationId, {
+          tool_call_id: retry.toolCallId,
+          limit: 16,
+        });
+        const latest = result.data.find((item) => item.asset_id === retrying);
+        if (!active || retryDetailsRef.current !== retry || !latest) return;
+        setRetryOverrides((current) => ({ ...current, [retrying]: latest }));
+        if (latest.status === "ready" || latest.status === "unavailable") {
+          retryDetailsRef.current = null;
+          setRetrying((current) => (current === retrying ? null : current));
+        }
+      } catch {
+        // Keep checking until the bounded retry window expires.
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 2_500);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [retrying, conversationId]);
 
   if (!assets.length) return null;
   return (
     <>
       <div className={`media-assets ${compact ? "compact" : ""}`}>
-        {assets.map((asset) => (
-          <div className="media-asset" key={asset.asset_id}>
-            {asset.status === "ready" ? (
-              <button
-                type="button"
-                className="media-asset-open"
-                aria-label={`查看图片 ${asset.file_name}`}
-                onClick={(event) => {
-                  triggerRef.current = event.currentTarget;
-                  setSelected(asset);
-                }}
-              >
-                <img
-                  src={asset.content_url}
-                  alt={asset.file_name || "图片"}
-                  loading="lazy"
-                />
-              </button>
-            ) : (
-              <div className="media-asset-placeholder">
-                <ImageIcon size={18} />
-                <span>
-                  {asset.status === "pending"
-                    ? "图片保存中"
-                    : asset.status === "capture_failed"
-                      ? "图片保存失败"
-                      : "图片暂不可用"}
-                </span>
-              </div>
-            )}
-            {onRemove && (
-              <button
-                type="button"
-                className="media-asset-remove"
-                aria-label={`移除图片 ${asset.file_name}`}
-                onClick={() => onRemove(asset.asset_id)}
-              >
-                <X size={13} />
-              </button>
-            )}
-            {asset.status === "capture_failed" && conversationId && (
-              <button
-                type="button"
-                className="media-asset-retry"
-                disabled={retrying === asset.asset_id}
-                onClick={() => {
-                  setRetrying(asset.asset_id);
-                  setError(null);
-                  void apiClient
-                    .retryMediaCapture(conversationId, asset.asset_id)
-                    .catch((cause) =>
-                      setError(
-                        cause instanceof Error ? cause.message : "重试失败",
-                      ),
-                    )
-                    .finally(() => setRetrying(null));
-                }}
-              >
-                <RefreshCw size={13} />
-                重试保存
-              </button>
-            )}
-          </div>
-        ))}
+        {assets.map((sourceAsset) => {
+          const asset = retryOverrides[sourceAsset.asset_id] ?? sourceAsset;
+          const retryToolCallId =
+            asset.source.kind === "tool" ? asset.source.tool_call_id : null;
+          return (
+            <div className="media-asset" key={asset.asset_id}>
+              {asset.status === "ready" ? (
+                <button
+                  type="button"
+                  className="media-asset-open"
+                  aria-label={`查看图片 ${asset.file_name}`}
+                  onClick={(event) => {
+                    triggerRef.current = event.currentTarget;
+                    setSelected(asset);
+                  }}
+                >
+                  <img
+                    src={asset.content_url}
+                    alt={asset.file_name || "图片"}
+                    loading="lazy"
+                  />
+                </button>
+              ) : (
+                <div className="media-asset-placeholder">
+                  <ImageIcon size={18} />
+                  <span>
+                    {asset.status === "pending"
+                      ? "图片保存中"
+                      : asset.status === "capture_failed"
+                        ? "图片保存失败"
+                        : "图片暂不可用"}
+                  </span>
+                </div>
+              )}
+              {onRemove && (
+                <button
+                  type="button"
+                  className="media-asset-remove"
+                  aria-label={`移除图片 ${asset.file_name}`}
+                  onClick={() => onRemove(asset.asset_id)}
+                >
+                  <X size={13} />
+                </button>
+              )}
+              {asset.status === "capture_failed" &&
+                conversationId &&
+                retryToolCallId && (
+                  <button
+                    type="button"
+                    className="media-asset-retry"
+                    disabled={retrying === asset.asset_id}
+                    onClick={() => {
+                      retryDetailsRef.current = {
+                        assetId: asset.asset_id,
+                        conversationId,
+                        toolCallId: retryToolCallId,
+                        deadline: Date.now() + 90_000,
+                      };
+                      setRetrying(asset.asset_id);
+                      setError(null);
+                      void apiClient
+                        .retryMediaCapture(conversationId, asset.asset_id)
+                        .catch((cause) => {
+                          setError(
+                            cause instanceof Error ? cause.message : "重试失败",
+                          );
+                          retryDetailsRef.current = null;
+                          setRetrying((current) =>
+                            current === asset.asset_id ? null : current,
+                          );
+                        });
+                    }}
+                  >
+                    <RefreshCw size={13} />
+                    重试保存
+                  </button>
+                )}
+            </div>
+          );
+        })}
       </div>
       {error && (
         <div className="error" role="alert">
