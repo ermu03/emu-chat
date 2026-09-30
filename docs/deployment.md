@@ -83,6 +83,8 @@ curl -fsS http://127.0.0.1:3100/api/v1/status
 
 应用启动自动执行尚未应用的增量迁移。图片版本增加 `0002_media.sql`；已经应用的迁移不可改写。图片插件维护与故障恢复见开发仓库的 `docs/11-image-workflows.md`。
 
+本机插件当前为 emu-media 0.2.0，协议 v1。插件由 `/home/emu/.hermes/bin/emu-media-release` 单独发布，发布副本位于 `/home/emu/.hermes/plugin-releases/emu-media/`，`/home/emu/.hermes/plugins/emu-media` 为入口链接。历史配置 `EMU_MEDIA_HERMES_READ_KEY` 使用有效 Hermes API key；基线没有独立只读 key，因此它与 emu-chat `HERMES_API_KEY` 相同。插件发布会暂停 Hermes 与 emu-chat并建立协调备份，详情见 [图片维护说明](11-image-workflows.md)。
+
 ## 备份与回退
 
 自动备份保存生产配置、emu-chat 控制库及其它 data 文件，同时对 Hermes 的会话库、response_store、runs_idempotency 和图片插件索引使用 SQLite backup API，并复制 Hermes 配置与图片原文件。数据库备份会检查完整性，不直接复制运行中的主库而忽略 WAL。

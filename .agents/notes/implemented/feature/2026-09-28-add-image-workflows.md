@@ -31,7 +31,7 @@ emu-chat 原先只把纯文字放入草稿、队列和 Hermes Run。图片工具
 
 图片与文字沿用同一聊天、草稿、队列及 Run，刷新和服务重启后可通过稳定资源读取。资源权限与生命周期跨 emu-chat 和插件两个 SQLite 数据库，必须靠持久 outbox、幂等接口、墓碑和历史对账恢复；无法用单个事务保证两边同时提交。模型是否调用图片工具和真实供应商可用性仍由 Hermes 及其配置决定，不能靠 UI 承诺。原文件保留元数据，不提供 EXIF 净化或公开分享。
 
-代码已完成并在隔离环境验证，尚未安装进运行中的 Hermes，也未执行付费供应商图片调用；正式发布应按[维护说明](../../../../docs/11-image-workflows.md)固定三个提交并备份。当前只验证 Chromium 桌面和窄屏仿真，真实手机、Safari/Firefox 与官方 Hermes 后续版本需要发布前或升级时复测。
+初始开发验收在隔离环境进行，未执行付费供应商图片调用。2026-09-30 正式部署组合更新为 Hermes `6005aa1`、插件 0.2.0 和 emu-chat `v1.0.2`；当前发版与凭据约定见[维护说明](../../../../docs/11-image-workflows.md)，插件部署改进见[发版决策](../process/2026-09-30-deploy-media-plugin-and-verify-history.md)。浏览器验收范围为 Chromium 桌面和窄屏仿真，真实手机、Safari/Firefox 与官方 Hermes 后续版本仍需复测。
 
 ## Verification
 
