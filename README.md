@@ -5,8 +5,10 @@ emu-chat 是轻量、单用户、在线使用的 Hermes Agent Web 工作台。He
 ## 运行
 
 ```bash
-# Node.js >=22.12 且 <23
-npm install
+# 开发、构建和生产统一使用系统安装的 Node.js 24 LTS
+# 本机使用 /usr/bin/node 和 /usr/bin/npm；不要使用 Hermes 私有运行时
+node --version
+npm ci
 cp -n .env.example .env # 首次配置时复制，不覆盖已有 .env
 ```
 
@@ -67,6 +69,8 @@ npm start
 ```
 
 生产模式不启动 Vite，Fastify 会同时提供构建后的前端页面和 API，因此只需访问 `http://<主机地址>:3104/`。
+
+本机独立生产部署位于 `/home/emu/.emu-chat`，与开发配置和数据分开；系统 Node、构建、发版与回退流程见 [部署说明](docs/deployment.md)。
 
 ## 界面操作
 

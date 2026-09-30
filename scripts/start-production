@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+export PATH=/usr/bin:/bin
+case "$(/usr/bin/node --version)" in
+  v24.*) ;;
+  *) echo 'emu-chat requires system Node.js 24 LTS (/usr/bin/node)' >&2; exit 1 ;;
+esac
+exec /usr/bin/node /home/emu/.emu-chat/current/dist/server/index.js
