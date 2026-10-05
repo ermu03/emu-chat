@@ -76,6 +76,51 @@ describe("repository consistency and concurrency", () => {
     );
   });
 
+  it("fences automatic deletion by session and lifecycle, rolling back all effects on failure", () => {
+    const id = "cv_cleanup";
+    addConversation(id, "session-old");
+    drafts.saveDraft(id, "unsent draft");
+    leases.acquire("conversation", id, "worker", "token", 5000);
+    conversations.adoptEffectiveHermesSessionId(id, "session-new");
+    expect(conversations.delete(id, "session-old")).toBe(false);
+    conversations.setDeleteState(id, "pending");
+    expect(conversations.delete(id, "session-new")).toBe(false);
+    conversations.setDeleteState(id, "failed");
+    expect(conversations.delete(id, "session-new")).toBe(false);
+    expect(drafts.findByConversationId(id)?.content).toBe("unsent draft");
+    expect(
+      db.prepare("SELECT count(*) AS n FROM coordinator_leases").get(),
+    ).toEqual({ n: 1 });
+    expect(db.prepare("SELECT count(*) AS n FROM media_outbox").get()).toEqual({
+      n: 0,
+    });
+
+    conversations.setDeleteState(id, "none");
+    db.exec(`CREATE TRIGGER fail_scope_delete BEFORE INSERT ON media_outbox
+      WHEN NEW.kind = 'scope_delete' BEGIN SELECT RAISE(ABORT, 'injected outbox failure'); END;`);
+    expect(() => conversations.delete(id, "session-new")).toThrow(
+      "injected outbox failure",
+    );
+    expect(drafts.findByConversationId(id)?.content).toBe("unsent draft");
+    expect(
+      db.prepare("SELECT count(*) AS n FROM coordinator_leases").get(),
+    ).toEqual({ n: 1 });
+    db.exec("DROP TRIGGER fail_scope_delete");
+    expect(conversations.delete(id, "session-new")).toBe(true);
+    expect(conversations.delete(id, "session-new")).toBe(false);
+    expect(drafts.findByConversationId(id)).toBeNull();
+    expect(
+      db.prepare("SELECT count(*) AS n FROM coordinator_leases").get(),
+    ).toEqual({ n: 0 });
+    expect(
+      db
+        .prepare(
+          "SELECT count(*) AS n FROM media_outbox WHERE kind='scope_delete'",
+        )
+        .get(),
+    ).toEqual({ n: 1 });
+  });
+
   it("fences competing lease owners and stale tokens", () => {
     expect(
       leases.acquire("global", "global", "worker-a", "token-a", 5_000),

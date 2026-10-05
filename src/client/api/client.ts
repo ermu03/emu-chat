@@ -89,11 +89,11 @@ class EmuChatApiClient {
   // --- Conversations ---
   listConversations(params?: {
     limit?: number;
-    offset?: number;
+    cursor?: string;
   }): Promise<ConversationListResponse> {
     const searchParams = new URLSearchParams();
     if (params?.limit) searchParams.set("limit", String(params.limit));
-    if (params?.offset) searchParams.set("offset", String(params.offset));
+    if (params?.cursor) searchParams.set("cursor", params.cursor);
     const query = searchParams.toString();
     return this.request<ConversationListResponse>(
       `/api/v1/conversations${query ? `?${query}` : ""}`,

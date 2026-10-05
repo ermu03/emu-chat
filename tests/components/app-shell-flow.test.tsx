@@ -15,6 +15,7 @@ import { MediaAssets } from "../../src/client/features/media/media-assets.js";
 import type { MediaAsset } from "../../src/shared/media-schemas.js";
 import type {
   ConversationDetailResponse,
+  ConversationListResponse,
   ConversationSummary,
   ConnectionStatusResponse,
   DraftResponse,
@@ -206,7 +207,7 @@ function mockCommonApi(summaries: ConversationSummary[]) {
   vi.spyOn(apiClient, "listConversations").mockResolvedValue({
     items: summaries,
     limit: 50,
-    offset: 0,
+    next_cursor: null,
     has_more: false,
   });
   vi.spyOn(apiClient, "getConversation").mockImplementation(async (id) => {
@@ -251,6 +252,105 @@ afterEach(() => {
 });
 
 describe("AppShell async flows", () => {
+  it("loads older pinned conversations and ignores an old page after a metadata reload", async () => {
+    const summaries = Array.from({ length: 51 }, (_, index) =>
+      conversation(`cv_page_${index}`, `Conversation ${index}`),
+    );
+    const first = summaries[0]!;
+    const older = summaries[50]!;
+    older.pinned = true;
+    mockCommonApi(summaries);
+    vi.spyOn(apiClient, "getQueue").mockImplementation(async (id) => queue(id));
+    vi.spyOn(apiClient, "listMessages").mockImplementation(async (id) =>
+      messageList(id, [message(1, `session_${id}`, "user", `${id} message`)]),
+    );
+    vi.spyOn(apiClient, "putDraft").mockImplementation(async (id, body) =>
+      draft(id, body.content, body.expected_revision + 1),
+    );
+    vi.spyOn(apiClient, "patchHermesMetadata").mockImplementation(
+      async (id, body) => {
+        expect(id).toBe(first.conversation_id);
+        if (body.field === "title") first.title = body.value;
+        return detail(first);
+      },
+    );
+    const stalePage = deferred<ConversationListResponse>();
+    const list = vi
+      .mocked(apiClient.listConversations)
+      .mockResolvedValueOnce({
+        items: summaries.slice(0, 50),
+        limit: 50,
+        has_more: true,
+        next_cursor: "old_cursor",
+      })
+      .mockImplementationOnce(() => stalePage.promise)
+      .mockImplementationOnce(async () => ({
+        items: summaries.slice(0, 50),
+        limit: 50,
+        has_more: true,
+        next_cursor: "new_cursor",
+      }))
+      // A record moved across the boundary: merge by ID without duplicate rows.
+      .mockImplementationOnce(async () => ({
+        items: [first, older],
+        limit: 50,
+        has_more: false,
+        next_cursor: null,
+      }));
+    render(
+      <MemoryRouter
+        initialEntries={[`/conversations/${first.conversation_id}`]}
+      >
+        <AppShell />
+      </MemoryRouter>,
+    );
+    await screen.findByRole("textbox", { name: "消息输入框" });
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+    expect(list.mock.calls[1]?.[0]).toEqual({
+      limit: 50,
+      cursor: "old_cursor",
+    });
+    fireEvent.click(
+      screen.getByText(first.title, { selector: ".main-toolbar-title" }),
+    );
+    fireEvent.change(screen.getByRole("textbox", { name: "编辑会话标题" }), {
+      target: { value: "Current title" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存标题" }));
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(4));
+    fireEvent.click(
+      await screen.findByText(older.title, { selector: ".conversation-title" }),
+    );
+    await screen.findByText(`${older.conversation_id} message`);
+    expect(apiClient.getConversation).toHaveBeenCalledWith(
+      older.conversation_id,
+    );
+    expect(list.mock.calls[3]?.[0]).toEqual({
+      limit: 50,
+      cursor: "new_cursor",
+    });
+    await act(async () =>
+      stalePage.resolve({
+        items: [
+          { ...older, title: "Stale pin" },
+          conversation("cv_ghost", "Stale entry"),
+        ],
+        limit: 50,
+        has_more: false,
+        next_cursor: null,
+      }),
+    );
+    expect(screen.queryByText("Stale entry")).toBeNull();
+    expect(screen.queryByText("Stale pin")).toBeNull();
+    expect(
+      screen.getAllByText("Current title", { selector: ".conversation-title" }),
+    ).toHaveLength(1);
+    expect(
+      screen.getAllByText(older.title, { selector: ".conversation-title" }),
+    ).toHaveLength(1);
+    expect(screen.getByText(`${older.conversation_id} message`)).toBeDefined();
+  }, 10_000);
+
   it("keeps a paused queue visible, protects unsaved input, and restores or resumes only on request", async () => {
     const summary = conversation("cv_paused", "Paused");
     mockCommonApi([summary]);

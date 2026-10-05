@@ -21,6 +21,8 @@
 3. 按照文件名前缀的版本号（如 `0001_initial.sql`）进行排序。
 4. 对未应用的脚本包裹在一个原子事务中执行，完成后写入新的版本记录。
 
+`0003_conversation_list_order.sql` 只添加 `ix_conversations_list_order(custom_order ASC, created_at DESC, id ASC)`，支持本地注册表的稳定游标分页，不修改既有会话、草稿、队列或图片记录。
+
 ## 3. 实体关系图 (ER Diagram)
 
 下面是原有 7 张核心数据表的 ER 图；图片控制表见第 10 节。

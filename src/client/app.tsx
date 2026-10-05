@@ -117,17 +117,42 @@ export function AppShell() {
     const loadId = ++conversationListLoadRef.current;
     setConversationsLoading(true);
     try {
-      const response = await apiClient.listConversations({ limit: 50 });
-      if (loadId !== conversationListLoadRef.current) return;
-      setConversations(response.items);
-      setActiveConversationId((current) => {
-        if (current) return current;
-        return (
-          routeConversationIdRef.current ??
-          response.items[0]?.conversation_id ??
-          null
+      const collected = new Map<string, ConversationSummary>();
+      const visited = new Set<string>();
+      let cursor: string | undefined;
+      do {
+        const response = await apiClient.listConversations({
+          limit: 50,
+          ...(cursor ? { cursor } : {}),
+        });
+        if (loadId !== conversationListLoadRef.current) return;
+        for (const item of response.items)
+          collected.set(item.conversation_id, item);
+        const items = [...collected.values()];
+        const pageIds = new Set(items.map((item) => item.conversation_id));
+        setConversations((previous) =>
+          response.has_more
+            ? [
+                ...items,
+                ...previous.filter(
+                  (item) => !pageIds.has(item.conversation_id),
+                ),
+              ]
+            : items,
         );
-      });
+        setActiveConversationId(
+          (current) =>
+            current ??
+            routeConversationIdRef.current ??
+            items[0]?.conversation_id ??
+            null,
+        );
+        if (!response.has_more) break;
+        if (!response.next_cursor || visited.has(response.next_cursor))
+          throw new Error("会话列表分页未推进，请重新加载");
+        visited.add(response.next_cursor);
+        cursor = response.next_cursor;
+      } while (cursor);
     } catch (error) {
       if (loadId === conversationListLoadRef.current)
         setWorkspaceError(getErrorMessage(error, "无法加载会话列表"));

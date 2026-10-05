@@ -6,7 +6,7 @@
 
 | 层级 | 文件 | 保障的行为 |
 | --- | --- | --- |
-| 单元 | `tests/unit/phase1-repositories.test.ts` | 元数据与草稿 CAS、会话映射时保留草稿、租约互斥与令牌校验 |
+| 单元 | `tests/unit/phase1-repositories.test.ts` | 元数据与草稿 CAS、会话映射时保留草稿、租约互斥与令牌校验；自动清理的映射/删除状态条件与 outbox 失败回滚 |
 | 单元 | `tests/unit/data-retention.test.ts` | 恢复期限、控制记录保留窗口、Run 外键级联删除及活跃 Run 保护 |
 | 单元 | `tests/unit/hermes-client.test.ts` | 认证头、安全边界、错误映射、SSE 存活超时 |
 | 单元 | `tests/unit/logging.test.ts` | 日志脱敏深度、循环引用和敏感字段优先级 |
@@ -17,10 +17,11 @@
 | 单元 | `tests/unit/run-lifecycle.test.ts` | 旧对账响应不回退已提交终态、待定提交响应跨协调器重建后的原键重放和旧回调隔离 |
 | 单元 | `tests/unit/sse-hub-contract.test.ts` | 浏览器 SSE 广播、断线重放、缺口和缓冲限制 |
 | 集成 | `tests/integration/phase4-queue-runs.test.ts` | 草稿原子入队与幂等、派发事务回滚、丢失准入响应后的原 Run 恢复、四次不明结果的人工核对与全局槽位释放、审批与终态对账、恢复正文到期限制，以及服务重建恢复 |
+| 集成 | `tests/integration/conversation-list.test.ts` | 消息读取采用新 session 后旧 404 不误删草稿、队列、Run 和图片；旧详情不拼接新映射；分页清理后边界仍推进且上游读取有界 |
 | 组件 | `tests/components/react-components.test.tsx` | 删除前复选确认、发送失败保留草稿、旧保存 ACK 不覆盖新输入；建议卡片保存期间的编辑防丢失 |
-| 组件 | `tests/components/app-shell-flow.test.tsx` | 状态请求与重检失败后通过折叠侧栏和移动抽屉恢复发送且保留草稿；延迟重命名与 A → B → A 旧响应隔离；发送占位、逐个工具 SSE 与终态交接；长会话分页及缓存游标恢复；建议文本保存与失败重试 |
+| 组件 | `tests/components/app-shell-flow.test.tsx` | 状态请求与重检失败后通过折叠侧栏和移动抽屉恢复发送且保留草稿；延迟重命名与 A → B → A 旧响应隔离；发送占位、逐个工具 SSE 与终态交接；长会话分页及缓存游标恢复；会话列表跨 50 条可达、ID 去重与旧分页轮次隔离；建议文本保存与失败重试 |
 
-集成测试用 `FakeHermesServer` 提供可控的 Hermes HTTP/SSE 服务，用内存 SQLite 隔离用例；协议测试使用 `tests/fixtures/hermes/real-hermes-021.fixture.ts` 中的匿名报文。重建恢复用例会关闭并重建 Fastify 实例，沿用同一数据库和 Fake Hermes，覆盖已接纳 Run 与结果不明的准入；单元测试用待定 Promise 验证响应返回前的协调器重建。它们不启动或杀死独立操作系统进程。
+集成测试用 `FakeHermesServer` 提供可控的 Hermes HTTP/SSE 服务，用内存 SQLite 隔离用例；协议测试使用 `tests/fixtures/hermes/real-hermes-021.fixture.ts` 中的匿名报文。重建恢复用例会关闭并重建 Fastify 实例，沿用同一数据库和 Fake Hermes，覆盖已接纳 Run 与结果不明的准入；单元测试用待定 Promise 验证响应返回前的协调器重建。会话列表的恢复竞态用模拟 Adapter 和待定 Promise 配合内存 SQLite，直接交错服务读取与 session 采用。它们不启动或杀死独立操作系统进程。
 
 ## 运行
 

@@ -64,7 +64,12 @@ export const GetConversationsQuerySchema = z
       .min(1)
       .max(LIMITS.SESSION_LIST_PAGE_MAX)
       .default(LIMITS.SESSION_LIST_PAGE_DEFAULT),
-    offset: z.coerce.number().int().min(0).default(0),
+    cursor: z
+      .string()
+      .min(1)
+      .max(1024)
+      .regex(/^[A-Za-z0-9_-]+$/)
+      .optional(),
   })
   .strict();
 
@@ -105,7 +110,7 @@ export type ConversationSummary = z.infer<typeof ConversationSummarySchema>;
 export const ConversationListResponseSchema = z.object({
   items: z.array(ConversationSummarySchema),
   limit: z.number().int().positive(),
-  offset: z.number().int().nonnegative(),
+  next_cursor: z.string().nullable(),
   has_more: z.boolean(),
 });
 export type ConversationListResponse = z.infer<

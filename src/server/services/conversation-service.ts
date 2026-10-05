@@ -1,3 +1,5 @@
+import { z } from "zod";
+import { LIMITS } from "../../shared/limits.js";
 import type {
   ConversationDetailResponse,
   ConversationListResponse,
@@ -23,6 +25,7 @@ import type {
 import type {
   ConversationRepository,
   DraftRepository,
+  ConversationListPosition,
 } from "../db/repositories/conversation.repository.js";
 import type { QueueRepository } from "../db/repositories/queue.repository.js";
 import type { RunRepository } from "../db/repositories/run.repository.js";
@@ -47,8 +50,17 @@ import type {
 
 export interface ListConversationsParams {
   limit?: number | undefined;
-  offset?: number | undefined;
+  cursor?: string | undefined;
 }
+
+const ListPositionSchema = z
+  .object({
+    custom_order: z.number().nullable(),
+    created_at: z.string().min(1).max(64),
+    id: z.string().startsWith("cv_").max(64),
+  })
+  .strict();
+const METADATA_CONCURRENCY = 4;
 
 /** Maps Hermes resources into local conversation projections. */
 export class ConversationService {
@@ -67,57 +79,138 @@ export class ConversationService {
   async listConversations(
     params: ListConversationsParams = {},
   ): Promise<ConversationListResponse> {
-    const limit = Math.min(Math.max(params.limit ?? 50, 1), 100);
-    const offset = Math.max(params.offset ?? 0, 0);
-
-    // The local registry is the ownership boundary. Never discover or adopt
-    // sessions created by another Hermes client.
-    const registered: Array<{
-      conversation: ConversationEntity;
-      remote: HermesSessionDetailResponse;
-    }> = [];
-    for (const conversation of this.conversationRepo.list()) {
+    const limit = Math.min(
+      Math.max(params.limit ?? LIMITS.SESSION_LIST_PAGE_DEFAULT, 1),
+      LIMITS.SESSION_LIST_PAGE_MAX,
+    );
+    let after: ConversationListPosition | undefined;
+    if (params.cursor !== undefined) {
       try {
-        const remote = await this.hermesAdapter.getSession(
-          conversation.hermes_session_id,
+        if (!/^[A-Za-z0-9_-]{1,1024}$/.test(params.cursor))
+          throw new Error("Invalid cursor");
+        after = ListPositionSchema.parse(
+          JSON.parse(Buffer.from(params.cursor, "base64url").toString("utf8")),
         );
-        this.conversationRepo.updateLastSeen(
-          conversation.id,
-          remote.updated_at,
-        );
-        registered.push({ conversation, remote });
-      } catch (error) {
-        if (!(error instanceof HermesNotFoundError)) throw error;
-        this.removeMissingLocalConversation(conversation);
+      } catch {
+        throw new InvalidRequestError("Invalid conversation list cursor");
       }
     }
-
-    const page = registered.slice(offset, offset + limit);
+    // The registry is the ownership boundary. Read only this page's sessions.
+    const candidates = this.conversationRepo.listPage(limit + 1, after);
+    const page = candidates.slice(0, limit);
+    const items: ConversationSummary[] = [];
+    for (let start = 0; start < page.length; start += METADATA_CONCURRENCY) {
+      const results = await Promise.allSettled(
+        page
+          .slice(start, start + METADATA_CONCURRENCY)
+          .map((conversation) =>
+            this.readRegisteredConversation(conversation.id, true),
+          ),
+      );
+      for (const result of results) {
+        if (result.status === "rejected") throw result.reason;
+        if (!result.value) continue;
+        const current = this.conversationRepo.findById(
+          result.value.conversation.id,
+        );
+        if (
+          current?.hermes_session_id !==
+          result.value.conversation.hermes_session_id
+        )
+          continue;
+        items.push(this.toSummary(current, result.value.remote));
+      }
+    }
+    const last = page.at(-1);
+    const hasMore = candidates.length > limit;
     return {
-      items: page.map(({ conversation, remote }) =>
-        this.toSummary(conversation, remote),
-      ),
+      items,
       limit,
-      offset,
-      has_more: offset + page.length < registered.length,
+      has_more: hasMore,
+      // Advance by examined registry records even when cleanup removed them.
+      next_cursor:
+        hasMore && last
+          ? Buffer.from(
+              JSON.stringify({
+                custom_order: last.custom_order,
+                created_at: last.created_at,
+                id: last.id,
+              }),
+            ).toString("base64url")
+          : null,
     };
   }
 
   async getConversation(
     conversationId: string,
   ): Promise<ConversationDetailResponse> {
-    const conversation = this.requireConversation(conversationId);
-    const remote = await this.hermesAdapter.getSession(
-      conversation.hermes_session_id,
-    );
-    this.conversationRepo.updateLastSeen(conversation.id, remote.updated_at);
-    const refreshed =
-      this.conversationRepo.findById(conversation.id) ?? conversation;
-    this.mediaSync?.enqueueRegistration(
-      refreshed.id,
-      refreshed.hermes_session_id,
-    );
-    return this.toDetail(refreshed, remote);
+    this.requireConversation(conversationId);
+    const result = await this.readRegisteredConversation(conversationId, false);
+    if (!result || !result.remote) {
+      this.requireConversation(conversationId);
+      throw new LocalConflictError(
+        "Hermes session mapping changed while reading conversation details",
+      );
+    }
+    const current = this.requireConversation(conversationId);
+    if (current.hermes_session_id !== result.conversation.hermes_session_id)
+      throw new LocalConflictError(
+        "Hermes session mapping changed while reading conversation details",
+      );
+    this.mediaSync?.enqueueRegistration(current.id, current.hermes_session_id);
+    return this.toDetail(current, result.remote);
+  }
+
+  private async readRegisteredConversation(
+    conversationId: string,
+    cleanMissing: boolean,
+  ): Promise<{
+    conversation: ConversationEntity;
+    remote: HermesSessionDetailResponse | null;
+  } | null> {
+    // Rollover can happen while a detail request is pending. Retry once using
+    // the registry's current mapping; never attach an old response to a new one.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const conversation = this.conversationRepo.findById(conversationId);
+      if (!conversation) return null;
+      let remote: HermesSessionDetailResponse;
+      try {
+        remote = await this.hermesAdapter.getSession(
+          conversation.hermes_session_id,
+        );
+      } catch (error) {
+        const current = this.conversationRepo.findById(conversationId);
+        if (!current) return null;
+        if (current.hermes_session_id !== conversation.hermes_session_id)
+          continue;
+        if (!(error instanceof HermesNotFoundError) || !cleanMissing)
+          throw error;
+        this.removeMissingLocalConversation(conversation);
+        const retained = this.conversationRepo.findById(conversationId);
+        // Pending/failed explicit deletion and unfinished media branches retain
+        // a local entry so their cleanup/retry controls remain reachable.
+        return retained ? { conversation: retained, remote: null } : null;
+      }
+      const current = this.conversationRepo.findById(conversationId);
+      if (!current) return null;
+      if (current.hermes_session_id !== conversation.hermes_session_id)
+        continue;
+      this.conversationRepo.updateLastSeen(
+        conversationId,
+        remote.updated_at,
+        conversation.hermes_session_id,
+      );
+      const refreshed = this.conversationRepo.findById(conversationId);
+      if (!refreshed) return null;
+      if (refreshed.hermes_session_id !== conversation.hermes_session_id)
+        continue;
+      return { conversation: refreshed, remote };
+    }
+    if (!cleanMissing)
+      throw new LocalConflictError(
+        "Hermes session mapping changed while reading conversation details",
+      );
+    return null;
   }
 
   async getMessages(
@@ -401,7 +494,18 @@ export class ConversationService {
     const runIds = this.runRepo
       .listByConversation(conversation.id)
       .map((run) => run.id);
-    if (!this.conversationRepo.delete(conversation.id)) return;
+    try {
+      if (
+        !this.conversationRepo.delete(
+          conversation.id,
+          conversation.hermes_session_id,
+        )
+      )
+        return;
+    } catch (error) {
+      if (error instanceof StateConflictError) return;
+      throw error;
+    }
     for (const runId of runIds) this.sseHub.cleanup(runId);
   }
 
@@ -501,21 +605,25 @@ export class ConversationService {
 
   private toSummary(
     conversation: ConversationEntity,
-    remote: HermesSessionDetailResponse,
+    remote: HermesSessionDetailResponse | null,
   ): ConversationSummary {
     const queueItems = this.queueRepo.listByConversation(conversation.id);
     const activeRun = this.runRepo.findActiveByConversation(conversation.id);
     return {
       conversation_id: conversation.id,
       hermes_session_id: conversation.hermes_session_id,
-      effective_hermes_session_id: remote.id,
-      title: remote.title,
-      pinned: remote.pinned,
+      effective_hermes_session_id: remote?.id ?? conversation.hermes_session_id,
+      title: remote?.title ?? "上游会话不可用",
+      pinned: remote?.pinned ?? false,
       tags: this.parseTags(conversation.tags_json),
       custom_order: conversation.custom_order,
-      last_active: this.toTimestamp(remote.last_active_at),
-      message_count: remote.message_count,
-      preview: remote.preview,
+      last_active: this.toTimestamp(
+        remote?.last_active_at ??
+          conversation.last_seen_upstream_at ??
+          conversation.created_at,
+      ),
+      message_count: remote?.message_count ?? 0,
+      preview: remote?.preview ?? "",
       has_active_run: activeRun !== null,
       queue_size: queueItems.filter((item) => !this.isTerminalQueueState(item))
         .length,

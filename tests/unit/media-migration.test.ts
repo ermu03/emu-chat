@@ -34,7 +34,10 @@ it("upgrades an existing text draft and queue without discarding their data", ()
       VALUES ('qi_existing','cv_existing','op_existing','existing-request',1,'queued',
        'queued text',?,11,'ec_existing',?,?)`,
     ).run("b".repeat(64), now, now);
-    expect(runMigrations(db)).toEqual(["0002_media.sql"]);
+    expect(runMigrations(db)).toEqual([
+      "0002_media.sql",
+      "0003_conversation_list_order.sql",
+    ]);
     expect(
       db.prepare("SELECT content,revision,attachments_json FROM drafts").get(),
     ).toEqual({ content: "saved text", revision: 3, attachments_json: "[]" });

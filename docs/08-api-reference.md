@@ -31,7 +31,7 @@ JSON 接口返回 JSON；运行事件订阅返回 text/event-stream。服务端�
 
 | 方法 | 路径 | 请求 | 成功响应 |
 | --- | --- | --- | --- |
-| GET | /conversations | limit、offset 查询参数 | 200 ConversationListResponseSchema |
+| GET | /conversations | limit、cursor 查询参数 | 200 ConversationListResponseSchema |
 | POST | /conversations | CreateConversationRequestSchema；可用空对象 | 201 ConversationDetailResponseSchema |
 | GET | /conversations/:conversationId | 无 | 200 ConversationDetailResponseSchema |
 | GET | /conversations/:conversationId/messages | limit、offset、order 查询参数 | 200 MessageListResponseSchema |
@@ -42,7 +42,9 @@ JSON 接口返回 JSON；运行事件订阅返回 text/event-stream。服务端�
 | PATCH | /conversations/:conversationId/local-metadata | PatchLocalMetadataRequestSchema | 200 ConversationDetailResponseSchema |
 | POST | /conversations/:conversationId/delete | DeleteConversationRequestSchema | 200 DeleteConversationResponseSchema |
 
-会话列表的 limit、offset 默认分别为 50、0；消息列表的 limit、offset、order 默认分别为 100、0、oldest。客户端加载会话消息时显式使用 `order=latest`，首次请求最新 100 条，随后按独立历史游标请求更早的页。`MessageItemSchema` 扩展包含经过服务端展示脱敏的 `tool_calls` 列表（`{ id, name, display_args }`），供工具卡片在展开后显示对应调用的完整输入。发送消息需要 client_request_id 和 expected_draft_revision；服务端从该 revision 的草稿原子读取正文及附件入队。202 响应返回入队结果和草稿状态，不直接返回一条已完成的助手消息。相同 client_request_id 在控制记录保留期间返回原结果；`done`、`cancelled` 记录在最后更新后保留 7 天，期满后再提交同一 ID 不保证重放。删除会话需传 expected_hermes_session_id 与 confirmed。
+会话列表 `limit` 默认 50、最大 100；首次省略 `cursor`，后续原样传入响应的 `next_cursor`，直到 `has_more=false`（此时 `next_cursor=null`）。`items` 可以因当前页孤儿清理而少于 limit，甚至为空，不能用条数判断是否结束。游标推进的是已检查的本地注册记录，清理不会使 offset 边界移动；原会话列表 offset 参数已移除。排序为 `custom_order ASC`（null 在前）、`created_at DESC`、`id ASC`。分页不是跨请求的数据库快照，排序或集合变化后应从首项重读并按会话 ID 去重；只读取本地注册集合。待删除、删除失败或图片分支保护阻止清理且上游 404 时，列表保留本地摘要，标题为“上游会话不可用”、置顶为 false、消息数为 0，删除状态与本地队列状态仍真实返回。
+
+消息列表的 limit、offset、order 默认分别为 100、0、oldest。客户端加载会话消息时显式使用 `order=latest`，首次请求最新 100 条，随后按独立历史游标请求更早的页。`MessageItemSchema` 扩展包含经过服务端展示脱敏的 `tool_calls` 列表（`{ id, name, display_args }`），供工具卡片在展开后显示对应调用的完整输入。发送消息需要 client_request_id 和 expected_draft_revision；服务端从该 revision 的草稿原子读取正文及附件入队。202 响应返回入队结果和草稿状态，不直接返回一条已完成的助手消息。相同 client_request_id 在控制记录保留期间返回原结果；`done`、`cancelled` 记录在最后更新后保留 7 天，期满后再提交同一 ID 不保证重放。删除会话需传 expected_hermes_session_id 与 confirmed。
 
 ## 草稿
 

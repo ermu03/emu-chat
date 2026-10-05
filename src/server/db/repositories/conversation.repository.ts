@@ -13,6 +13,11 @@ import { withImmediateTransaction } from "../transaction.js";
 import type { AttachmentRef } from "../../../shared/media-schemas.js";
 import { enqueueMediaSync, queueMediaRegistration } from "../../media/sync.js";
 
+export type ConversationListPosition = Pick<
+  ConversationEntity,
+  "custom_order" | "created_at" | "id"
+>;
+
 export class ConversationRepository {
   constructor(private db: Database.Database) {}
 
@@ -30,12 +35,34 @@ export class ConversationRepository {
     return row ?? null;
   }
 
-  list(): ConversationEntity[] {
+  listPage(
+    limit: number,
+    after?: ConversationListPosition,
+  ): ConversationEntity[] {
+    const tail = "ORDER BY custom_order ASC, created_at DESC, id ASC LIMIT ?";
+    if (!after)
+      return this.db
+        .prepare(`SELECT * FROM conversations ${tail}`)
+        .all(limit) as ConversationEntity[];
+    const withinOrder = "(created_at < ? OR (created_at = ? AND id > ?))";
+    const values = [after.created_at, after.created_at, after.id, limit];
+    if (after.custom_order === null)
+      return this.db
+        .prepare(
+          `SELECT * FROM conversations WHERE
+        custom_order IS NOT NULL OR (custom_order IS NULL AND ${withinOrder}) ${tail}`,
+        )
+        .all(...values) as ConversationEntity[];
     return this.db
       .prepare(
-        "SELECT * FROM conversations ORDER BY custom_order ASC, created_at DESC",
+        `SELECT * FROM conversations WHERE
+      custom_order > ? OR (custom_order = ? AND ${withinOrder}) ${tail}`,
       )
-      .all() as ConversationEntity[];
+      .all(
+        after.custom_order,
+        after.custom_order,
+        ...values,
+      ) as ConversationEntity[];
   }
 
   insert(
@@ -263,19 +290,39 @@ export class ConversationRepository {
     });
   }
 
-  updateLastSeen(id: string, lastSeen: string): void {
+  updateLastSeen(
+    id: string,
+    lastSeen: string,
+    expectedSessionId?: string,
+  ): void {
     const now = new Date().toISOString();
     this.db
       .prepare(
         `UPDATE conversations
          SET last_seen_upstream_at = ?, updated_at = ?
-         WHERE id = ? AND delete_state = 'none'`,
+         WHERE id = ? AND delete_state = 'none'
+           AND (? IS NULL OR hermes_session_id = ?)`,
       )
-      .run(lastSeen, now, id);
+      .run(
+        lastSeen,
+        now,
+        id,
+        expectedSessionId ?? null,
+        expectedSessionId ?? null,
+      );
   }
 
-  delete(id: string): boolean {
+  delete(id: string, expectedSessionId?: string): boolean {
     return withImmediateTransaction(this.db, () => {
+      if (expectedSessionId !== undefined) {
+        const current = this.findById(id);
+        if (
+          !current ||
+          current.hermes_session_id !== expectedSessionId ||
+          current.delete_state !== "none"
+        )
+          return false;
+      }
       if (
         this.db
           .prepare(
@@ -285,20 +332,23 @@ export class ConversationRepository {
           .get(id)
       )
         throw new StateConflictError("图片分支关联尚未完成，不能清理来源会话");
-      // coordinator_leases intentionally has no conversation foreign key:
-      // the global lease must survive while this conversation lease is removed.
-      this.db
-        .prepare(
-          "DELETE FROM coordinator_leases WHERE scope_type = 'conversation' AND scope_id = ?",
-        )
-        .run(id);
       const res = this.db
-        .prepare("DELETE FROM conversations WHERE id = ?")
-        .run(id);
-      if (res.changes)
+        .prepare(
+          `DELETE FROM conversations WHERE id = ?
+          AND (? IS NULL OR (hermes_session_id = ? AND delete_state = 'none'))`,
+        )
+        .run(id, expectedSessionId ?? null, expectedSessionId ?? null);
+      if (res.changes) {
+        // Leases have no conversation foreign key; remove only after deletion.
+        this.db
+          .prepare(
+            "DELETE FROM coordinator_leases WHERE scope_type = 'conversation' AND scope_id = ?",
+          )
+          .run(id);
         enqueueMediaSync(this.db, `scope_${id}`, id, "scope_delete", {
           version: 1,
         });
+      }
       return res.changes > 0;
     });
   }

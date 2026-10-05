@@ -7,7 +7,8 @@
 ### ConversationService
 提供会话级别的生命周期管理与数据操作。
 
-- **listConversations**: 负责遍历本地数据库，与上游 Hermes 同步状态，并通过 `removeMissingLocalConversation` 清理在本地存在但上游已不存在的孤儿会话。
+- **listConversations**: 只从本地注册表按 `custom_order ASC, created_at DESC, id ASC` 取得当前页及一条本地前瞻记录；只为当前页读取 Hermes 详情，最多并发 4 个请求。游标保存最后检查的本地排序位置，清理空项甚至删除游标对应记录后仍可继续。不会扫描或导入其他客户端的上游会话。
+- **详情读取与自动清理**: 列表及详情读取在上游响应返回后复核 session 映射；映射变化最多按新映射重读一次，避免将旧元数据拼到新映射上。列表收到当前映射的 404 时，在同一即时事务中复核预期 session、`delete_state=none` 和图片分支保护，条件删除成功后才清理 SSE；会话、草稿等级联删除、租约移除和图片 `scope_delete` outbox 共同提交或回滚。`pending`/`failed` 显式删除及待关联图片分支保留本地记录；详情不可读时，列表使用“上游会话不可用”的本地摘要保留删除入口。详见[安全列表与清理决定](../.agents/notes/implemented/bug-fix/2026-10-05-safe-conversation-list-and-cleanup.md)。
 - **getMessages**: 处理消息的读取请求，并在发现会话 ID 不一致时执行 Session ID 自愈（`adoptEffectiveHermesSessionId`）。
 - **安全删除流程**:
   1. **前置断言**: 确保会话可以被删除。
