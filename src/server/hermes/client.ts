@@ -118,6 +118,7 @@ export class HermesClient {
       timeoutMs?: number;
       livenessTimeoutMs?: number;
       headers?: Record<string, string>;
+      signal?: AbortSignal;
     } = {},
   ): AsyncGenerator<HermesSseEvent> {
     this.assertConfigured();
@@ -126,8 +127,16 @@ export class HermesClient {
     const livenessTimeoutMs =
       options.livenessTimeoutMs ?? LIMITS.UPSTREAM_SSE_LIVENESS_TIMEOUT_MS;
     const controller = new AbortController();
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    const cancel = () => {
+      controller.abort();
+      void reader?.cancel().catch(() => undefined);
+    };
+    options.signal?.addEventListener("abort", cancel, { once: true });
+    if (options.signal?.aborted) cancel();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
+      controller.signal.throwIfAborted();
       const response = await fetch(this.buildUrl(path), {
         method: "GET",
         headers: this.buildHeaders(
@@ -144,7 +153,8 @@ export class HermesClient {
         );
       }
       clearTimeout(timer);
-      const reader = response.body.getReader();
+      reader = response.body.getReader();
+      controller.signal.throwIfAborted();
       const decoder = new TextDecoder();
       let buffer = "";
       let eventName = "message";
@@ -168,6 +178,7 @@ export class HermesClient {
           controller,
           livenessTimeoutMs,
         );
+        if (controller.signal.aborted) return;
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
         if (
@@ -212,6 +223,12 @@ export class HermesClient {
       );
     } finally {
       clearTimeout(timer);
+      options.signal?.removeEventListener("abort", cancel);
+      controller.abort();
+      if (reader) {
+        await reader.cancel().catch(() => undefined);
+        reader.releaseLock();
+      }
     }
   }
 

@@ -289,9 +289,11 @@ export class HermesAdapter {
   async *streamEvents(
     _sessionId: string,
     runId: string,
+    signal?: AbortSignal,
   ): AsyncGenerator<HermesRunEvent> {
     for await (const event of this.client.stream(
       `/v1/runs/${encodeURIComponent(runId)}/events`,
+      signal ? { signal } : {},
     )) {
       const parsed = this.parseSseEvent(event, runId);
       if (parsed) yield parsed;

@@ -70,6 +70,8 @@ export class FakeHermesServer {
   public failRunAdmissions = 0;
   public loseNextRunAdmissionResponse = false;
   public admissionRequests = 0;
+  public eventSubscriptions = 0;
+  public eventStreamFailures = 0;
   public pauseNextRun = false;
   public simulateDisconnect = false;
   public activeAgents = 0;
@@ -253,6 +255,14 @@ export class FakeHermesServer {
     run.approvalDecision = null;
   }
 
+  enqueueRunEvent(
+    runId: string,
+    type: string,
+    data: Record<string, unknown>,
+  ): void {
+    this.requireRun(runId).events.push({ type, data });
+  }
+
   completeStoppedRun(runId: string): void {
     const run = this.requireRun(runId);
     if (run.status !== "stopping") {
@@ -393,12 +403,18 @@ export class FakeHermesServer {
     });
 
     app.get("/v1/runs/:runId/events", async (request, reply) => {
+      this.eventSubscriptions += 1;
+      if (this.eventStreamFailures > 0) {
+        this.eventStreamFailures -= 1;
+        return reply.code(503).send({ error: "temporary stream failure" });
+      }
       const run = this.runs.get((request.params as { runId: string }).runId);
       if (!run) return reply.code(404).send({ error: "not found" });
       reply.hijack();
       reply.raw.setHeader("Content-Type", "text/event-stream; charset=utf-8");
       reply.raw.setHeader("Cache-Control", "no-cache");
-      for (const event of run.events) {
+      // Hermes consumes a live queue; it does not replay previously drained events.
+      for (const event of run.events.splice(0)) {
         reply.raw.write(
           `data: ${JSON.stringify({ event: event.type, run_id: run.id, timestamp: Math.floor(Date.now() / 1000), ...event.data })}\n\n`,
         );

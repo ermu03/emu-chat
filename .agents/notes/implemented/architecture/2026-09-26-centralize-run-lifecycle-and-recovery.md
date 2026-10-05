@@ -18,6 +18,8 @@ Status: implemented
 
 停止后的会话暂停独立于 Run 的真实终态；成功、失败和历史重试均保留已提交的 `user_stopped`，等待用户恢复。完整行为和前端入口见[停止暂停与恢复决定](../bug-fix/2026-10-03-paused-queue-false-generating.md)。
 
+已接纳 Run 的事件连接、有限退避续订和取消也由同一协调器持有，每次事件及重连回调复核捕获的租约。当前 Hermes 无事件游标和重放，断线可能删除队列；无法续订时保留缺口及状态轮询。协议依据与资源收尾见[上游 SSE 恢复决定](../bug-fix/2026-10-05-recover-upstream-run-streams.md)。
+
 ## Alternatives considered
 
 - **仅在已发现的调用点分别补事务和终态判断**：改动较小，但 `submitting` 无 ID 的恢复仍需统一责任边界，后续调用方容易遗漏 Queue、Run 与会话暂停的联动。

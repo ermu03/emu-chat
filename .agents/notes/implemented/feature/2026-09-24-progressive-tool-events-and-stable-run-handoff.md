@@ -15,6 +15,8 @@ Status: implemented
 3. 终态先把 RunDisplay 标记为「正在核对」，保留已有内容。读取 Hermes 历史成功后，在一次 React 更新中合并权威消息并结算 RunDisplay；实时与历史使用同一个助手行组件和稳定 key，保留已展开工具与行节点，避免重放整行淡入。失败时持续显示实时内容，通过轮询或手动核对重试。Run 状态刷新单飞执行；已对账状态不接受随后到达的旧活跃响应。
 4. 临时展示由 `useConversationView` 独占，缓存快照与切换视图一并保存；`useRunRuntime` 只解释 SSE、触发工具补读和队列/Run 对账。Hermes 继续独占会话历史，emu-chat 不保存消息副本。长会话仍按[现有分页决定](../bug-fix/2026-09-24-correct-message-pagination.md)补页合并。
 
+上游连接的有限续订及取消见[恢复决定](../bug-fix/2026-10-05-recover-upstream-run-streams.md)。浏览器本地序号回放去重不代表 Hermes 能重放；其一次性队列删除后，过程缺口只能保留提示并由权威历史核对，取消连接不清空现有展示。
+
 ## Alternatives considered
 
 - **仅延迟清除实时文字并去掉入场动画**：改动较少，但工具仍只能在终态出现，文字仍可能被统一过程卡片移位。

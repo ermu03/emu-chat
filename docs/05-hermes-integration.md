@@ -19,6 +19,7 @@
   - **行解析状态机**: `HermesClient` 自行按行增量解析 SSE 帧。
   - **接收缓冲限制**: 每次读取 chunk 后、分行前检查当前字符串缓冲区是否超过 256 KiB；当前实现并未累计限制多行组成的整帧大小。
   - **输出**: 解析完成即 `yield HermesSseEvent` 对象供外层使用。
+  - **取消与收尾**: 接受协调器的 `AbortSignal`，中止握手或正在等待的读取；生成器正常结束、提前退出和解析失败都中止请求、取消 reader 并释放锁，移除取消监听及计时器。
 
 ## HermesAdapter 协议适配器（反腐层 Anti-Corruption Layer）
 
@@ -31,7 +32,7 @@
 - **标题校验错误**: Client 仅保留有界 400 响应中的结构化错误码和原因；Adapter 只在提交标题时识别 `invalid_title`，明确重名时转换为 `HERMES_TITLE_CONFLICT`，其他标题校验转换为 `HERMES_TITLE_INVALID`。其他 400 保持通用协议错误；原始上游原因和会话 ID 不进入前端错误信息。
 - **startRun**: 发起运行调用。内部限制请求超时 30 秒，并附加 `Idempotency-Key` 标头以防止网络抖动导致的重复执行。
 - **getRunStatus**: 拉取状态信息，并对获取到的 `run_id` 实施强一致性校验。
-- **streamEvents**: 异步迭代器接口，负责将来自 Client 的纯净流进行转换。逐帧校验 JSON 格式、对比 `run_id` 确保不错乱，并验证 timestamp 合法性。
+- **streamEvents**: 异步迭代器接口，负责将来自 Client 的纯净流进行转换。逐帧校验 JSON 格式、对比 `run_id` 确保不错乱，并验证 timestamp 合法性；将取消信号透传给 Client，校验失败也会关闭底层生成器。
 - **等待通知边界**: 2026-10-05 核对本机 Hermes 源码，`_emit_wait_notice` 使用 `thinking_callback`；`/v1/runs` 创建 Agent 时未绑定这一回调，Run 的工具事件桥也丢弃 `_thinking`。因此现有公开 Run SSE 不提供可用的重试等待通知。emu-chat 只展示可验证的执行、停止、审批和对账状态，不推测供应商重试时间；等待通知需要另行扩展上游协议。
 - **normalizeSession**: 日期格式标准化处理。将上游返回的秒级 Unix 时间戳转换为内部统一使用的 ISO 8601 字符串格式。
 - **协议校验 (Zod Schema)**: 会话、健康、消息和 Run 等需要读取结构化数据的响应经过 Schema 解析或字段校验；删除、停止和审批等无数据响应不做同样的结构验证。格式偏差会抛出 `HermesProtocolError`。
@@ -48,6 +49,16 @@ flowchart LR
     end
     HA -.->|"格式偏差"| HA_ERR
 ```
+
+## Run SSE 的续订边界
+
+2026-10-05 核对本机 Hermes 源码（提交 `6005aa1`）：`gateway/platforms/api_server.py::_sse_frame` 只写事件名和 JSON data，没有事件 ID；`gateway/platforms/api_server_runs.py::_handle_run_events` 对共享的内存队列执行破坏性 `q.get()`，不读取 `Last-Event-ID` 或游标，不重放已取出的事件。`None` 哨兵只写 `: stream closed` 注释，HTTP EOF 无法单独证明 Run 已进入终态；状态仍以 REST 为准。
+
+该 handler 在连接结束或写入异常时调用 `_drop_run_transport` 删除整个事件队列，而 Run 状态另行保留。此时原 Run 即使仍在执行，续订也会返回 404；上游进程重启不保留事件队列。可用[隔离验证脚本](../.agents/research/2026-10-05-hermes-run-sse-contract.py)对实际源码复查正常结束、断线、游标无效及状态保留，脚本只替换鉴权和响应写入，不启动 Agent。
+
+协调器在初次接纳和启动恢复时订阅原 `hermes_run_id`；非终态 EOF 或临时错误设置 `events_truncated` 并发布 `upstream_disconnected` 缺口。当前租约下最多连接 4 次，重试间隔 1、2、4 秒；404、鉴权与协议等永久错误停止续订，继续 REST 状态轮询。上游队列尚可用时能够继续消费未取出的新事件；队列已经删除时只能等待权威历史核对，不能补回文字或工具过程。
+
+当前契约没有上游重放，所以不按文字内容、时间戳或本地 `local_seq` 猜测去重，也不发送伪造的续订游标；合法的相同文字增量仍各自转发。浏览器从 emu-chat 有界缓冲重连时继续按本地序号去重。如果上游改为重放，需要先提供稳定事件身份、明确游标范围和重启语义，再调整这里的恢复协议。
 
 ## evaluateHermesCapabilities 能力评估函数
 

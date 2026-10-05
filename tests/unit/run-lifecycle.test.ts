@@ -10,19 +10,255 @@ import { RunRepository } from "../../src/server/db/repositories/run.repository.j
 import type { HermesAdapter } from "../../src/server/hermes/adapter.js";
 import type { HermesRunStatusResponse } from "../../src/shared/hermes-schemas.js";
 import { SSEHub } from "../../src/server/sse/sse-hub.js";
+import { HermesNotFoundError } from "../../src/server/domain/errors.js";
 
 describe("Run lifecycle write fencing", () => {
   const databases: Database.Database[] = [];
   const hubs: SSEHub[] = [];
   const coordinators: AdmissionCoordinator[] = [];
 
-  afterEach(() => {
-    for (const coordinator of coordinators) coordinator.stop();
+  afterEach(async () => {
+    await Promise.all(coordinators.map((coordinator) => coordinator.stop()));
     for (const hub of hubs) hub.close();
     for (const db of databases) db.close();
     coordinators.length = 0;
     hubs.length = 0;
     databases.length = 0;
+    vi.useRealTimers();
+  });
+
+  function activeRun(adapterOverrides: Record<string, unknown>) {
+    const db = new Database(":memory:");
+    databases.push(db);
+    runMigrations(db);
+    const conversations = new ConversationRepository(db);
+    const queues = new QueueRepository(db);
+    const runs = new RunRepository(db);
+    const leases = new LeaseRepository(db);
+    conversations.insert({
+      id: "cv_stream",
+      hermes_profile: "default",
+      hermes_session_id: "ses_stream",
+    });
+    const now = new Date().toISOString();
+    db.prepare(
+      `INSERT INTO queue_items (
+      id, conversation_id, operation_id, client_request_id, fifo_seq, state,
+      payload_text, payload_sha256, payload_bytes, idempotency_key, dispatch_session_id, created_at, updated_at
+    ) VALUES ('qi_stream', 'cv_stream', 'op_stream', 'request_stream', 1, 'accepted',
+      'test', ?, 4, 'key_stream', 'ses_stream', ?, ?)`,
+    ).run(createHash("sha256").update("test").digest("hex"), now, now);
+    runs.insert({
+      id: "lr_stream",
+      queue_item_id: "qi_stream",
+      conversation_id: "cv_stream",
+      local_state: "accepted",
+      hermes_run_id: "run_stream",
+      upstream_status: "running",
+    });
+    const adapter = {
+      getRunStatus: vi.fn(async () => ({
+        run_id: "run_stream",
+        status: "running",
+        partial: false,
+      })),
+      startRun: vi.fn(),
+      ...adapterOverrides,
+    };
+    const hub = new SSEHub();
+    hubs.push(hub);
+    const coordinator = new AdmissionCoordinator(
+      db,
+      queues,
+      runs,
+      leases,
+      conversations,
+      adapter as unknown as HermesAdapter,
+      hub,
+    );
+    coordinators.push(coordinator);
+    return { db, coordinator, adapter, hub, runs };
+  }
+
+  it("resubscribes the original active run once and preserves legitimate identical deltas", async () => {
+    vi.useFakeTimers();
+    let active = 0;
+    let maximum = 0;
+    let subscriptions = 0;
+    const streamEvents = vi.fn(async function* (
+      _session: string,
+      _run: string,
+      signal: AbortSignal,
+    ) {
+      active += 1;
+      maximum = Math.max(maximum, active);
+      subscriptions += 1;
+      try {
+        yield { type: "message.delta", data: { text: "same" } };
+        if (subscriptions === 1) return;
+        yield { type: "tool.started", data: { tool: "test" } };
+        await new Promise<void>((resolve) =>
+          signal.addEventListener("abort", () => resolve(), { once: true }),
+        );
+        // An old callback delivered after cancellation must be fenced out.
+        yield { type: "message.delta", data: { text: "stale" } };
+      } finally {
+        active -= 1;
+      }
+    });
+    const { coordinator, adapter, hub, runs } = activeRun({ streamEvents });
+    const publish = vi.spyOn(hub, "publishRunEvent");
+    const gap = vi.spyOn(hub, "publishGap");
+    await coordinator.tick();
+    await vi.advanceTimersByTimeAsync(0);
+    await coordinator.tick();
+    expect(streamEvents).toHaveBeenCalledTimes(1);
+    expect(gap).toHaveBeenCalledWith("lr_stream", "upstream_disconnected");
+    expect(runs.findById("lr_stream")?.events_truncated).toBe(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await coordinator.tick();
+    expect(streamEvents).toHaveBeenCalledTimes(2);
+    expect(
+      streamEvents.mock.calls.every((args) => args[1] === "run_stream"),
+    ).toBe(true);
+    expect(
+      publish.mock.calls.filter((args) => args[2] === "message.delta"),
+    ).toHaveLength(2);
+    expect(publish).toHaveBeenCalledWith(
+      "lr_stream",
+      3,
+      "tool.started",
+      expect.any(Object),
+    );
+    expect(maximum).toBe(1);
+    await coordinator.stop();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(active).toBe(0);
+    expect(streamEvents).toHaveBeenCalledTimes(2);
+    expect(
+      publish.mock.calls.filter((args) => args[2] === "message.delta"),
+    ).toHaveLength(2);
+    expect(adapter.startRun).not.toHaveBeenCalled();
+  });
+
+  it("bounds reconnect attempts and cancels pending backoff on stop", async () => {
+    vi.useFakeTimers();
+    const streamEvents = vi.fn(async function* () {
+      /* temporary EOF without a terminal event */
+    });
+    const { coordinator, adapter } = activeRun({ streamEvents });
+    await coordinator.tick();
+    await vi.advanceTimersByTimeAsync(7_000);
+    expect(streamEvents).toHaveBeenCalledTimes(4);
+    coordinator.start(60_000);
+    await vi.advanceTimersByTimeAsync(60_000);
+    await coordinator.tick();
+    expect(streamEvents).toHaveBeenCalledTimes(4);
+    expect(adapter.getRunStatus).toHaveBeenCalled();
+    await coordinator.stop();
+
+    const pending = activeRun({ streamEvents: vi.fn(async function* () {}) });
+    await pending.coordinator.tick();
+    await vi.advanceTimersByTimeAsync(0);
+    await pending.coordinator.stop();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(pending.adapter.streamEvents).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to status polling when the upstream has deleted its transport", async () => {
+    vi.useFakeTimers();
+    const streamEvents = vi.fn(async function* () {
+      throw new HermesNotFoundError();
+    });
+    const { coordinator, adapter, runs } = activeRun({ streamEvents });
+    await coordinator.tick();
+    coordinator.start(60_000);
+    await vi.advanceTimersByTimeAsync(60_000);
+    await coordinator.tick();
+    expect(streamEvents).toHaveBeenCalledTimes(1);
+    expect(adapter.getRunStatus.mock.calls.length).toBeGreaterThanOrEqual(3);
+    expect(runs.findById("lr_stream")?.events_truncated).toBe(1);
+  });
+
+  it("aborts and fences the old consumer when leases change owner", async () => {
+    vi.useFakeTimers();
+    let signal!: AbortSignal;
+    const streamEvents = vi.fn(async function* (
+      _session: string,
+      _run: string,
+      currentSignal: AbortSignal,
+    ) {
+      signal = currentSignal;
+      await new Promise<void>((resolve) =>
+        signal.addEventListener("abort", () => resolve(), { once: true }),
+      );
+      yield { type: "message.delta", data: { text: "old owner" } };
+    });
+    const { db, coordinator, hub } = activeRun({ streamEvents });
+    const publish = vi.spyOn(hub, "publishRunEvent");
+    await coordinator.tick();
+    await vi.advanceTimersByTimeAsync(0);
+    db.prepare(
+      "UPDATE coordinator_leases SET owner_id = 'replacement', lease_token = 'replacement'",
+    ).run();
+    await vi.advanceTimersByTimeAsync(5_000);
+    await coordinator.tick();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(signal.aborted).toBe(true);
+    expect(publish).not.toHaveBeenCalled();
+    expect(streamEvents).toHaveBeenCalledTimes(1);
+    expect(
+      db
+        .prepare(
+          "SELECT COUNT(*) AS count FROM coordinator_leases WHERE owner_id = 'replacement'",
+        )
+        .get(),
+    ).toEqual({ count: 2 });
+  });
+
+  it("releases an open stream as soon as REST confirms terminal while history is delayed", async () => {
+    vi.useFakeTimers();
+    let signal!: AbortSignal;
+    let releaseHistory!: () => void;
+    const history = new Promise<void>((resolve) => {
+      releaseHistory = resolve;
+    });
+    const streamEvents = vi.fn(async function* (
+      _session: string,
+      _run: string,
+      currentSignal: AbortSignal,
+    ) {
+      signal = currentSignal;
+      await new Promise<void>((resolve) =>
+        signal.addEventListener("abort", () => resolve(), { once: true }),
+      );
+      yield { type: "message.delta", data: { text: "late callback" } };
+    });
+    const { coordinator, adapter, hub, runs } = activeRun({
+      streamEvents,
+      getSessionMessages: vi.fn(async () => {
+        await history;
+        return { session_id: "ses_stream", data: [] };
+      }),
+    });
+    const publish = vi.spyOn(hub, "publishRunEvent");
+    await coordinator.tick();
+    await vi.advanceTimersByTimeAsync(0);
+    adapter.getRunStatus.mockResolvedValue({
+      run_id: "run_stream",
+      status: "completed",
+      partial: false,
+    });
+    const terminal = coordinator.reconcileRun("lr_stream");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(signal.aborted).toBe(true);
+    expect(runs.findById("lr_stream")?.local_state).toBe("reconciling");
+    expect(publish).not.toHaveBeenCalled();
+    releaseHistory();
+    await terminal;
+    expect(runs.findById("lr_stream")?.local_state).toBe("reconciled");
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(streamEvents).toHaveBeenCalledTimes(1);
   });
 
   it.each([

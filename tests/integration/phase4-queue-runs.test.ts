@@ -5,6 +5,7 @@ import { buildServer } from "../../src/server/app.js";
 import type { AppConfig } from "../../src/server/config.js";
 import { runMigrations } from "../../src/server/db/migrate.js";
 import { RunRepository } from "../../src/server/db/repositories/run.repository.js";
+import { SSEHub } from "../../src/server/sse/sse-hub.js";
 import { FakeHermesServer } from "../fixtures/fake-hermes/fake-hermes-server.js";
 
 type DraftView = {
@@ -840,6 +841,94 @@ describe("Phase 4: Queue and runs HTTP integration", () => {
       revision: 5,
     });
   });
+
+  it("restores fresh events after a transient connection failure and an active-run restart", async () => {
+    const publish = vi.spyOn(SSEHub.prototype, "publishRunEvent");
+    const conversationId = await createMappedConversation();
+    fakeHermes.pauseNextRun = true;
+    fakeHermes.eventStreamFailures = 1;
+    await putDraft(conversationId, "Recover this stream", 0);
+    await app!.inject({
+      method: "POST",
+      url: `/api/v1/conversations/${conversationId}/messages`,
+      payload: {
+        client_request_id: "00000000-0000-4000-8000-000000000405",
+        expected_draft_revision: 1,
+      },
+    });
+    const run = await waitFor(() => {
+      const current = new RunRepository(db!).findActiveByConversation(
+        conversationId,
+      );
+      return current?.hermes_run_id && current.events_truncated
+        ? current
+        : undefined;
+    });
+    expect(fakeHermes.eventSubscriptions).toBe(1);
+    fakeHermes.enqueueRunEvent(run.hermes_run_id!, "message.delta", {
+      text: "same",
+    });
+    fakeHermes.enqueueRunEvent(run.hermes_run_id!, "tool.started", {
+      tool: "test",
+    });
+    fakeHermes.enqueueRunEvent(run.hermes_run_id!, "tool.completed", {
+      tool: "test",
+      preview: "done",
+    });
+    await waitFor(() =>
+      publish.mock.calls.some((args) => args[2] === "tool.completed")
+        ? true
+        : undefined,
+    );
+    expect(fakeHermes.eventSubscriptions).toBe(2);
+    await app!.close();
+    app = null;
+    // This test double retains an unconsumed queue so we can exercise the allowed reconnect path.
+    // The deployed Hermes may instead return 404 after deleting its transport.
+    fakeHermes.enqueueRunEvent(run.hermes_run_id!, "message.delta", {
+      text: "same",
+    });
+    fakeHermes.enqueueRunEvent(run.hermes_run_id!, "tool.started", {
+      tool: "after_restart",
+    });
+    app = buildServer(config, { db: db! });
+    await app.ready();
+    await waitFor(() =>
+      publish.mock.calls.some(
+        (args) =>
+          args[2] === "tool.started" && args[3].tool === "after_restart",
+      )
+        ? true
+        : undefined,
+    );
+    expect(fakeHermes.eventSubscriptions).toBe(3);
+    expect(
+      publish.mock.calls.filter((args) => args[2] === "message.delta"),
+    ).toHaveLength(2);
+    expect(
+      publish.mock.calls.filter((args) => args[2] === "tool.completed"),
+    ).toHaveLength(1);
+    expect(fakeHermes.admissionRequests).toBe(1);
+
+    const waiting = (
+      await app.inject({ method: "GET", url: `/api/v1/runs/${run.id}` })
+    ).json() as RunView;
+    const approved = await app.inject({
+      method: "POST",
+      url: `/api/v1/runs/${run.id}/approval`,
+      payload: { choice: "once", request_id: waiting.approval!.request_id },
+    });
+    expect(approved.statusCode).toBe(202);
+    fakeHermes.completeApprovalRun(run.hermes_run_id!);
+    await waitFor(async () => {
+      await app!.inject({ method: "GET", url: `/api/v1/runs/${run.id}` });
+      return new RunRepository(db!).findById(run.id)?.local_state ===
+        "reconciled"
+        ? true
+        : undefined;
+    });
+    expect(fakeHermes.admissionRequests).toBe(1);
+  }, 8_000);
 
   it("reconciles an accepted run after a server restart without submitting it twice", async () => {
     const conversationId = await createMappedConversation();

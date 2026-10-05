@@ -12,6 +12,7 @@ import { SSEHub } from "../sse/sse-hub.js";
 import { maskDisplaySensitiveText } from "../display-masking.js";
 import {
   ApprovalNotPendingError,
+  AppError,
   HermesAuthFailedError,
   HermesNotFoundError,
   HermesProtocolError,
@@ -23,6 +24,13 @@ import { logger } from "../logging.js";
 import type { MediaDispatchService } from "../media/dispatch.js";
 
 type LeasePair = { global: string; conversation: string };
+type RunConsumer = {
+  pair: LeasePair;
+  controller: AbortController;
+  attempts: number;
+  flight: Promise<void> | null;
+  retryTimer: NodeJS.Timeout | null;
+};
 
 /** Coordinates the single local admission slot and run lifecycle. */
 export class AdmissionCoordinator {
@@ -36,6 +44,7 @@ export class AdmissionCoordinator {
   private readonly leases = new Map<string, LeasePair>();
   private readonly submitFlights = new Set<string>();
   private readonly reconcileFlights = new Map<string, Promise<void>>();
+  private readonly consumers = new Map<string, RunConsumer>();
 
   constructor(
     private readonly db: Database.Database,
@@ -67,14 +76,20 @@ export class AdmissionCoordinator {
     );
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
     this.stopped = true;
     if (this.timer) clearInterval(this.timer);
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     this.timer = null;
     this.heartbeatTimer = null;
+    for (const runId of this.consumers.keys()) this.cancelConsumer(runId);
     for (const [runId, pair] of this.leases) this.releaseLeases(runId, pair);
     this.leases.clear();
+    await Promise.allSettled(
+      [...this.consumers.values()].flatMap((consumer) =>
+        consumer.flight ? [consumer.flight] : [],
+      ),
+    );
   }
 
   /** Wake the dispatcher after a queue mutation commits. */
@@ -398,12 +413,7 @@ export class AdmissionCoordinator {
       this.emitRunEvent(run.id, "run.accepted", {
         hermes_run_id: admission.run_id,
       });
-      await this.consume(
-        run.id,
-        item.conversation_id,
-        item.dispatch_session_id,
-        admission.run_id,
-      );
+      this.ensureConsumer(run.id);
     } catch (error) {
       if (this.stopped || !this.ownsRunLease(run.id, item.conversation_id))
         return;
@@ -618,27 +628,133 @@ export class AdmissionCoordinator {
     }
   }
 
-  private async consume(
-    localRunId: string,
-    conversationId: string,
+  private ensureConsumer(localRunId: string): void {
+    if (this.stopped || this.consumers.has(localRunId)) return;
+    const run = this.runRepo.findById(localRunId);
+    const pair = this.leases.get(localRunId);
+    const item = run && this.queueRepo.findById(run.queue_item_id);
+    if (
+      !run ||
+      !pair ||
+      !item?.dispatch_session_id ||
+      !run.hermes_run_id ||
+      run.local_state !== "accepted" ||
+      item.state !== "accepted" ||
+      this.isTerminalStatus(run.upstream_status ?? "") ||
+      !this.ownsLeases(run.conversation_id, pair)
+    )
+      return;
+    const consumer: RunConsumer = {
+      pair,
+      controller: new AbortController(),
+      attempts: 0,
+      flight: null,
+      retryTimer: null,
+    };
+    this.consumers.set(localRunId, consumer);
+    this.launchConsumer(run, item.dispatch_session_id, consumer);
+  }
+
+  private consumerIsCurrent(run: RunEntity, consumer: RunConsumer): boolean {
+    if (
+      this.stopped ||
+      consumer.controller.signal.aborted ||
+      this.consumers.get(run.id) !== consumer ||
+      this.leases.get(run.id) !== consumer.pair ||
+      !this.ownsLeases(run.conversation_id, consumer.pair)
+    )
+      return false;
+    const current = this.runRepo.findById(run.id);
+    return (
+      current?.local_state === "accepted" &&
+      current.hermes_run_id === run.hermes_run_id &&
+      !this.isTerminalStatus(current.upstream_status ?? "")
+    );
+  }
+
+  private launchConsumer(
+    run: RunEntity,
     sessionId: string,
-    hermesRunId: string,
+    consumer: RunConsumer,
+  ): void {
+    consumer.attempts += 1;
+    consumer.flight = this.consume(run, sessionId, consumer)
+      .catch((error: unknown) => {
+        // Polling remains available even if local reconciliation fails.
+        logger.error("Run event consumer failed", {
+          details: {
+            errorName: error instanceof Error ? error.name : "UnknownError",
+          },
+        });
+      })
+      .finally(() => {
+        consumer.flight = null;
+        if (!this.consumerIsCurrent(run, consumer)) {
+          if (this.consumers.get(run.id) === consumer)
+            this.consumers.delete(run.id);
+          return;
+        }
+        if (consumer.attempts >= LIMITS.UPSTREAM_SSE_MAX_ATTEMPTS) return;
+        consumer.retryTimer = setTimeout(
+          () => {
+            consumer.retryTimer = null;
+            if (this.consumers.get(run.id) !== consumer) return;
+            if (this.consumerIsCurrent(run, consumer))
+              this.launchConsumer(run, sessionId, consumer);
+            else this.cancelConsumer(run.id);
+          },
+          LIMITS.UPSTREAM_SSE_RETRY_BASE_MS * 2 ** (consumer.attempts - 1),
+        );
+        consumer.retryTimer.unref();
+      });
+  }
+
+  private cancelConsumer(localRunId: string): void {
+    const consumer = this.consumers.get(localRunId);
+    if (!consumer) return;
+    if (consumer.retryTimer) clearTimeout(consumer.retryTimer);
+    consumer.retryTimer = null;
+    consumer.controller.abort();
+    // Keep a draining consumer registered until its reader has been released.
+    if (!consumer.flight) this.consumers.delete(localRunId);
+  }
+
+  private async consume(
+    run: RunEntity,
+    sessionId: string,
+    consumer: RunConsumer,
   ): Promise<void> {
+    if (!this.consumerIsCurrent(run, consumer) || !run.hermes_run_id) return;
     try {
       for await (const event of this.hermesAdapter.streamEvents(
         sessionId,
-        hermesRunId,
+        run.hermes_run_id,
+        consumer.controller.signal,
       )) {
-        if (this.stopped || !this.leases.has(localRunId)) return;
-        this.handleEvent(localRunId, event);
+        if (!this.consumerIsCurrent(run, consumer)) return;
+        this.handleEvent(run.id, event);
         if (this.isTerminalEvent(event.type)) break;
       }
-    } catch {
-      if (!this.stopped)
-        this.sseHub.publishGap(localRunId, "upstream_disconnected");
+    } catch (error) {
+      if (error instanceof AppError && !error.retryable)
+        consumer.attempts = LIMITS.UPSTREAM_SSE_MAX_ATTEMPTS;
     }
-    if (this.stopped || !this.leases.has(localRunId)) return;
-    await this.reconcileById(localRunId, conversationId);
+    if (
+      this.stopped ||
+      consumer.controller.signal.aborted ||
+      this.leases.get(run.id) !== consumer.pair ||
+      !this.ownsLeases(run.conversation_id, consumer.pair)
+    )
+      return;
+    if (
+      !this.isTerminalStatus(
+        this.runRepo.findById(run.id)?.upstream_status ?? "",
+      )
+    ) {
+      this.runRepo.update(run.id, { events_truncated: 1 });
+      this.sseHub.publishGap(run.id, "upstream_disconnected");
+    }
+    await this.reconcileById(run.id, run.conversation_id);
   }
 
   private handleEvent(localRunId: string, event: HermesRunEvent): void {
@@ -683,6 +799,7 @@ export class AdmissionCoordinator {
   ): Promise<void> {
     if (run.hermes_run_id)
       await this.reconcileById(run.id, item.conversation_id);
+    this.ensureConsumer(run.id);
   }
 
   private async reconcileById(
@@ -763,6 +880,7 @@ export class AdmissionCoordinator {
       return true;
     });
     if (!statusApplied || !terminal) return;
+    this.cancelConsumer(run.id);
     const conversation = this.conversationRepo.findById(conversationId);
     let messagesOk = Boolean(conversation?.hermes_session_id);
     if (conversation?.hermes_session_id) {
@@ -938,6 +1056,7 @@ export class AdmissionCoordinator {
   }
 
   private releaseLeases(runId: string, pair = this.leases.get(runId)): void {
+    this.cancelConsumer(runId);
     if (!pair) return;
     this.leaseRepo.release("global", "global", pair.global);
     const run = this.runRepo.findById(runId);

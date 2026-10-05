@@ -272,12 +272,11 @@ export function buildServer(
         coordinator.submitApproval(localRunId, input),
     });
 
-  let coordinatorStopped = false;
+  let coordinatorStop: Promise<void> | null = null;
   let sseHubClosed = false;
-  const stopCoordinator = (): void => {
-    if (coordinatorStopped) return;
-    coordinatorStopped = true;
-    coordinator.stop();
+  const stopCoordinator = (): Promise<void> => {
+    coordinatorStop ??= coordinator.stop();
+    return coordinatorStop;
   };
   const closeSseHub = (): void => {
     if (sseHubClosed) return;
@@ -287,7 +286,7 @@ export function buildServer(
 
   // End long-lived streams before Fastify waits for the HTTP server to drain.
   server.addHook("preClose", async () => {
-    stopCoordinator();
+    await stopCoordinator();
     dataRetention.stop();
     await mediaSync.stop();
     await mediaBranches?.stop();
@@ -295,7 +294,7 @@ export function buildServer(
   });
 
   server.addHook("onClose", async () => {
-    stopCoordinator();
+    await stopCoordinator();
     dataRetention.stop();
     await mediaSync.stop();
     await mediaBranches?.stop();

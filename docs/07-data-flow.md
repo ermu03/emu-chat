@@ -184,6 +184,7 @@ flowchart TD
     Crash(进程崩溃/重启) --> MarkTruncate[启动时标记活跃 Run 的 events_truncated]
     MarkTruncate --> NewHub[新进程记录 process_restarted 缺口]
     NewHub --> Reconnect[浏览器重新连接 SSE]
+    NewHub --> RecoverRun[获取租约；查询原 Run 状态并恢复允许的上游消费]
     Reconnect --> ClientREST[收到 stream.gap 后提示过程缺口并刷新队列和 Run；终态时合并最新消息]
 
     NetDrop(SSE 客户端断线) --> ExpBackoff[客户端指数退避重连 1s→15s]
@@ -192,6 +193,12 @@ flowchart TD
     ServerReplay -- Cursor 存在 --> Replay[回放遗漏的 RunEvents]
     ServerReplay -- Cursor 失效/过期 --> ReplyGap[发送 stream.gap 通知]
     ReplyGap --> ClientREST
+
+    UpstreamDrop[上游 SSE 断线或非终态 EOF] --> UpstreamGap[记录 events_truncated；发送 upstream_disconnected 缺口]
+    UpstreamGap --> RetryStream[同一 Run 有限续订：等待 1、2、4 秒]
+    RetryStream -- 队列仍可用 --> FreshEvents[继续消费未取出的新事件]
+    RetryStream -- 404、永久错误或尝试用尽 --> PollRun[保留 REST 终态轮询与权威历史核对]
+    RecoverRun --> RetryStream
 
     Unknown(提交超时、断线或响应不完整) --> Replay[持久化的会话 ID、正文和幂等键重放；最多 4 次]
     Crash --> Replay
@@ -208,6 +215,8 @@ flowchart TD
 结果不明的旧队列项不会自动重发为新任务。人工恢复队列只解除会话暂停；如确需重新提交原文，应先检查 Hermes 历史，并在 7 天恢复期内复制到草稿后由用户重新发送。
 
 用户停止时先提交 `user_stopped`，再发送上游停止请求。上游可能在同一时间正常完成；此时 Run 如实对账为成功，后续队列仍暂停。失败的停止响应也不解除暂停。客户端在 `run.paused` 或 `run.reconciled` 后刷新状态并交接历史，暂停中的待发消息全部可见；没有真实执行或未完成历史交接时，不进行执行轮询。复制恢复正文通过输入框的单飞保存和草稿 CAS，保留当前输入及会话切换保护。
+
+上游消费恢复与浏览器 SSE 回放分别处理。当前 Hermes 的一次性队列没有事件游标或重放，断线后可能已删除队列；有限续订只取仍可用的新事件，缺失过程保留提示。有效租约保证单 Run 至多一个有效消费者；终态、租约丢失和服务关闭取消上游读取及重连计时器。仅请求停止不会取消终态确认，也不会清空实时展示；历史延迟时继续保留内容及展开状态。
 
 ## 7. SSE 事件流双轨容灾
 

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { HermesClient } from "../../src/server/hermes/client.js";
+import { HermesAdapter } from "../../src/server/hermes/adapter.js";
 import {
   HermesAuthFailedError,
   HermesNotFoundError,
@@ -157,5 +158,76 @@ describe("HermesClient", () => {
         .stream("/v1/runs/run_silent/events", { livenessTimeoutMs: 20 })
         .next(),
     ).rejects.toBeInstanceOf(HermesUnavailableError);
+  });
+
+  it("releases the request and reader when an SSE consumer exits early", async () => {
+    const cancel = vi.fn();
+    let signal!: AbortSignal;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("data: first\n\n"));
+      },
+      cancel,
+    });
+    globalThis.fetch = vi.fn(async (_url, init) => {
+      signal = init!.signal!;
+      return new Response(body);
+    });
+    const client = new HermesClient({
+      baseUrl: "http://hermes.test",
+      token: "test",
+    });
+    const stream = client.stream("/v1/runs/run_1/events");
+    expect((await stream.next()).value).toMatchObject({ data: "first" });
+    await stream.return(undefined);
+    expect(signal.aborted).toBe(true);
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(body.locked).toBe(false);
+  });
+
+  it("cancels an in-flight read through the adapter on service shutdown", async () => {
+    const cancel = vi.fn();
+    const body = new ReadableStream<Uint8Array>({ cancel });
+    let signal!: AbortSignal;
+    globalThis.fetch = vi.fn(async (_url, init) => {
+      signal = init!.signal!;
+      return new Response(body);
+    });
+    const adapter = new HermesAdapter(
+      new HermesClient({ baseUrl: "http://hermes.test", token: "test" }),
+    );
+    const controller = new AbortController();
+    const stream = adapter.streamEvents("ses_1", "run_1", controller.signal);
+    const reading = stream.next();
+    await vi.waitFor(() => expect(body.locked).toBe(true));
+    controller.abort();
+    expect((await reading).done).toBe(true);
+    expect(signal.aborted).toBe(true);
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(body.locked).toBe(false);
+  });
+
+  it("releases an upstream reader when the adapter rejects a malformed event", async () => {
+    const cancel = vi.fn();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("data: invalid-json\n\n"));
+      },
+      cancel,
+    });
+    let signal!: AbortSignal;
+    globalThis.fetch = vi.fn(async (_url, init) => {
+      signal = init!.signal!;
+      return new Response(body);
+    });
+    const adapter = new HermesAdapter(
+      new HermesClient({ baseUrl: "http://hermes.test", token: "test" }),
+    );
+    await expect(
+      adapter.streamEvents("ses_1", "run_1").next(),
+    ).rejects.toBeInstanceOf(HermesProtocolError);
+    expect(signal.aborted).toBe(true);
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(body.locked).toBe(false);
   });
 });
