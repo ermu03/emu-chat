@@ -113,13 +113,14 @@ stateDiagram-v2
 - **用户停止保护**: 停止先在事务中提交 `user_stopped` 暂停，再请求上游停止。对账仍写入上游的真实终态，但不会覆盖用户暂停；停止请求失败、消息读取失败及随后重试也保留这个原因。成功对账只解除本次消息核对失败产生的自动暂停，不解除用户暂停。
 - **提交结果不明**: 协调器在 24 小时幂等窗口内用同一会话 ID、正文及幂等键重放，最多提交 4 次，失败后依次等待 5、10、20 秒。仍无法确认或窗口到期时，Run 和队列项进入 `review_required`，会话以 `manual_resume_required` 暂停，并释放全局槽位。
 
-## 8. 载荷 (payload_text) 生命周期设计
+## 8. 正文与冻结输入生命周期设计
 
 入队项保存待发送的消息正文。为了限制敏感内容留存和 SQLite 占用：
 - **必须存在阶段**：`queued`, `dispatching`, `accepted`, `reconciling`。数据库要求这些状态保留消息正文；实际提交发生在 `dispatching` 阶段。
-- **必须清空阶段**：`done`, `cancelled`。一旦处于最终静止态，不再有可能被分发，后台业务强制清空此字段（设为 NULL）。
-- **失败后恢复阶段**：`paused`, `review_required`, `rejected` 最多保留正文至 `recovery_expires_at`；期限一到，API 立即停止提供正文，后台分批将其清空。
-- 这种生命周期由数据库层面的 `CHECK` 约束（详情见 02 数据模型设计）强力保证。
+- **必须清空阶段**：`done`, `cancelled`。一旦处于最终静止态，不再有可能被分发，业务迁移在同一事务中清空 `payload_text` 和 `payload_run_input`（设为 NULL），保留不含正文的图片身份与摘要凭据。
+- **失败后恢复阶段**：`paused`, `review_required`, `rejected` 最多保留正文至 `recovery_expires_at`；期限一到，API 立即停止提供正文，后台分批清空正文及冻结输入；主动丢弃也同时清空两列。后台与主动丢弃均保护仍处于 submitting、accepted、reconciling 的关联 Run。
+- 数据库 `CHECK` 保证必须存在阶段及 done/cancelled 的 `payload_text` 约束；冻结输入的同步清理与凭据保留由业务即时事务保证。升级遗留的终态、已丢弃或已到期冻结正文在有界后台批次中补清，控制记录在冻结正文处理完后才能自动删除。
+- `review_required` 的控制身份可以长期保留，正文恢复仍受七天期限限制。历史图片与提交摘要凭据按会话生命周期保留，独立于正文和队列控制记录期限。
 
 ## 9. 状态转换与数据库 CHECK 约束
 

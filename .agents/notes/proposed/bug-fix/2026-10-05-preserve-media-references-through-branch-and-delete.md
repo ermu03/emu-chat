@@ -10,7 +10,7 @@ Status: proposed
 
 其二，[MediaSyncWorker](../../../../src/server/media/sync.ts) 在会话 `delete_state` 不为 `none` 时，把尚未执行的普通同步任务直接标成 `done`。隔离复现中，删除因 Hermes 忙碌而撤销、会话恢复可用，但引用写入调用次数为 0，任务已完成且无法重试。分支 `sync` 遇到目标临时删除状态也会提前返回，其调用方随后标记完成；这一并发路径需在实施时补齐验证。
 
-这些问题共同违反[图片工作流决定](../../implemented/feature/2026-09-28-add-image-workflows.md)和[图片规格](../../../specs/2026-09-28-image-workflows.md)中的约束：关联完成前保护来源，临时故障后继续同步，确认删除后才释放引用。文本保留期限另由[正文清理提案](2026-10-05-clear-frozen-queue-payloads.md)处理。
+这些问题共同违反[图片工作流决定](../../implemented/feature/2026-09-28-add-image-workflows.md)和[图片规格](../../../specs/2026-09-28-image-workflows.md)中的约束：关联完成前保护来源，临时故障后继续同步，确认删除后才释放引用。文本保留期限另由[正文清理决定](../../implemented/bug-fix/2026-10-05-clear-frozen-queue-payloads.md)处理。
 
 ## Proposal
 

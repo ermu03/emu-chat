@@ -75,6 +75,8 @@ stateDiagram-v2
 
 图片资源接口使用独立的 `MediaClient`，通过 Hermes API listener 的 `/v1/emu-media` 命名空间访问 `emu-media` 插件；它不借用只处理 JSON 的 `HermesClient.request` 传送二进制图片。插件使用单独的 `EMU_MEDIA_API_KEY`。图片能力探测与原 Hermes 文字聊天健康检查分开，插件失效不阻断纯文字 Run。
 
-带附件的队列项在派发前由 `MediaDispatchService` 检查图片状态及摘要、登记会话和队列引用、绑定 operation，再冻结完整的 `/v1/runs` 字符串输入。输入末尾的规范化 `<emu-media-input-v1>` 清单只在后台验证绑定后从展示文本剥离。Run 的幂等键、停止、审批、SSE 和终态对账继续走原路径。
+带附件的队列项在派发前由 `MediaDispatchService` 检查图片状态及摘要、登记会话和队列引用、绑定 operation，再在同一即时事务中冻结完整的 `/v1/runs` 字符串输入并保存无正文提交凭据。提交、接纳和对账阶段保留冻结原文，丢失响应和服务重启重放使用原 session、文字、附件顺序与幂等键；完成、取消、到期或主动丢弃后同时清空两份本地正文。
+
+历史验证使用 `media_submission_proofs` 中的 scope、operation、冻结 session、有序资产 ID、用户文字摘要和冻结输入摘要；旧记录补建还需匹配已存队列指纹。控制记录删除后仍可离线匹配凭据并展示缓存图片的不可用占位；凭据保留原队列引用 ID，历史交接仍能准确释放该引用。缺少本地证明时只接受插件中逐项匹配的绑定，包括 operation ID，验证成功后持久保存同一凭据；未知或不匹配的清单保持原文，不推断授权。输入末尾的规范化 `<emu-media-input-v1>` 清单只在后台验证绑定后从展示文本剥离。Run 的幂等键、停止、审批、SSE 和终态对账继续走原路径。
 
 插件通过公开 Hook 为已绑定的图片提供 `emu-media://asset_id` 表示，只转换 `vision_analyze` 与 `image_generate` 的授权图片参数；输出 Hook 记录来源后交由插件采集 worker 保存。漏掉的 Hook 事件由公开 Hermes 历史补偿。当前 `local` terminal backend 下，OpenAI、OpenRouter、xAI 的已验证本地文件编辑可用；FAL 图片编辑会把本地路径原样传出，因此报告为不支持，FAL 纯文字生图不受此限制。能力状态不表示供应商实时可用或保证模型一定调用工具。

@@ -3,7 +3,10 @@ import type { Readable } from "node:stream";
 import { z } from "zod";
 import type { ConversationRepository } from "../db/repositories/conversation.repository.js";
 import { LocalNotFoundError, StateConflictError } from "../domain/errors.js";
-import type { ConversationEntity } from "../db/schema-types.js";
+import type {
+  ConversationEntity,
+  QueueItemEntity,
+} from "../db/schema-types.js";
 import { MediaClient } from "./client.js";
 import {
   type MediaAsset,
@@ -11,6 +14,11 @@ import {
   type MediaCapabilities,
 } from "../../shared/media-schemas.js";
 import type { MessageItem } from "../../shared/api-schemas.js";
+import {
+  hasSubmissionProof,
+  recordSubmissionProof,
+  preserveFrozenSubmissionProof,
+} from "./submission-proof.js";
 import { parseMediaRunInput } from "./manifest.js";
 import { enqueueMediaSync, hasLocalMediaReference } from "./sync.js";
 
@@ -275,30 +283,17 @@ export class MediaService {
           decorated.push(message);
           continue;
         }
-        let verified = false;
-        const local = this.db
-          .prepare(
-            `
-          SELECT payload_run_input,dispatch_session_id,payload_attachments_json
-          FROM queue_items WHERE operation_id=? AND conversation_id=?
-        `,
-          )
-          .get(parsed.operationId, conversationId) as
-          | {
-              payload_run_input: string | null;
-              dispatch_session_id: string | null;
-              payload_attachments_json: string;
-            }
-          | undefined;
-        if (
-          local?.payload_run_input === message.content &&
-          local.dispatch_session_id === parsed.sessionId
-        ) {
-          const localIds = (
-            JSON.parse(local.payload_attachments_json) as { asset_id: string }[]
-          ).map((ref) => ref.asset_id);
-          verified =
-            JSON.stringify(localIds) === JSON.stringify(parsed.assetIds);
+        let verified = hasSubmissionProof(this.db, parsed);
+        if (!verified) {
+          const local = this.db
+            .prepare(
+              `SELECT * FROM queue_items
+            WHERE operation_id=? AND conversation_id=?`,
+            )
+            .get(parsed.operationId, conversationId) as
+            QueueItemEntity | undefined;
+          if (local) preserveFrozenSubmissionProof(this.db, local);
+          verified = hasSubmissionProof(this.db, parsed);
         }
         if (!verified && pluginLive) {
           try {
@@ -309,6 +304,7 @@ export class MediaService {
             );
             verified =
               remote.scope_id === conversationId &&
+              remote.operation_id === parsed.operationId &&
               remote.session_id === parsed.sessionId &&
               remote.run_input_sha256 === parsed.runInputSha256 &&
               remote.user_text_sha256 === parsed.userTextSha256 &&
@@ -322,13 +318,29 @@ export class MediaService {
           decorated.push(message);
           continue;
         }
-        this.db.transaction(() => {
+        const recorded = this.db.transaction(() => {
           const queue = this.db
             .prepare(
               `SELECT id FROM queue_items WHERE conversation_id=? AND operation_id=?`,
             )
             .get(conversationId, parsed.operationId) as
             { id: string } | undefined;
+          if (
+            !recordSubmissionProof(
+              this.db,
+              parsed,
+              queue ? `ref_queue_${queue.id}` : undefined,
+            )
+          )
+            return false;
+          const proof = this.db
+            .prepare(
+              `SELECT queue_reference_id FROM media_submission_proofs
+            WHERE conversation_id=? AND operation_id=?`,
+            )
+            .get(conversationId, parsed.operationId) as {
+            queue_reference_id: string | null;
+          };
           enqueueMediaSync(
             this.db,
             `history_${conversationId}_${parsed.operationId}`,
@@ -339,10 +351,15 @@ export class MediaService {
               message_id: message.id,
               operation_id: parsed.operationId,
               asset_ids: parsed.assetIds,
-              queue_reference_id: queue ? `ref_queue_${queue.id}` : null,
+              queue_reference_id: proof.queue_reference_id,
             },
           );
+          return true;
         })();
+        if (!recorded) {
+          decorated.push(message);
+          continue;
+        }
         const attachments: MediaAsset[] = [];
         for (const assetId of parsed.assetIds) {
           try {

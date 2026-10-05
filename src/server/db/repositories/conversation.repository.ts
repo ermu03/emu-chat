@@ -394,6 +394,13 @@ export class ConversationRepository {
       .get(conversation.id);
     if (hasRun) return true;
 
+    const hasHistoryProof = this.db
+      .prepare(
+        "SELECT 1 FROM media_submission_proofs WHERE conversation_id = ? LIMIT 1",
+      )
+      .get(conversation.id);
+    if (hasHistoryProof) return true;
+
     const hasLease = this.db
       .prepare(
         "SELECT 1 FROM coordinator_leases WHERE scope_type = 'conversation' AND scope_id = ? LIMIT 1",

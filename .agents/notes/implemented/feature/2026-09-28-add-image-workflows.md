@@ -12,7 +12,7 @@ emu-chat 原先只把纯文字放入草稿、队列和 Hermes Run。图片工具
 
 独立插件仓库 `hermes-emu-media` 使用 Hermes 公开的 `register_platform_handler` 和 Hook 接口。插件持有不可变图片原件、资源范围、引用、提交身份、采集任务和删除墓碑；emu-chat 通过私有 Bearer 凭据代理同源上传和读取。浏览器只持有会话内资源 ID，不接触 Hermes 文件路径、供应商临时 URL 或服务密钥。Hermes 仍持有权威聊天历史，图片字节不进入 emu-chat 的消息数据库。
 
-一条消息最多附 4 张静态 PNG/JPEG/WebP，每张上传最多 8 MiB。草稿、队列编辑和发送共用有序附件引用及 revision。仅附图时加入明确的固定识图要求。派发仍使用 `/v1/runs`，先确认引用和绑定，再冻结带规范机器清单的 Run 输入；重试保持同一 operation 和幂等键。历史清单只有在后台验证 scope、session、摘要、图片顺序和绑定后才剥离；工具输出按真实 `tool_call_id` 关联，不按时间或文字猜测。
+一条消息最多附 4 张静态 PNG/JPEG/WebP，每张上传最多 8 MiB。草稿、队列编辑和发送共用有序附件引用及 revision。仅附图时加入明确的固定识图要求。派发仍使用 `/v1/runs`，先确认引用和绑定，再冻结带规范机器清单的 Run 输入；重试保持同一 operation 和幂等键。历史清单只有在后台验证 scope、session、摘要、图片顺序和绑定后才剥离；冻结输入正文按恢复期限清空，随后使用[无正文提交凭据](../bug-fix/2026-10-05-clear-frozen-queue-payloads.md)验证历史；工具输出按真实 `tool_call_id` 关联，不按时间或文字猜测。
 
 图片识别和生成沿用 Hermes 的 `vision_analyze` 与 `image_generate`。用户选择只开放已验证读取本地文件的编辑适配：当前 `local` terminal backend 下，OpenAI、OpenRouter、xAI 可用；FAL 编辑本地图片不支持，FAL 纯文字生图仍可用。插件不在 Hook 参数中塞入 data URI，不复制供应商 SDK。能力接口区分配置与实时可用性，插件故障不阻断纯文字聊天。
 

@@ -74,6 +74,31 @@ describe("repository consistency and concurrency", () => {
     expect(drafts.findByConversationId(materialTipId)?.content).toBe(
       "Do not discard this draft",
     );
+
+    // Control records can expire while the conversation retains history proof.
+    const proofTipId = "cv_01956789-0000-7000-8000-000000000005";
+    addConversation(proofTipId, "session-proof-tip");
+    db.prepare(
+      `INSERT INTO media_submission_proofs
+      (conversation_id,operation_id,session_id,asset_ids_json,user_text_sha256,run_input_sha256,created_at)
+      VALUES (?,'op_saved','session-proof-tip','["asset_saved"]',?,?,?)`,
+    ).run(proofTipId, "a".repeat(64), "b".repeat(64), new Date().toISOString());
+    expect(() =>
+      conversations.adoptEffectiveHermesSessionId(
+        sourceId,
+        "session-proof-tip",
+      ),
+    ).toThrow(LocalConflictError);
+    expect(conversations.findBySessionId("session-proof-tip")?.id).toBe(
+      proofTipId,
+    );
+    expect(
+      db
+        .prepare(
+          "SELECT operation_id FROM media_submission_proofs WHERE conversation_id=?",
+        )
+        .get(proofTipId),
+    ).toEqual({ operation_id: "op_saved" });
   });
 
   it("fences automatic deletion by session and lifecycle, rolling back all effects on failure", () => {

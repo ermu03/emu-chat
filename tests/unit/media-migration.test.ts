@@ -37,6 +37,7 @@ it("upgrades an existing text draft and queue without discarding their data", ()
     expect(runMigrations(db)).toEqual([
       "0002_media.sql",
       "0003_conversation_list_order.sql",
+      "0004_media_submission_proofs.sql",
     ]);
     expect(
       db.prepare("SELECT content,revision,attachments_json FROM drafts").get(),

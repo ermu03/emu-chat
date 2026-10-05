@@ -45,12 +45,17 @@ export function hasLocalMediaReference(
     SELECT 1 FROM media_branch_messages m,json_each(m.asset_ids_json) j
       WHERE m.target_scope_id=? AND j.value=?
     UNION ALL
+    SELECT 1 FROM media_submission_proofs p,json_each(p.asset_ids_json) j
+      WHERE p.conversation_id=? AND j.value=?
+    UNION ALL
     SELECT 1 FROM media_outbox o,json_each(o.payload_json,'$.asset_ids') j
       WHERE o.scope_id=? AND o.kind='history_handoff' AND j.value=?
     LIMIT 1
   `,
       )
       .get(
+        scopeId,
+        assetId,
         scopeId,
         assetId,
         scopeId,

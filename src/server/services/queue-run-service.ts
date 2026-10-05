@@ -358,17 +358,9 @@ export class QueueRunService {
           expected_revision: input.expected_revision,
         });
       }
-      const now = new Date().toISOString();
-      const result = this.db
-        .prepare(
-          `UPDATE queue_items
-           SET state = 'cancelled', payload_text = NULL, revision = revision + 1, updated_at = ?
-           WHERE id = ? AND state = 'queued' AND revision = ?`,
-        )
-        .run(now, queueItemId, input.expected_revision);
-      if (result.changes !== 1)
-        throw new LocalConflictError("Queue item revision conflict");
-      return this.queueRepo.findById(queueItemId)!;
+      return this.queueRepo.updateState(queueItemId, current.revision, {
+        state: "cancelled",
+      });
     });
     return this.toQueueItem(item);
   }
@@ -504,20 +496,23 @@ export class QueueRunService {
           current_state: current.state,
         });
       }
-      if (current.payload_text === null) return current;
-      const now = new Date().toISOString();
-      const result = this.db
-        .prepare(
-          `UPDATE queue_items
-           SET payload_text = NULL, payload_discarded_at = ?, revision = revision + 1, updated_at = ?
-           WHERE id = ? AND state IN ('paused', 'review_required', 'rejected')`,
+      const activeRun = this.runRepo.findByQueueItemId(queueItemId);
+      if (
+        activeRun &&
+        ["submitting", "accepted", "reconciling"].includes(
+          activeRun.local_state,
         )
-        .run(now, now, queueItemId);
-      if (result.changes !== 1)
-        throw new LocalConflictError(
-          "Queue item changed while discarding recovery",
+      )
+        throw new RunActiveError(
+          "Recovery input is still needed by an active Run",
         );
-      return this.queueRepo.findById(queueItemId)!;
+      if (current.payload_text === null && current.payload_run_input === null)
+        return current;
+      return this.queueRepo.updateState(queueItemId, current.revision, {
+        state: current.state,
+        payload_text: null,
+        payload_discarded_at: new Date().toISOString(),
+      });
     });
     return this.toQueueItem(item);
   }

@@ -8,7 +8,7 @@ import { enqueueMediaSync, hasLocalMediaReference } from "../media/sync.js";
 const CLEANUP_INTERVAL_MS = 60_000;
 const CLEANUP_BATCH_SIZE = 100;
 
-/** Removes expired recovery text and old, inactive local control records. */
+/** Clears retained text copies and old, inactive local control records. */
 export class DataRetentionService {
   private timer: NodeJS.Timeout | null = null;
 
@@ -31,7 +31,7 @@ export class DataRetentionService {
   }
 
   runBatch(now = new Date()): {
-    expiredPayloads: number;
+    clearedPayloads: number;
     deletedControls: number;
   } {
     const nowMs = now.getTime();
@@ -45,7 +45,7 @@ export class DataRetentionService {
     return withImmediateTransaction(this.db, () => {
       if (this.mediaConfigured) this.queueUnboundUploads(nowMs);
       return {
-        expiredPayloads: this.queueRepo.expireRecoveryPayloads(
+        clearedPayloads: this.queueRepo.clearRetainedPayloads(
           nowIso,
           CLEANUP_BATCH_SIZE,
         ),
@@ -95,7 +95,7 @@ export class DataRetentionService {
   private runSafely(): void {
     try {
       const result = this.runBatch();
-      if (result.expiredPayloads > 0 || result.deletedControls > 0) {
+      if (result.clearedPayloads > 0 || result.deletedControls > 0) {
         logger.info("Data retention cleanup completed", {
           details: result,
         });

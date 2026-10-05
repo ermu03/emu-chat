@@ -2,13 +2,17 @@ import { afterEach, expect, it, vi } from "vitest";
 import Database from "better-sqlite3";
 import { buildServer } from "../../src/server/app.js";
 import type { AppConfig } from "../../src/server/config.js";
+import { DataRetentionService } from "../../src/server/services/data-retention-service.js";
+import { QueueRepository } from "../../src/server/db/repositories/queue.repository.js";
+import { parseMediaRunInput } from "../../src/server/media/manifest.js";
+import { hasLocalMediaReference } from "../../src/server/media/sync.js";
 import { runMigrations } from "../../src/server/db/migrate.js";
 import { FakeHermesServer } from "../fixtures/fake-hermes/fake-hermes-server.js";
 
 const digest = "a".repeat(64);
 const image = Buffer.from("fake-image-bytes");
 
-it("keeps an uploaded attachment through draft CAS, one Run admission and history handoff", async () => {
+it("keeps an uploaded attachment through draft CAS, lost-admission restart, text cleanup and offline history handoff", async () => {
   const hermes = new FakeHermesServer();
   const baseUrl = await hermes.start();
   const db = new Database(":memory:");
@@ -16,9 +20,13 @@ it("keeps an uploaded attachment through draft CAS, one Run admission and histor
   const rawFetch = globalThis.fetch;
   const bound = new Map<string, Record<string, unknown>>();
   const pluginCalls: string[] = [];
+  let pluginOffline = false;
+  let wrongOperation = false;
+  const bindings: unknown[] = [];
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = String(input);
     if (!url.includes("/v1/emu-media/")) return rawFetch(input, init);
+    if (pluginOffline) throw new Error("plugin offline");
     const path = new URL(url).pathname;
     pluginCalls.push(`${init?.method ?? "GET"} ${path}`);
     expect(new Headers(init?.headers).get("Authorization")).toBe(
@@ -79,13 +87,14 @@ it("keeps an uploaded attachment through draft CAS, one Run admission and histor
       const operationId = path.split("/").at(-1)!;
       if (init?.method === "PUT") {
         const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        bindings.push(body);
         bound.set(operationId, body);
         return Response.json({ protocol_version: 1 });
       }
       return Response.json({
         protocol_version: 1,
         scope_id: scope,
-        operation_id: operationId,
+        operation_id: wrongOperation ? "op_wrong" : operationId,
         ...bound.get(operationId),
       });
     }
@@ -102,7 +111,7 @@ it("keeps an uploaded attachment through draft CAS, one Run admission and histor
     logLevel: "error",
     isProduction: false,
   };
-  const app = buildServer(config, { db });
+  let app = buildServer(config, { db });
   try {
     await app.ready();
     const created = await app.inject({
@@ -140,6 +149,7 @@ it("keeps an uploaded attachment through draft CAS, one Run admission and histor
       payload: { content: "stale", attachments: [], expected_revision: 0 },
     });
     expect(stale.statusCode).toBe(409);
+    hermes.loseNextRunAdmissionResponse = true;
     const sent = await app.inject({
       method: "POST",
       url: `/api/v1/conversations/${scope}/messages`,
@@ -158,23 +168,62 @@ it("keeps an uploaded attachment through draft CAS, one Run admission and histor
       },
     });
     expect(replay.json()).toMatchObject({ replayed: true });
-    const deadline = Date.now() + 4000;
-    while (hermes.admissionRequests < 1 && Date.now() < deadline)
-      await new Promise((resolve) => setTimeout(resolve, 20));
+    const itemId = (sent.json() as { queue_item: { id: string } }).queue_item
+      .id;
+    const queue = new QueueRepository(db);
+    const waitFor = async (check: () => boolean) => {
+      const deadline = Date.now() + 4000;
+      while (!check() && Date.now() < deadline)
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(check()).toBe(true);
+    };
+    await waitFor(() => queue.findById(itemId)?.last_error_code !== null);
     expect(hermes.admissionRequests).toBe(1);
+    const frozen = queue.findById(itemId)!;
+    expect(frozen.state).toBe("dispatching");
+    expect(frozen.payload_run_input).toContain("<emu-media-input-v1>");
+    new DataRetentionService(db, queue).runBatch(
+      new Date(Date.now() + 100 * 86400_000),
+    );
+    expect(queue.findById(itemId)?.payload_run_input).toBe(
+      frozen.payload_run_input,
+    );
+    await app.close();
+    db.prepare("UPDATE queue_items SET updated_at=? WHERE id=?").run(
+      new Date(Date.now() - 60_000).toISOString(),
+      itemId,
+    );
+    app = buildServer(config, { db });
+    await app.ready();
+    await waitFor(() => queue.findById(itemId)?.state === "done");
+    expect(hermes.admissionRequests).toBe(2);
+    expect(bindings).toHaveLength(2);
+    expect(bindings[1]).toEqual(bindings[0]);
+    expect(queue.findById(itemId)).toMatchObject({
+      payload_text: null,
+      payload_run_input: null,
+    });
+
     const sessionId = (
       db
         .prepare("SELECT hermes_session_id FROM conversations WHERE id=?")
         .get(scope) as { hermes_session_id: string }
     ).hermes_session_id;
     const messages = hermes.getMessages(sessionId) ?? [];
+    const submitted = messages.filter((message) => message.role === "user");
+    expect(submitted).toHaveLength(1);
+    expect(submitted[0]?.content).toBe(frozen.payload_run_input);
+    const parsed = parseMediaRunInput(submitted[0]!.content)!;
     expect(
-      messages.some(
-        (message) =>
-          message.role === "user" &&
-          message.content.includes('"asset_ids":["asset_upload"]'),
-      ),
-    ).toBe(true);
+      db
+        .prepare(
+          "SELECT user_text_sha256,run_input_sha256 FROM media_submission_proofs WHERE operation_id=?",
+        )
+        .get(parsed.operationId),
+    ).toEqual({
+      user_text_sha256: parsed.userTextSha256,
+      run_input_sha256: parsed.runInputSha256,
+    });
     expect(pluginCalls.some((call) => call.includes("/submissions/"))).toBe(
       true,
     );
@@ -200,6 +249,83 @@ it("keeps an uploaded attachment through draft CAS, one Run admission and histor
           !message.content.includes("<emu-media-input-v1>"),
       ),
     ).toBe(true);
+    // Control retention cannot take the local history proof or picture ownership.
+    new DataRetentionService(db, queue).runBatch(
+      new Date(Date.now() + 8 * 86400_000),
+    );
+    expect(queue.findById(itemId)).toBeNull();
+    expect(hasLocalMediaReference(db, scope, "asset_upload")).toBe(true);
+    const afterControls = await app.inject({
+      method: "GET",
+      url: `/api/v1/conversations/${scope}/messages`,
+    });
+    expect(afterControls.statusCode).toBe(200);
+    const handoff = db
+      .prepare("SELECT payload_json FROM media_outbox WHERE id=?")
+      .get(`history_${scope}_${parsed.operationId}`) as {
+      payload_json: string;
+    };
+    expect(JSON.parse(handoff.payload_json)).toMatchObject({
+      queue_reference_id: `ref_queue_${itemId}`,
+    });
+    // Legacy history without local proof must obtain an exact plugin binding.
+    db.prepare("DELETE FROM media_submission_proofs WHERE operation_id=?").run(
+      parsed.operationId,
+    );
+    wrongOperation = true;
+    const unverified = await app.inject({
+      method: "GET",
+      url: `/api/v1/conversations/${scope}/messages`,
+    });
+    expect(unverified.statusCode).toBe(200);
+    expect(unverified.json()).toMatchObject({
+      items: [
+        { role: "user", content: frozen.payload_run_input },
+        { role: "assistant" },
+      ],
+    });
+    expect(
+      (unverified.json() as { items: Array<{ attachments?: unknown[] }> })
+        .items[0]?.attachments,
+    ).toBeUndefined();
+    wrongOperation = false;
+    const verified = await app.inject({
+      method: "GET",
+      url: `/api/v1/conversations/${scope}/messages`,
+    });
+    expect(verified.json()).toMatchObject({
+      items: [
+        {
+          role: "user",
+          content: "",
+          attachments: [{ asset_id: "asset_upload" }],
+        },
+        { role: "assistant" },
+      ],
+    });
+    expect(
+      db
+        .prepare(
+          "SELECT operation_id FROM media_submission_proofs WHERE operation_id=?",
+        )
+        .get(parsed.operationId),
+    ).toEqual({ operation_id: parsed.operationId });
+    pluginOffline = true;
+    const offline = await app.inject({
+      method: "GET",
+      url: `/api/v1/conversations/${scope}/messages`,
+    });
+    expect(offline.statusCode).toBe(200);
+    expect(offline.json()).toMatchObject({
+      items: [
+        {
+          role: "user",
+          content: "",
+          attachments: [{ asset_id: "asset_upload", status: "unavailable" }],
+        },
+        { role: "assistant" },
+      ],
+    });
   } finally {
     await app.close();
     if (db.open) db.close();

@@ -4,6 +4,8 @@ import { StateConflictError } from "../domain/errors.js";
 import type { AttachmentRef } from "../../shared/media-schemas.js";
 import { MediaClient } from "./client.js";
 import { makeMediaRunInput } from "./manifest.js";
+import { withImmediateTransaction } from "../db/transaction.js";
+import { recordSubmissionProof } from "./submission-proof.js";
 
 /** The queue row is the durable control record; this preparation is idempotent. */
 export class MediaDispatchService {
@@ -67,22 +69,42 @@ export class MediaDispatchService {
       user_text_sha256: manifest.userTextSha256,
       run_input_sha256: manifest.runInputSha256,
     });
-    const result = this.db
-      .prepare(
-        `
+    withImmediateTransaction(this.db, () => {
+      const result = this.db
+        .prepare(
+          `
       UPDATE queue_items SET payload_run_input=?,media_state='ready'
-      WHERE id=? AND state='dispatching' AND dispatch_session_id=?
+      WHERE id=? AND state='dispatching' AND dispatch_session_id=? AND revision=?
         AND (payload_run_input IS NULL OR payload_run_input=?)
     `,
+        )
+        .run(
+          manifest.runInput,
+          item.id,
+          item.dispatch_session_id,
+          item.revision,
+          manifest.runInput,
+        );
+      if (result.changes !== 1)
+        throw new StateConflictError(
+          "Image queue item changed before dispatch",
+        );
+      if (
+        !recordSubmissionProof(
+          this.db,
+          {
+            scopeId: item.conversation_id,
+            operationId: item.operation_id,
+            sessionId: item.dispatch_session_id!,
+            assetIds: attachments.map((ref) => ref.asset_id),
+            userTextSha256: manifest.userTextSha256,
+            runInputSha256: manifest.runInputSha256,
+          },
+          `ref_queue_${item.id}`,
+        )
       )
-      .run(
-        manifest.runInput,
-        item.id,
-        item.dispatch_session_id,
-        manifest.runInput,
-      );
-    if (result.changes !== 1)
-      throw new StateConflictError("Image queue item changed before dispatch");
+        throw new StateConflictError("Frozen image submission proof changed");
+    });
     return manifest.runInput;
   }
 }
