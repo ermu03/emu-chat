@@ -46,7 +46,15 @@ export function getPrimaryQueueItem(
     if (activeItem) return activeItem;
   }
 
-  return queue.data.find((item) => isLiveQueueState(item.state)) ?? null;
+  const executing = queue.data.find(
+    (item) => item.state !== "queued" && isLiveQueueState(item.state),
+  );
+  return (
+    executing ??
+    (!queue.paused
+      ? (queue.data.find((item) => item.state === "queued") ?? null)
+      : null)
+  );
 }
 
 export function getQueuedFollowUps(
@@ -54,9 +62,9 @@ export function getQueuedFollowUps(
   activeRun: RunResponse | null,
 ): QueueItemResponse[] {
   const primaryItem = getPrimaryQueueItem(queue, activeRun);
-  if (!queue || !primaryItem) return [];
+  if (!queue) return [];
   return queue.data.filter(
-    (item) => item.id !== primaryItem.id && item.state === "queued",
+    (item) => item.id !== primaryItem?.id && item.state === "queued",
   );
 }
 
@@ -64,5 +72,22 @@ export function isAgentGenerating(
   activeRun: RunResponse | null,
   queue: QueueListResponse | null,
 ): boolean {
-  return isLiveRun(activeRun) || getPrimaryQueueItem(queue, activeRun) !== null;
+  const primary = getPrimaryQueueItem(queue, activeRun);
+  return (
+    isLiveRun(activeRun) || (primary !== null && primary.state !== "queued")
+  );
+}
+
+export function getRunActivityLabel(
+  run: RunResponse | null,
+  queue: QueueListResponse | null,
+): string | undefined {
+  if (isLiveRun(run)) {
+    if (run?.upstream_status === "stopping") return "正在停止当前任务…";
+    if (run?.upstream_status === "waiting_for_approval") return "等待工具审批…";
+    return undefined;
+  }
+  if (getPrimaryQueueItem(queue, run)?.state === "queued")
+    return "等待派发消息…";
+  return undefined;
 }

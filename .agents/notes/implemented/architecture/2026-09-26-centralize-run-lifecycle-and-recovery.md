@@ -12,9 +12,11 @@ Status: implemented
 
 当 `startRun` 超时、断线或响应不完整而无法确认接纳时，持久化原 `dispatch_session_id`、正文和幂等键；协调器重启后用完全相同的请求重放。最多尝试 **4 次**，失败后依次等待 5、10、20 秒，且不超过首次派发起 24 小时的幂等窗口。Hermes 本地源码的 `POST /v1/runs` 幂等存储以键和请求体识别重放，返回原 `run_id`，重放可跨适配器重启；Hermes 仓库的 `tests/gateway/test_api_server_runs.py` 覆盖相同请求复用原 Run 和重放越过并发限制。实现仍依赖实际部署的 Hermes 满足该契约。
 
-第四次仍不明或窗口到期时，Run 与 QueueItem 进入现有 `review_required`，写入 `ADMISSION_UNCONFIRMED`，会话以 `manual_resume_required` 暂停，释放全局槽位。此时没有上游 Run ID，单 Run 对账接口无法判断是否执行；[界面](../../../../src/client/features/queue/admission-review-panel.tsx)要求用户先查看 Hermes 历史，再确认恢复后续队列。旧项不会自动重新入队，原文按现有 7 天恢复期限保留，用户可自行复制到草稿。已有上游 Run ID 的 `review_required` 仍走手动对账。
+第四次仍不明或窗口到期时，Run 与 QueueItem 进入现有 `review_required`，写入 `ADMISSION_UNCONFIRMED`，会话以 `manual_resume_required` 暂停，释放全局槽位。此时没有上游 Run ID，单 Run 对账接口无法判断是否执行；[界面](../../../../src/client/features/queue/queue-recovery-panel.tsx)要求用户先查看 Hermes 历史，再确认恢复后续队列。旧项不会自动重新入队，原文按现有 7 天恢复期限保留，用户可自行复制到草稿。已有上游 Run ID 的 `review_required` 仍走手动对账。
 
 所有对账入口按本地 Run ID 合并进程内请求，事务提交时再次核对状态、`partial` 与活跃租约。旧的非终态响应不能覆盖已记录终态；重复终态不再次推进 QueueItem 或会话状态。SSE 状态、停止和审批写入也复核当前状态。这延续[全局单活跃 Run 的决定](./2026-09-23-evaluate-multiple-active-runs.md)，不增加新的持久化事件系统。
+
+停止后的会话暂停独立于 Run 的真实终态；成功、失败和历史重试均保留已提交的 `user_stopped`，等待用户恢复。完整行为和前端入口见[停止暂停与恢复决定](../bug-fix/2026-10-03-paused-queue-false-generating.md)。
 
 ## Alternatives considered
 

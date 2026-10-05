@@ -16,7 +16,7 @@ Status: proposed
 2. 由协调器集中持有每个现有 Run 的事件消费者、取消信号和重试状态。Run 仍活跃且当前实例持有有效租约时，初次接纳、断线后恢复和进程启动恢复均可建立消费；单 Run 同时至多一个有效消费者，断线退避有界，永久鉴权或协议错误保留可理解的缺口及对账状态。
 3. 续订仍指向原 `hermes_run_id`。按已验证的上游身份或游标处理重放，避免把重复文字增量当成新事件叠加。无法恢复的过程保留 `stream.gap` 与权威历史核对，继续由 REST 轮询推进终态。若公开契约不足以安全处理重放，明确记录所需契约与回退方式，不能以新本地序号伪造去重保证。
 4. 将取消能力贯通协调器、适配器和 HTTP 客户端。正常结束、提前退出、解析失败、租约丢失和服务停止都能终止底层请求、取消读取并释放锁；取消后的异常与回调按当前生命周期识别，不能重新启动旧消费者。
-5. 沿用[集中 Run 生命周期的决定](../../implemented/architecture/2026-09-26-centralize-run-lifecycle-and-recovery.md)中的事务、租约与旧回调保护，以及[实时到历史交接](../../implemented/feature/2026-09-24-progressive-tool-events-and-stable-run-handoff.md)的内容保护。实现时同步[实时数据流](../../../../docs/07-data-flow.md)与服务端说明；暂停与真正进入终态的区别参见[停止暂停提案](2026-10-03-paused-queue-false-generating.md)。
+5. 沿用[集中 Run 生命周期的决定](../../implemented/architecture/2026-09-26-centralize-run-lifecycle-and-recovery.md)中的事务、租约与旧回调保护，以及[实时到历史交接](../../implemented/feature/2026-09-24-progressive-tool-events-and-stable-run-handoff.md)的内容保护。实现时同步[实时数据流](../../../../docs/07-data-flow.md)与服务端说明；暂停与真正进入终态的区别参见[停止暂停决定](../../implemented/bug-fix/2026-10-03-paused-queue-false-generating.md)。
 
 ## Alternatives considered
 

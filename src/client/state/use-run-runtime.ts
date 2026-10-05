@@ -3,7 +3,7 @@ import type { Dispatch, SetStateAction } from "react";
 import { apiClient } from "../api/client.js";
 import {
   getCurrentRunId,
-  isLiveQueueState,
+  getPrimaryQueueItem,
   isLiveRun,
 } from "../features/queue/queue-state.js";
 import { getErrorMessage, isRecord } from "./app-shell-utils.js";
@@ -225,7 +225,8 @@ export function useRunRuntime(
         type === "run.failed" ||
         type === "run.cancelled" ||
         type === "run.interrupted" ||
-        type === "run.reconciled"
+        type === "run.reconciled" ||
+        type === "run.paused"
       ) {
         if (type !== "approval.request") markRunSyncing(target, eventRunId);
         void refreshRuntime(target.conversationId, eventRunId);
@@ -258,9 +259,7 @@ export function useRunRuntime(
   const shouldPollRuntime = useMemo(() => {
     if (isLiveRun(visibleRun)) return true;
     if (runDisplay?.phase === "syncing") return true;
-    return (
-      visibleQueue?.data.some((item) => isLiveQueueState(item.state)) ?? false
-    );
+    return getPrimaryQueueItem(visibleQueue, visibleRun) !== null;
   }, [runDisplay?.phase, visibleQueue, visibleRun]);
   const runtimePollInterval =
     !isLiveRun(visibleRun) && activeQueueItem?.local_run_id === null
@@ -379,12 +378,14 @@ export function useRunRuntime(
     const target = captureTarget();
     const run = target && readRuntime(target)?.run;
     if (!target || !run) return;
-    const nextRun = await apiClient.stopRun(run.id);
-    if (
-      applyRun(target, nextRun, run.id) ||
-      captureTarget(target.conversationId)
-    )
-      void refreshRuntime(target.conversationId, nextRun.id);
+    try {
+      const nextRun = await apiClient.stopRun(run.id);
+      applyRun(target, nextRun, run.id);
+    } finally {
+      // Stop may have committed the pause even if the upstream request failed.
+      if (isCurrentTarget(target))
+        void refreshRuntime(target.conversationId, run.id);
+    }
   };
 
   const handleApproval = async (choice: "once" | "deny") => {

@@ -251,6 +251,398 @@ afterEach(() => {
 });
 
 describe("AppShell async flows", () => {
+  it("keeps a paused queue visible, protects unsaved input, and restores or resumes only on request", async () => {
+    const summary = conversation("cv_paused", "Paused");
+    mockCommonApi([summary]);
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const interrupted = {
+      ...acceptedItem(
+        summary.conversation_id,
+        "qi_interrupted",
+        "lr_interrupted",
+        "Original task",
+      ),
+      state: "paused" as const,
+    };
+    const waiting = {
+      ...acceptedItem(summary.conversation_id, "qi_waiting", "", "Next task"),
+      state: "queued" as const,
+      fifo_seq: 2,
+      local_run_id: null,
+    };
+    let currentQueue = {
+      ...queue(summary.conversation_id, [interrupted, waiting]),
+      paused: true,
+      pause_reason: "run_cancelled" as QueueListResponse["pause_reason"],
+    };
+    const getQueue = vi
+      .spyOn(apiClient, "getQueue")
+      .mockImplementation(async () => currentQueue);
+    const getRun = vi.spyOn(apiClient, "getRun");
+    vi.spyOn(apiClient, "listMessages").mockImplementation(async (id) =>
+      messageList(id, []),
+    );
+    const copy = vi.spyOn(apiClient, "copyToDraft");
+    let savedRevision = 0;
+    vi.spyOn(apiClient, "putDraft").mockImplementation(async (id, data) => {
+      expect(data.expected_revision).toBe(savedRevision);
+      savedRevision += 1;
+      return draft(id, data.content, savedRevision);
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              object: "emu_chat.recovery_copy",
+              draft: draft(
+                summary.conversation_id,
+                interrupted.content!,
+                ++savedRevision,
+              ),
+              duplicate_risk: true,
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+      ),
+    );
+    const pendingSend =
+      deferred<Awaited<ReturnType<typeof apiClient.sendMessage>>>();
+    const send = vi
+      .spyOn(apiClient, "sendMessage")
+      .mockImplementation(() => pendingSend.promise);
+    const resume = vi
+      .spyOn(apiClient, "resumeQueue")
+      .mockImplementation(async () => {
+        currentQueue = { ...currentQueue, paused: false, pause_reason: null };
+        return currentQueue;
+      });
+    render(
+      <MemoryRouter
+        initialEntries={[`/conversations/${summary.conversation_id}`]}
+      >
+        <AppShell />
+      </MemoryRouter>,
+    );
+    const input = (await screen.findByRole("textbox", {
+      name: "消息输入框",
+    })) as HTMLTextAreaElement;
+    await screen.findByText("Next task");
+    expect(document.querySelector(".message-pending")).toBeNull();
+    expect(screen.queryByLabelText("小H正在生成")).toBeNull();
+    expect(screen.queryByRole("button", { name: "停止生成" })).toBeNull();
+    expect(getRun).not.toHaveBeenCalled();
+    const queueLoads = getQueue.mock.calls.length;
+    vi.useFakeTimers();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_000);
+    });
+    vi.useRealTimers();
+    expect(getQueue).toHaveBeenCalledTimes(queueLoads);
+
+    fireEvent.change(input, { target: { value: "Unsaved new input" } });
+    fireEvent.click(screen.getByRole("button", { name: "复制中断项到草稿" }));
+    await screen.findByText(/输入框已有内容或图片/);
+    expect(copy).not.toHaveBeenCalled();
+    expect(input.value).toBe("Unsaved new input");
+    fireEvent.change(input, { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "复制中断项到草稿" }));
+    await waitFor(() => expect(input.value).toBe("Original task"));
+    expect(copy).toHaveBeenCalledWith(interrupted.id, {
+      expected_draft_revision: savedRevision - 1,
+      overwrite_nonempty: false,
+    });
+    expect(send).not.toHaveBeenCalled();
+    expect(resume).not.toHaveBeenCalled();
+
+    // A new send while paused is another waiting item, never a live reply.
+    fireEvent.keyDown(input, { key: "Enter", ctrlKey: true });
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    expect(document.querySelector(".message-pending")).toBeNull();
+    expect(screen.queryByLabelText("小H正在生成")).toBeNull();
+    const resent = {
+      ...waiting,
+      id: "qi_resent",
+      operation_id: "op_resent",
+      fifo_seq: 3,
+      content: "Original task",
+    };
+    currentQueue = { ...currentQueue, data: [...currentQueue.data, resent] };
+    await act(async () => {
+      pendingSend.resolve({
+        object: "emu_chat.message_submission",
+        replayed: false,
+        queue_item: resent,
+        draft: draft(summary.conversation_id, "", savedRevision + 1),
+      });
+    });
+    await waitFor(() => expect(input.value).toBe(""));
+    expect(screen.getByText("Next task")).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: "恢复后续队列" }));
+    await waitFor(() =>
+      expect(resume).toHaveBeenCalledWith(summary.conversation_id),
+    );
+    await screen.findByText("等待派发消息…");
+    expect(screen.queryByLabelText("小H正在生成")).toBeNull();
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(currentQueue.data[0]?.state).toBe("paused");
+  });
+
+  it("requires history review before resuming an unconfirmed admission", async () => {
+    const summary = conversation("cv_unconfirmed", "Unconfirmed");
+    mockCommonApi([summary]);
+    const item = {
+      ...acceptedItem(
+        summary.conversation_id,
+        "qi_unconfirmed",
+        "lr_unconfirmed",
+        "Possibly executed task",
+      ),
+      state: "review_required" as const,
+      last_error_code: "ADMISSION_UNCONFIRMED",
+    };
+    let currentQueue = {
+      ...queue(summary.conversation_id, [item]),
+      paused: true,
+      pause_reason:
+        "manual_resume_required" as QueueListResponse["pause_reason"],
+    };
+    vi.spyOn(apiClient, "getQueue").mockImplementation(
+      async () => currentQueue,
+    );
+    const history = vi
+      .spyOn(apiClient, "listMessages")
+      .mockImplementation(async (id) => messageList(id, []));
+    const resume = vi
+      .spyOn(apiClient, "resumeQueue")
+      .mockImplementation(async () => {
+        currentQueue = { ...currentQueue, paused: false, pause_reason: null };
+        return currentQueue;
+      });
+    const copy = vi.spyOn(apiClient, "copyToDraft");
+    render(
+      <MemoryRouter
+        initialEntries={[`/conversations/${summary.conversation_id}`]}
+      >
+        <AppShell />
+      </MemoryRouter>,
+    );
+    const resumeButton = await screen.findByRole("button", {
+      name: "恢复后续队列",
+    });
+    fireEvent.click(resumeButton);
+    fireEvent.click(screen.getByRole("button", { name: "复制中断项到草稿" }));
+    expect(resume).not.toHaveBeenCalled();
+    expect(copy).not.toHaveBeenCalled();
+    const reads = history.mock.calls.length;
+    fireEvent.click(screen.getByRole("button", { name: "刷新历史" }));
+    await waitFor(() =>
+      expect(history.mock.calls.length).toBeGreaterThan(reads),
+    );
+    expect((resumeButton as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: /我已检查 Hermes 历史/ }),
+    );
+    fireEvent.click(resumeButton);
+    await waitFor(() =>
+      expect(resume).toHaveBeenCalledWith(summary.conversation_id),
+    );
+    expect(copy).not.toHaveBeenCalled();
+  });
+
+  it("ignores a recovery copy response after switching to a new conversation", async () => {
+    const alpha = conversation("cv_alpha_recovery", "Alpha");
+    const beta = conversation("cv_beta_recovery", "Beta");
+    mockCommonApi([alpha, beta]);
+    const interrupted = {
+      ...acceptedItem(
+        alpha.conversation_id,
+        "qi_alpha",
+        "lr_alpha",
+        "Alpha interrupted task",
+      ),
+      state: "paused" as const,
+    };
+    vi.spyOn(apiClient, "getQueue").mockImplementation(async (id) =>
+      id === alpha.conversation_id
+        ? {
+            ...queue(id, [interrupted]),
+            paused: true,
+            pause_reason: "run_cancelled",
+          }
+        : queue(id),
+    );
+    vi.spyOn(apiClient, "listMessages").mockImplementation(async (id) =>
+      messageList(id, []),
+    );
+    const recovery = deferred<DraftResponse>();
+    const copy = vi
+      .spyOn(apiClient, "copyToDraft")
+      .mockImplementation(() => recovery.promise);
+    render(
+      <MemoryRouter
+        initialEntries={[`/conversations/${alpha.conversation_id}`]}
+      >
+        <AppShell />
+      </MemoryRouter>,
+    );
+    await screen.findByRole("textbox", { name: "消息输入框" });
+    fireEvent.click(
+      await screen.findByRole("button", { name: "复制中断项到草稿" }),
+    );
+    await waitFor(() => expect(copy).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("button", { name: /^Beta / }));
+    const input = (await screen.findByRole("textbox", {
+      name: "消息输入框",
+    })) as HTMLTextAreaElement;
+    await waitFor(() => expect(input.disabled).toBe(false));
+    fireEvent.change(input, { target: { value: "New Beta input" } });
+    await act(async () => {
+      recovery.resolve(
+        draft(alpha.conversation_id, "Alpha interrupted task", 1),
+      );
+    });
+    expect(input.value).toBe("New Beta input");
+    expect(screen.queryByText("Alpha interrupted task")).toBeNull();
+  });
+
+  it.each([false, true])(
+    "refreshes run.paused after a failed stop and preserves history handoff (hasOutput=%s)",
+    async (hasOutput) => {
+      const summary = conversation("cv_stop", "Stop");
+      mockCommonApi([summary]);
+      vi.stubGlobal("EventSource", FakeEventSource);
+      const item = acceptedItem(
+        summary.conversation_id,
+        "qi_stop",
+        "lr_stop",
+        "Current task",
+      );
+      const waiting = {
+        ...item,
+        id: "qi_wait",
+        fifo_seq: 2,
+        state: "queued" as const,
+        local_run_id: null,
+        content: "Next task",
+      };
+      let currentQueue = queue(summary.conversation_id, [item, waiting]);
+      let currentRun = runningRun(item);
+      let failHistory = false;
+      vi.spyOn(apiClient, "getQueue").mockImplementation(
+        async () => currentQueue,
+      );
+      vi.spyOn(apiClient, "getRun").mockImplementation(async () => currentRun);
+      const messages = vi
+        .spyOn(apiClient, "listMessages")
+        .mockImplementation(async (id) => {
+          if (failHistory) throw new Error("History temporarily unavailable");
+          return messageList(id, [
+            message(1, summary.hermes_session_id!, "user", "Current task"),
+          ]);
+        });
+      vi.spyOn(apiClient, "stopRun").mockImplementation(async () => {
+        currentQueue = {
+          ...currentQueue,
+          paused: true,
+          pause_reason: "user_stopped",
+        };
+        currentRun = {
+          ...currentRun,
+          upstream_status: "stopping",
+          updated_at: "2026-10-05T01:00:00Z",
+        };
+        throw new Error("Stop response lost");
+      });
+      render(
+        <MemoryRouter
+          initialEntries={[`/conversations/${summary.conversation_id}`]}
+        >
+          <AppShell />
+        </MemoryRouter>,
+      );
+      await waitFor(() => expect(FakeEventSource.instances.length).toBe(1));
+      const stream = FakeEventSource.instances[0]!;
+      if (hasOutput) {
+        act(() => {
+          stream.emit("run.event", {
+            local_run_id: item.local_run_id,
+            local_seq: 1,
+            type: "message.delta",
+            payload: { delta: "Visible partial reply" },
+          });
+        });
+        await screen.findByText("Visible partial reply");
+      }
+      fireEvent.click(screen.getByRole("button", { name: "停止生成" }));
+      await screen.findByText("正在停止当前任务…");
+      expect(screen.queryByLabelText("小H正在生成")).toBeNull();
+      expect(
+        (
+          screen.getByRole("button", {
+            name: "恢复后续队列",
+          }) as HTMLButtonElement
+        ).disabled,
+      ).toBe(true);
+      const row = document.querySelector(".assistant-live");
+      currentQueue = {
+        ...currentQueue,
+        data: [{ ...item, state: "paused", revision: 2 }, waiting],
+      };
+      currentRun = {
+        ...currentRun,
+        local_state: "reconciled",
+        upstream_status: "cancelled",
+        updated_at: "2026-10-05T01:01:00Z",
+      };
+      failHistory = true;
+      const previousReads = messages.mock.calls.length;
+      act(() => {
+        stream.emit("run.event", {
+          local_run_id: item.local_run_id,
+          local_seq: 2,
+          type: "run.paused",
+          payload: { reason: "run_cancelled" },
+        });
+      });
+      await waitFor(() =>
+        expect(messages.mock.calls.length).toBeGreaterThan(previousReads),
+      );
+      expect(screen.queryByLabelText("小H正在生成")).toBeNull();
+      expect(screen.queryByRole("button", { name: "停止生成" })).toBeNull();
+      if (hasOutput) {
+        expect(screen.getByText("Visible partial reply")).toBeDefined();
+        expect(document.querySelector(".assistant-live")).toBe(row);
+      }
+      failHistory = false;
+      messages.mockImplementation(async (id) =>
+        messageList(
+          id,
+          hasOutput
+            ? [
+                message(1, summary.hermes_session_id!, "user", "Current task"),
+                message(
+                  2,
+                  summary.hermes_session_id!,
+                  "assistant",
+                  "Visible partial reply",
+                ),
+              ]
+            : [message(1, summary.hermes_session_id!, "user", "Current task")],
+        ),
+      );
+      fireEvent.click(screen.getByRole("button", { name: "刷新历史" }));
+      await waitFor(() =>
+        expect(screen.queryByText("正在核对回复…")).toBeNull(),
+      );
+      if (hasOutput)
+        expect(document.querySelector(".message-row.assistant")).toBe(row);
+      else expect(document.querySelector(".assistant-live")).toBeNull();
+      expect(screen.getByText("Next task")).toBeDefined();
+    },
+  );
+
   it("updates a retried image card when the plugin reports it ready", async () => {
     const failedAsset: MediaAsset = {
       asset_id: "asset_retry_image",

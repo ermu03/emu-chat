@@ -164,19 +164,13 @@ export function useMessageSend(
     }, [pendingSubmissions, transitionSnapshot]);
   const transitionIsAssistantReplying = useMemo(() => {
     if (!transitionSnapshot) return false;
-    const hasPendingPrimarySubmission = pendingSubmissions.some(
-      (entry) =>
-        entry.conversationId === transitionSnapshot.conversationId &&
-        !entry.isFollowUp,
-    );
     const run = transitionSnapshot.activeRun;
     return (
-      (isAgentGenerating(run, transitionSnapshot.queue) ||
-        hasPendingPrimarySubmission) &&
+      isAgentGenerating(run, transitionSnapshot.queue) &&
       run?.upstream_status !== "waiting_for_approval" &&
       run?.upstream_status !== "stopping"
     );
-  }, [pendingSubmissions, transitionSnapshot]);
+  }, [transitionSnapshot]);
   const pendingQueueItems = useMemo<PendingQueueItem[]>(
     () =>
       activePendingSubmissions
@@ -202,10 +196,11 @@ export function useMessageSend(
     const target = captureTarget(conversationId);
     if (!target) throw new Error("会话已切换，请重试发送");
     const runtime = readRuntime(target);
-    const isFollowUp = isAgentGenerating(
-      runtime?.run ?? null,
-      runtime?.queue ?? null,
-    );
+    const isFollowUp =
+      runtime?.queue?.paused === true ||
+      getPrimaryQueueItem(runtime?.queue ?? null, runtime?.run ?? null) !==
+        null ||
+      isAgentGenerating(runtime?.run ?? null, runtime?.queue ?? null);
     if (!isFollowUp) {
       clearStreamForNewSend(target);
     }

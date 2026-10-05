@@ -29,6 +29,9 @@ export interface DraftSendResult {
 export interface DraftComposerHandle {
   selectPrompt: (prompt: string) => void;
   addAsset: (asset: MediaAsset) => void;
+  restoreRecovery: (
+    copy: (expectedRevision: number) => Promise<DraftSnapshot>,
+  ) => Promise<void>;
 }
 
 export interface DraftComposerProps {
@@ -322,10 +325,59 @@ export const DraftComposer = React.forwardRef<
     [disabled, scheduleSave],
   );
 
-  useImperativeHandle(ref, () => ({ selectPrompt, addAsset }), [
-    selectPrompt,
-    addAsset,
-  ]);
+  const restoreRecovery = useCallback(
+    async (copy: (expectedRevision: number) => Promise<DraftSnapshot>) => {
+      const hasInput = () =>
+        contentRef.current.length > 0 ||
+        attachmentsRef.current.length > 0 ||
+        uploadsRef.current.length > 0;
+      if (disabled || sendingRef.current)
+        throw new Error("输入框暂不可用，请稍后重试");
+      if (hasInput())
+        throw new Error("输入框已有内容或图片，请先保存或移走后再恢复中断项");
+      const generation = generationRef.current;
+      sendingRef.current = true;
+      setIsSending(true);
+      try {
+        // Wait for earlier saves, including clearing a previous draft, before CAS.
+        if (savePromiseRef.current) await savePromiseRef.current;
+        if (generation !== generationRef.current)
+          throw new Error("会话已切换，请在原会话重试");
+        await flushDraft();
+        if (generation !== generationRef.current)
+          throw new Error("会话已切换，请在原会话重试");
+        if (hasInput()) throw new Error("输入框内容已变化，请重新检查");
+        const recovered = await copy(revisionRef.current);
+        if (generation !== generationRef.current) return;
+        if (recovered.revision < revisionRef.current)
+          throw new Error("草稿版本已变化，请核对后重试");
+        savedContentRef.current = recovered.content;
+        savedAttachmentsRef.current = recovered.attachments;
+        revisionRef.current = recovered.revision;
+        setRevision(recovered.revision);
+        if (!hasInput()) {
+          contentRef.current = recovered.content;
+          attachmentsRef.current = recovered.attachments;
+          setContent(recovered.content);
+          setAttachments(recovered.attachments);
+        } else scheduleSave();
+        setSaveError(null);
+        textareaRef.current?.focus();
+      } finally {
+        if (generation === generationRef.current) {
+          sendingRef.current = false;
+          setIsSending(false);
+        }
+      }
+    },
+    [disabled, flushDraft, scheduleSave],
+  );
+
+  useImperativeHandle(
+    ref,
+    () => ({ selectPrompt, addAsset, restoreRecovery }),
+    [selectPrompt, addAsset, restoreRecovery],
+  );
 
   const removeAsset = (assetId: string) => {
     const next = attachmentsRef.current.filter(

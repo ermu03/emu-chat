@@ -810,7 +810,14 @@ export class AdmissionCoordinator {
           payload_text: null,
           recovery_expires_at: null,
         });
-        this.conversationRepo.setQueuePaused(conversationId, false, null);
+        // A successful Run does not revoke the user's request to stop the queue.
+        // Only the automatic pause caused by this Run's failed reconciliation
+        // can be cleared when authoritative history becomes readable.
+        if (
+          !latestConversation.queue_paused ||
+          latestConversation.pause_reason === "reconciliation_failed"
+        )
+          this.conversationRepo.setQueuePaused(conversationId, false, null);
         return {
           event: "run.reconciled",
           payload: { upstream_status: status.status },
@@ -835,7 +842,8 @@ export class AdmissionCoordinator {
             Date.now() + LIMITS.RECOVERY_RETENTION_MS,
           ).toISOString(),
         });
-        this.conversationRepo.setQueuePaused(conversationId, true, reason);
+        if (latestConversation.pause_reason !== "user_stopped")
+          this.conversationRepo.setQueuePaused(conversationId, true, reason);
         return {
           event: "run.paused",
           payload: { reason, review_required: false },
@@ -853,11 +861,12 @@ export class AdmissionCoordinator {
         ).toISOString(),
         last_error_code: "RECONCILIATION_FAILED",
       });
-      this.conversationRepo.setQueuePaused(
-        conversationId,
-        true,
-        "reconciliation_failed",
-      );
+      if (latestConversation.pause_reason !== "user_stopped")
+        this.conversationRepo.setQueuePaused(
+          conversationId,
+          true,
+          "reconciliation_failed",
+        );
       return { event: null, payload: {} };
     });
     if (!outcome) return;

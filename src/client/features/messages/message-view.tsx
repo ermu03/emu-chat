@@ -50,6 +50,7 @@ export interface MessageViewProps {
   onLoadEarlier?: (() => void) | undefined;
   pendingUserMessage?: PendingUserMessage | null;
   isGenerating?: boolean;
+  activityLabel?: string | undefined;
   runDisplay?: RunDisplay | null;
   activeRunId?: string | null;
   onStopGenerating?: (() => void) | undefined;
@@ -104,6 +105,7 @@ export const MessageView: React.FC<MessageViewProps> = ({
   onLoadEarlier,
   pendingUserMessage = null,
   isGenerating = false,
+  activityLabel,
   runDisplay = null,
   activeRunId = null,
   onStopGenerating,
@@ -189,12 +191,17 @@ export const MessageView: React.FC<MessageViewProps> = ({
       />,
     );
   }
-  if (liveTurn || (isGenerating && runDisplay?.phase !== "settled")) {
+  if (
+    liveTurn ||
+    activityLabel ||
+    (isGenerating && runDisplay?.phase !== "settled")
+  ) {
     displayRows.push(
       <AssistantTurnRow
-        key={`run:${runDisplay?.runId ?? activeRunId ?? "pending"}`}
+        key={`run:${runDisplay?.phase !== "settled" ? (runDisplay?.runId ?? activeRunId ?? "pending") : "pending"}`}
         turn={liveTurn ?? { timestamp: 0, blocks: [] }}
         livePhase={runDisplay?.phase === "syncing" ? "syncing" : "streaming"}
+        activityLabel={activityLabel}
         onStopGenerating={onStopGenerating}
         onReconcile={onReconcile}
         onReuseImage={onReuseImage}
@@ -220,7 +227,13 @@ export const MessageView: React.FC<MessageViewProps> = ({
     const scroller = scrollRef.current;
     if (!scroller || !stickToBottomRef.current) return;
     scroller.scrollTop = scroller.scrollHeight;
-  }, [isGenerating, pendingUserMessage?.id, runDisplay, turns.length]);
+  }, [
+    activityLabel,
+    isGenerating,
+    pendingUserMessage?.id,
+    runDisplay,
+    turns.length,
+  ]);
 
   const handleLoadEarlier = () => {
     if (scrollRef.current) {
@@ -384,6 +397,7 @@ const SystemTurnRow = memo(function SystemTurnRow({
 const AssistantTurnRow = memo(function AssistantTurnRow({
   turn,
   livePhase,
+  activityLabel,
   onStopGenerating,
   onReconcile,
   artifactConversationId,
@@ -393,6 +407,7 @@ const AssistantTurnRow = memo(function AssistantTurnRow({
 }: {
   turn: Pick<AssistantTurn, "timestamp" | "blocks">;
   livePhase?: "streaming" | "syncing" | undefined;
+  activityLabel?: string | undefined;
   onStopGenerating?: (() => void) | undefined;
   onReconcile?: (() => void) | undefined;
   artifactConversationId?: string | null;
@@ -494,7 +509,7 @@ const AssistantTurnRow = memo(function AssistantTurnRow({
           return (
             <div
               key={block.id}
-              className={`message-body ${livePhase === "streaming" && index === turn.blocks.length - 1 ? "is-streaming" : ""}`}
+              className={`message-body ${livePhase === "streaming" && !activityLabel && index === turn.blocks.length - 1 ? "is-streaming" : ""}`}
             >
               <MarkdownContent
                 text={block.content}
@@ -516,14 +531,19 @@ const AssistantTurnRow = memo(function AssistantTurnRow({
             </div>
           );
         })}
-        {livePhase && turn.blocks.length === 0 && (
-          <div className="assistant-thinking" aria-label="小H正在生成">
-            <LoaderCircle size={16} strokeWidth={1.9} />
-            <span className="assistant-stream-cursor" aria-hidden="true" />
-          </div>
-        )}
+        {livePhase === "streaming" &&
+          !activityLabel &&
+          turn.blocks.length === 0 && (
+            <div className="assistant-thinking" aria-label="小H正在生成">
+              <LoaderCircle size={16} strokeWidth={1.9} />
+              <span className="assistant-stream-cursor" aria-hidden="true" />
+            </div>
+          )}
         {livePhase === "syncing" && (
           <span className="assistant-syncing">正在核对回复…</span>
+        )}
+        {livePhase !== "syncing" && activityLabel && (
+          <span className="assistant-syncing">{activityLabel}</span>
         )}
       </div>
     </article>

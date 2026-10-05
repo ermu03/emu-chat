@@ -731,6 +731,116 @@ describe("Phase 4: Queue and runs HTTP integration", () => {
     expect(reconciled.approval).toBeNull();
   });
 
+  it("keeps stopped follow-ups paused across restart and resumes them without replaying the cancelled item", async () => {
+    const conversationId = await createMappedConversation();
+    fakeHermes.pauseNextRun = true;
+    await putDraft(conversationId, "Task to stop", 0);
+    const sent = await app!.inject({
+      method: "POST",
+      url: `/api/v1/conversations/${conversationId}/messages`,
+      payload: {
+        client_request_id: "00000000-0000-4000-8000-000000000408",
+        expected_draft_revision: 1,
+      },
+    });
+    expect(sent.statusCode).toBe(202);
+    const itemId = (sent.json() as { queue_item: QueueItemView }).queue_item.id;
+    const run = await waitFor(() => {
+      const current = new RunRepository(db!).findByQueueItemId(itemId);
+      return current?.local_state === "accepted" && current.hermes_run_id
+        ? current
+        : undefined;
+    });
+    await putDraft(conversationId, "Follow-up to resume", 2);
+    const followUp = await app!.inject({
+      method: "POST",
+      url: `/api/v1/conversations/${conversationId}/messages`,
+      payload: {
+        client_request_id: "00000000-0000-4000-8000-000000000409",
+        expected_draft_revision: 3,
+      },
+    });
+    expect(followUp.statusCode).toBe(202);
+    const followUpId = (followUp.json() as { queue_item: QueueItemView })
+      .queue_item.id;
+    const stop = await app!.inject({
+      method: "POST",
+      url: `/api/v1/runs/${run.id}/stop`,
+      payload: {},
+    });
+    expect(stop.statusCode).toBe(202);
+    const earlyResume = await app!.inject({
+      method: "POST",
+      url: `/api/v1/conversations/${conversationId}/queue/resume`,
+      payload: {},
+    });
+    expect(earlyResume.statusCode).toBe(409);
+    fakeHermes.completeStoppedRun(run.hermes_run_id!);
+    await waitFor(() =>
+      new RunRepository(db!).findById(run.id)?.local_state === "reconciled"
+        ? true
+        : undefined,
+    );
+    await app!.close();
+    app = buildServer(config, { db: db! });
+    await app.ready();
+    const paused = await app.inject({
+      method: "GET",
+      url: `/api/v1/conversations/${conversationId}/queue`,
+    });
+    expect(paused.json()).toMatchObject({
+      paused: true,
+      pause_reason: "user_stopped",
+      data: [
+        { id: itemId, state: "paused", content: "Task to stop" },
+        { id: followUpId, state: "queued" },
+      ],
+    });
+    const copy = await app.inject({
+      method: "POST",
+      url: `/api/v1/queue-items/${itemId}/copy-to-draft`,
+      payload: { expected_draft_revision: 4, overwrite_nonempty: false },
+    });
+    expect(copy.statusCode).toBe(200);
+    expect(copy.json()).toMatchObject({
+      object: "emu_chat.recovery_copy",
+      draft: { content: "Task to stop", revision: 5 },
+      duplicate_risk: true,
+    });
+    // The server also protects drafts from another tab or an outdated revision.
+    const overwrite = await app.inject({
+      method: "POST",
+      url: `/api/v1/queue-items/${itemId}/copy-to-draft`,
+      payload: { expected_draft_revision: 5, overwrite_nonempty: false },
+    });
+    expect(overwrite.statusCode).toBe(409);
+    const resume = await app.inject({
+      method: "POST",
+      url: `/api/v1/conversations/${conversationId}/queue/resume`,
+      payload: {},
+    });
+    expect(resume.statusCode).toBe(200);
+    await waitFor(async () => {
+      const response = await app!.inject({
+        method: "GET",
+        url: `/api/v1/conversations/${conversationId}/queue?include_terminal=true`,
+      });
+      const data = (response.json() as QueueView).data;
+      if (data.find((item) => item.id === followUpId)?.state !== "done") return;
+      expect(data.find((item) => item.id === itemId)?.state).toBe("paused");
+      return true;
+    });
+    expect(fakeHermes.admissionRequests).toBe(2);
+    const finalDraft = await app.inject({
+      method: "GET",
+      url: `/api/v1/conversations/${conversationId}/draft`,
+    });
+    expect(finalDraft.json()).toMatchObject({
+      content: "Task to stop",
+      revision: 5,
+    });
+  });
+
   it("reconciles an accepted run after a server restart without submitting it twice", async () => {
     const conversationId = await createMappedConversation();
     fakeHermes.pauseNextRun = true;

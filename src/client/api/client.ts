@@ -17,6 +17,7 @@ import type {
   QueueItemResponse,
   PatchQueueItemRequest,
   CancelQueueItemRequest,
+  CopyToDraftRequest,
   RunResponse,
   ApprovalRequest,
   ReconcileResponse,
@@ -304,6 +305,21 @@ class EmuChatApiClient {
       `/api/v1/conversations/${conversationId}/queue/resume`,
       { method: "POST", body: JSON.stringify({}) },
     );
+  }
+
+  async copyToDraft(
+    queueItemId: string,
+    data: CopyToDraftRequest,
+  ): Promise<DraftResponse> {
+    const result = await this.request<{
+      object: "emu_chat.recovery_copy";
+      draft: DraftResponse;
+      duplicate_risk: true;
+    }>(`/api/v1/queue-items/${queueItemId}/copy-to-draft`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return result.draft;
   }
 
   // --- Runs ---

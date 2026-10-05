@@ -32,6 +32,7 @@
 - **startRun**: 发起运行调用。内部限制请求超时 30 秒，并附加 `Idempotency-Key` 标头以防止网络抖动导致的重复执行。
 - **getRunStatus**: 拉取状态信息，并对获取到的 `run_id` 实施强一致性校验。
 - **streamEvents**: 异步迭代器接口，负责将来自 Client 的纯净流进行转换。逐帧校验 JSON 格式、对比 `run_id` 确保不错乱，并验证 timestamp 合法性。
+- **等待通知边界**: 2026-10-05 核对本机 Hermes 源码，`_emit_wait_notice` 使用 `thinking_callback`；`/v1/runs` 创建 Agent 时未绑定这一回调，Run 的工具事件桥也丢弃 `_thinking`。因此现有公开 Run SSE 不提供可用的重试等待通知。emu-chat 只展示可验证的执行、停止、审批和对账状态，不推测供应商重试时间；等待通知需要另行扩展上游协议。
 - **normalizeSession**: 日期格式标准化处理。将上游返回的秒级 Unix 时间戳转换为内部统一使用的 ISO 8601 字符串格式。
 - **协议校验 (Zod Schema)**: 会话、健康、消息和 Run 等需要读取结构化数据的响应经过 Schema 解析或字段校验；删除、停止和审批等无数据响应不做同样的结构验证。格式偏差会抛出 `HermesProtocolError`。
 

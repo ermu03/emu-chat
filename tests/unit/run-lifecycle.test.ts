@@ -25,6 +25,158 @@ describe("Run lifecycle write fencing", () => {
     databases.length = 0;
   });
 
+  it.each([
+    { terminal: "completed", stopFails: false, historyFails: false },
+    { terminal: "completed", stopFails: true, historyFails: true },
+    { terminal: "cancelled", stopFails: false, historyFails: false },
+  ] as const)(
+    "preserves a committed stop through $terminal (stopFails=$stopFails, historyFails=$historyFails) and restart",
+    async ({ terminal, stopFails, historyFails }) => {
+      const db = new Database(":memory:");
+      databases.push(db);
+      runMigrations(db);
+      const conversations = new ConversationRepository(db);
+      const queues = new QueueRepository(db);
+      const runs = new RunRepository(db);
+      const leases = new LeaseRepository(db);
+      const conversationId = "cv_stopped";
+      const itemId = "qi_stopped";
+      const runId = "lr_stopped";
+      const sessionId = "ses_stopped";
+      const now = new Date().toISOString();
+      conversations.insert({
+        id: conversationId,
+        hermes_profile: "default",
+        hermes_session_id: sessionId,
+      });
+      const insert = db.prepare(
+        `INSERT INTO queue_items (
+          id, conversation_id, operation_id, client_request_id, fifo_seq,
+          state, payload_text, payload_sha256, payload_bytes, idempotency_key,
+          dispatch_session_id, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      );
+      for (const [id, sequence, state] of [
+        [itemId, 1, "accepted"],
+        ["qi_follow_up", 2, "queued"],
+        ["qi_last", 3, "queued"],
+      ] as const) {
+        insert.run(
+          id,
+          conversationId,
+          `op_${id}`,
+          `request_${id}`,
+          sequence,
+          state,
+          id,
+          createHash("sha256").update(id).digest("hex"),
+          Buffer.byteLength(id),
+          `key_${id}`,
+          state === "accepted" ? sessionId : null,
+          now,
+          now,
+        );
+      }
+      runs.insert({
+        id: runId,
+        queue_item_id: itemId,
+        conversation_id: conversationId,
+        local_state: "accepted",
+        hermes_run_id: "run_stopped",
+        upstream_status: "running",
+      });
+      let releaseStop!: () => void;
+      const stopResponse = new Promise<void>((resolve, reject) => {
+        releaseStop = stopFails
+          ? () => reject(new Error("Stop response lost"))
+          : resolve;
+      });
+      const adapter = {
+        stopRun: vi.fn(() => stopResponse),
+        getRunStatus: vi.fn(async () => ({
+          run_id: "run_stopped",
+          status: terminal,
+          partial: false,
+        })),
+        getSessionMessages: vi.fn(async () => ({
+          object: "list",
+          session_id: sessionId,
+          data: [],
+        })),
+        startRun: vi.fn(),
+      };
+      if (historyFails)
+        adapter.getSessionMessages.mockRejectedValueOnce(
+          new Error("History unavailable"),
+        );
+      const makeCoordinator = () => {
+        const hub = new SSEHub();
+        hubs.push(hub);
+        const coordinator = new AdmissionCoordinator(
+          db,
+          queues,
+          runs,
+          leases,
+          conversations,
+          adapter as unknown as HermesAdapter,
+          hub,
+        );
+        coordinators.push(coordinator);
+        return coordinator;
+      };
+      const coordinator = makeCoordinator();
+      const stopping = coordinator.stopRun(runId);
+      const stopResult = stopping.catch((error: unknown) => error);
+      expect(conversations.findById(conversationId)).toMatchObject({
+        queue_paused: 1,
+        pause_reason: "user_stopped",
+      });
+
+      // Complete before the stop HTTP call returns; later retry also retains the intent.
+      await coordinator.reconcileRun(runId);
+      if (historyFails) {
+        expect(runs.findById(runId)?.local_state).toBe("review_required");
+        expect(conversations.findById(conversationId)?.pause_reason).toBe(
+          "user_stopped",
+        );
+        await coordinator.reconcileRun(runId);
+      }
+      releaseStop();
+      const result = await stopResult;
+      if (stopFails) expect(result).toBeInstanceOf(Error);
+      else expect(result).toBeUndefined();
+      expect(runs.findById(runId)).toMatchObject({
+        local_state: "reconciled",
+        upstream_status: terminal,
+      });
+      expect(queues.findById(itemId)?.state).toBe(
+        terminal === "completed" ? "done" : "paused",
+      );
+      expect(conversations.findById(conversationId)).toMatchObject({
+        queue_paused: 1,
+        pause_reason: "user_stopped",
+      });
+      await coordinator.tick();
+      coordinator.stop();
+      const restarted = makeCoordinator();
+      restarted.start(60_000);
+      await restarted.tick();
+      await restarted.reconcileRun(runId);
+      expect(adapter.startRun).not.toHaveBeenCalled();
+      expect(queues.findById("qi_follow_up")?.state).toBe("queued");
+      expect(queues.findById("qi_last")?.state).toBe("queued");
+      expect(queues.findNextGlobalQueued()).toBeNull();
+      expect(conversations.findById(conversationId)?.queue_paused).toBe(1);
+
+      // Explicit recovery exposes only the queued messages in FIFO order.
+      conversations.setQueuePaused(conversationId, false, null);
+      expect(queues.findNextGlobalQueued()?.id).toBe("qi_follow_up");
+      expect(queues.findById(itemId)?.state).toBe(
+        terminal === "completed" ? "done" : "paused",
+      );
+    },
+  );
+
   it("does not let an old running response replace a committed terminal result", async () => {
     const db = new Database(":memory:");
     databases.push(db);

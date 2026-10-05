@@ -193,6 +193,7 @@ export interface ConversationView {
     expectedRunId?: string,
   ): boolean;
   applyQueueItem(target: ViewTarget, item: QueueItemResponse): boolean;
+  applyRecoveredDraft(target: ViewTarget, draft: DraftResponse): boolean;
   applySubmissionResult(
     target: ViewTarget,
     draft: DraftResponse,
@@ -770,7 +771,11 @@ export function useConversationView(
         await Promise.all([loadConversation(), loadMessages(), loadDraft()]);
       };
 
-      if (snapshot && isAgentGenerating(snapshot.activeRun, snapshot.queue)) {
+      if (
+        snapshot &&
+        (isLiveRun(snapshot.activeRun) ||
+          getPrimaryQueueItem(snapshot.queue, snapshot.activeRun))
+      ) {
         const queueVersion = queueVersionRef.current;
         try {
           const nextQueue = await apiClient.getQueue(conversationId);
@@ -1242,6 +1247,7 @@ export function useConversationView(
     applyQueue,
     applyRun,
     applyQueueItem,
+    applyRecoveredDraft: commitDraft,
     applySubmissionResult,
     clearStreamForNewSend,
     applyRunStreamEvent,

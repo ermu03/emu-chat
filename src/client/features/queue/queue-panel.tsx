@@ -19,6 +19,7 @@ interface QueuePanelProps {
   isOpen: boolean;
   onClose: () => void;
   items: QueueItemResponse[];
+  paused?: boolean;
   pendingItems?: PendingQueueItem[];
   onCancelItem: (itemId: string, expectedRevision: number) => Promise<void>;
   onEditItem: (
@@ -39,6 +40,7 @@ export const QueuePanel: React.FC<QueuePanelProps> = ({
   isOpen,
   onClose,
   items,
+  paused = false,
   pendingItems = [],
   onCancelItem,
   onEditItem,
@@ -175,7 +177,11 @@ export const QueuePanel: React.FC<QueuePanelProps> = ({
                       <>
                         <div className="queue-item-status">
                           <Clock3 size={13} strokeWidth={1.8} />
-                          <span>等待当前回复结束后发送</span>
+                          <span>
+                            {paused
+                              ? "等待恢复队列后发送"
+                              : "等待当前回复结束后发送"}
+                          </span>
                         </div>
                         <div className="queue-item-content">
                           {item.content || "正文已清除"}

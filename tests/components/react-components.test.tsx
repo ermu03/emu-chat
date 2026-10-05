@@ -22,6 +22,68 @@ afterEach(() => {
 });
 
 describe("high-risk component interactions", () => {
+  it("waits for an older save and the empty draft acknowledgement before copying recovery", async () => {
+    vi.useFakeTimers();
+    let acknowledgeOld!: (value: { revision: number }) => void;
+    let acknowledgeClear!: (value: { revision: number }) => void;
+    const oldSave = new Promise<{ revision: number }>((resolve) => {
+      acknowledgeOld = resolve;
+    });
+    const clearSave = new Promise<{ revision: number }>((resolve) => {
+      acknowledgeClear = resolve;
+    });
+    const onSaveDraft = vi
+      .fn()
+      .mockImplementationOnce(() => oldSave)
+      .mockImplementationOnce(() => clearSave);
+    const copy = vi.fn(async () => ({
+      content: "Recovered task",
+      attachments: [],
+      revision: 3,
+    }));
+    const ref = createRef<DraftComposerHandle>();
+    render(
+      <DraftComposer
+        ref={ref}
+        conversationId="cv_recovery"
+        initialDraft=""
+        initialRevision={0}
+        sendShortcut="mod_enter"
+        onSaveDraft={onSaveDraft}
+        onSend={vi.fn()}
+      />,
+    );
+    const input = screen.getByRole("textbox", {
+      name: "消息输入框",
+    }) as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: "Older snapshot" } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    expect(onSaveDraft).toHaveBeenCalledWith("Older snapshot", [], 0);
+    fireEvent.change(input, { target: { value: "" } });
+    let restored!: Promise<void>;
+    await act(async () => {
+      restored = ref.current!.restoreRecovery(copy);
+    });
+    expect(copy).not.toHaveBeenCalled();
+    await act(async () => {
+      acknowledgeOld({ revision: 1 });
+    });
+    expect(onSaveDraft).toHaveBeenLastCalledWith("", [], 1);
+    expect(copy).not.toHaveBeenCalled();
+    await act(async () => {
+      acknowledgeClear({ revision: 2 });
+      await restored;
+    });
+    expect(copy).toHaveBeenCalledWith(2);
+    expect(input.value).toBe("Recovered task");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    expect(onSaveDraft).toHaveBeenCalledTimes(2);
+  });
+
   it("requires an explicit checkbox confirmation before deleting a conversation", () => {
     const onDelete = vi.fn();
     render(

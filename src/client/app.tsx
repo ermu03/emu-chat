@@ -16,8 +16,11 @@ import {
   type DraftComposerHandle,
 } from "./features/composer/draft-composer.js";
 import { QueuePanel } from "./features/queue/queue-panel.js";
-import { AdmissionReviewPanel } from "./features/queue/admission-review-panel.js";
-import { isLiveRun } from "./features/queue/queue-state.js";
+import { QueueRecoveryPanel } from "./features/queue/queue-recovery-panel.js";
+import {
+  getRunActivityLabel,
+  isLiveRun,
+} from "./features/queue/queue-state.js";
 import { ApprovalDialog } from "./features/approval/approval-dialog.js";
 import {
   Check,
@@ -368,24 +371,29 @@ export function AppShell() {
   const currentSidebarWidth = sidebarCollapsed ? 64 : sidebarWidth;
   const showStop =
     isLiveRun(visibleRun) &&
+    visibleRun?.local_state === "accepted" &&
+    visibleRun?.upstream_status !== "stopping" &&
     visibleRun?.upstream_status !== "waiting_for_approval";
   const showReconcile =
     visibleRun?.local_state === "reconciling" ||
     (visibleRun?.local_state === "review_required" &&
       visibleRun.hermes_run_id !== null);
-  const admissionReviewItem =
-    view.visibleQueue?.paused &&
-    view.visibleQueue.pause_reason === "manual_resume_required"
-      ? view.visibleQueue.data.findLast(
-          (item) =>
-            item.state === "review_required" &&
-            item.last_error_code === "ADMISSION_UNCONFIRMED",
-        )
-      : undefined;
+  const recoveryItem = view.visibleQueue?.data.findLast((item) =>
+    ["paused", "review_required", "rejected"].includes(item.state),
+  );
   const isAssistantReplying =
-    (agentGenerating || hasPendingPrimarySubmission) &&
+    agentGenerating &&
     visibleRun?.upstream_status !== "waiting_for_approval" &&
     visibleRun?.upstream_status !== "stopping";
+  const activityLabel = hasTargetMessages
+    ? (getRunActivityLabel(visibleRun, view.visibleQueue) ??
+      (hasPendingPrimarySubmission ? "正在加入队列…" : undefined))
+    : transitionSnapshot
+      ? getRunActivityLabel(
+          transitionSnapshot.activeRun,
+          transitionSnapshot.queue,
+        )
+      : undefined;
 
   return (
     <div className="app-shell">
@@ -589,6 +597,7 @@ export function AppShell() {
                       ? isAssistantReplying
                       : transitionIsAssistantReplying
                   }
+                  activityLabel={activityLabel}
                   runDisplay={
                     hasTargetMessages
                       ? runDisplay
@@ -600,7 +609,17 @@ export function AppShell() {
                       : (transitionSnapshot?.activeRun?.id ?? null)
                   }
                   onStopGenerating={
-                    showStop ? () => void handleStopRun() : undefined
+                    showStop
+                      ? () =>
+                          void handleStopRun().catch((error) => {
+                            setWorkspaceError(
+                              getErrorMessage(
+                                error,
+                                "停止请求未确认，请核对运行状态",
+                              ),
+                            );
+                          })
+                      : undefined
                   }
                   onReconcile={
                     showReconcile
@@ -637,17 +656,23 @@ export function AppShell() {
 
                 <div className="composer-shell">
                   <div className="composer-inner">
-                    {admissionReviewItem && activeConversationId && (
-                      <AdmissionReviewPanel
-                        key={admissionReviewItem.id}
-                        item={admissionReviewItem}
+                    {view.visibleQueue?.paused && activeConversationId && (
+                      <QueueRecoveryPanel
+                        key={`${activeConversationId}:${view.visibleQueue.pause_reason}:${recoveryItem?.id ?? "queue"}`}
+                        queue={view.visibleQueue}
+                        item={recoveryItem}
+                        runActive={isLiveRun(visibleRun)}
                         onRefreshHistory={async () => {
                           const target =
                             view.captureTarget(activeConversationId);
                           if (!target) return;
                           await view.refreshLatestMessages(
                             target,
-                            admissionReviewItem.local_run_id ?? undefined,
+                            runDisplay?.phase === "syncing"
+                              ? runDisplay.runId
+                              : (visibleRun?.id ??
+                                  recoveryItem?.local_run_id ??
+                                  undefined),
                           );
                           if (view.isCurrentTarget(target))
                             await runtime.refreshRuntime(target.conversationId);
@@ -665,6 +690,29 @@ export function AppShell() {
                           if (view.isCurrentTarget(target))
                             void runtime.refreshRuntime(target.conversationId);
                         }}
+                        onCopyToDraft={async () => {
+                          const target =
+                            view.captureTarget(activeConversationId);
+                          const composer = composerRef.current;
+                          if (!target || !composer || !recoveryItem)
+                            throw new Error("草稿尚未就绪，请稍后重试");
+                          await composer.restoreRecovery(async (revision) => {
+                            if (!view.isCurrentTarget(target))
+                              throw new Error("会话已切换，请在原会话重试");
+                            const recovered = await apiClient.copyToDraft(
+                              recoveryItem.id,
+                              {
+                                expected_draft_revision: revision,
+                                overwrite_nonempty: false,
+                              },
+                            );
+                            if (!view.applyRecoveredDraft(target, recovered))
+                              throw new Error(
+                                "会话或草稿版本已变化，请核对后重试",
+                              );
+                            return recovered;
+                          });
+                        }}
                       />
                     )}
                     {queueOpen &&
@@ -674,6 +722,7 @@ export function AppShell() {
                           isOpen={queueOpen}
                           onClose={closeQueuePanel}
                           items={queuedMessages}
+                          paused={view.visibleQueue?.paused ?? false}
                           pendingItems={pendingQueueItems}
                           onCancelItem={handleCancelQueueItem}
                           onEditItem={handleEditQueueItem}

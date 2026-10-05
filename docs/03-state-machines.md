@@ -98,7 +98,7 @@ stateDiagram-v2
 - **run_partial**: 上游将本次运行标记为部分完成。
 - **run_cancelled**: 任务被远程或本地取消。
 - **run_interrupted**: 上游任务被中断。
-- **user_stopped**: 用户手动点击了停止按钮。
+- **user_stopped**: 用户手动点击了停止按钮；这个暂停意图独立于 Run 的最终结果，停止后即便上游正常完成也保留，直到用户恢复队列。
 - **submission_rejected**: 提交前失败，或 Hermes 明确返回鉴权失败、会话不存在；未取得上游 Run ID。
 - **reconciliation_failed**: 上游 Run 已终止，但终态消息无法验证。
 - **review_required**: 枚举保留项，当前服务未写入该暂停原因；终态消息无法验证时写入的是 `reconciliation_failed`。工具审批由 Run 的上游状态表示。
@@ -109,7 +109,8 @@ stateDiagram-v2
 队列项 (QueueItem) 抽象的是“用户请求”，而 Run 抽象的是“对上游的执行实例”。
 - **单向绑定**: QueueItem 进入 `dispatching` 与创建 `submitting` Run 在同一即时事务中完成。
 - **同步推进**: Run 与 QueueItem 的接纳、明确拒绝、结果不明及终态迁移在同一即时事务中提交。审批等待只改变 Run 的上游状态。
-- **终态上卷**: 终态消息可读时，`completed` 且非 partial 的 Run 使队列项变为 `done`；失败、取消、中断或 partial 的 Run 使队列项变为 `paused`，并暂停该会话的后续派发。消息无法验证时，Run 和队列项进入 `review_required`，会话以 `reconciliation_failed` 原因暂停。
+- **终态上卷**: 终态消息可读时，`completed` 且非 partial 的 Run 使队列项变为 `done`；失败、取消、中断或 partial 的 Run 使队列项变为 `paused`，并暂停该会话的后续派发。消息无法验证时，Run 和队列项进入 `review_required`，会话以 `reconciliation_failed` 原因暂停；已有 `user_stopped` 时保留用户暂停原因。
+- **用户停止保护**: 停止先在事务中提交 `user_stopped` 暂停，再请求上游停止。对账仍写入上游的真实终态，但不会覆盖用户暂停；停止请求失败、消息读取失败及随后重试也保留这个原因。成功对账只解除本次消息核对失败产生的自动暂停，不解除用户暂停。
 - **提交结果不明**: 协调器在 24 小时幂等窗口内用同一会话 ID、正文及幂等键重放，最多提交 4 次，失败后依次等待 5、10、20 秒。仍无法确认或窗口到期时，Run 和队列项进入 `review_required`，会话以 `manual_resume_required` 暂停，并释放全局槽位。
 
 ## 8. 载荷 (payload_text) 生命周期设计
