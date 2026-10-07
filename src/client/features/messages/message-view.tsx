@@ -1,11 +1,4 @@
-import React, {
-  memo,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import React, { memo, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import rehypeKatex from "rehype-katex";
@@ -13,9 +6,7 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import {
   Bot,
-  Check,
   ChevronDown,
-  Copy,
   LoaderCircle,
   RefreshCw,
   Sparkles,
@@ -41,6 +32,7 @@ import {
   type ArtifactSource,
 } from "../artifacts/artifact.js";
 import type { ArtifactTab } from "../artifacts/use-artifact-preview.js";
+import { CopyButton } from "./copy-button.js";
 
 export interface MessageViewProps {
   messages: MessageItem[];
@@ -201,6 +193,8 @@ export const MessageView: React.FC<MessageViewProps> = ({
         key={`run:${runDisplay?.phase !== "settled" ? (runDisplay?.runId ?? activeRunId ?? "pending") : "pending"}`}
         turn={liveTurn ?? { timestamp: 0, blocks: [] }}
         livePhase={runDisplay?.phase === "syncing" ? "syncing" : "streaming"}
+        canCopy={runDisplay?.phase === "syncing" && !isGenerating}
+        artifactConversationId={artifactConversationId}
         activityLabel={activityLabel}
         onStopGenerating={onStopGenerating}
         onReconcile={onReconcile}
@@ -414,8 +408,10 @@ const AssistantTurnRow = memo(function AssistantTurnRow({
   allowArtifacts,
   onOpenArtifact,
   onReuseImage,
+  canCopy,
 }: {
   turn: Pick<AssistantTurn, "timestamp" | "blocks">;
+  canCopy?: boolean | undefined;
   livePhase?: "streaming" | "syncing" | undefined;
   activityLabel?: string | undefined;
   onStopGenerating?: (() => void) | undefined;
@@ -435,6 +431,10 @@ const AssistantTurnRow = memo(function AssistantTurnRow({
     {},
   );
   let toolOrdinal = -1;
+  const responseText = turn.blocks
+    .filter((block) => block.kind === "text")
+    .map((block) => block.content)
+    .join("\n\n");
 
   return (
     <article
@@ -554,6 +554,15 @@ const AssistantTurnRow = memo(function AssistantTurnRow({
         )}
         {livePhase !== "syncing" && activityLabel && (
           <span className="assistant-syncing">{activityLabel}</span>
+        )}
+        {(!livePhase || canCopy) && responseText.trim() && (
+          <div className="assistant-response-actions">
+            <CopyButton
+              key={artifactConversationId}
+              text={responseText}
+              label="复制回复"
+            />
+          </div>
         )}
       </div>
     </article>
@@ -683,66 +692,44 @@ const CodeBlock = memo(function CodeBlock({
       ) => void)
     | undefined;
 }) {
-  const [copied, setCopied] = useState(false);
   const language = className?.match(/language-([\w-]+)/)?.[1] ?? "";
 
-  const handleCopy = useCallback(() => {
-    const extractText = (node: React.ReactNode): string => {
-      if (typeof node === "string") return node;
-      if (typeof node === "number") return String(node);
-      if (Array.isArray(node)) return node.map(extractText).join("");
-      if (React.isValidElement(node) && node.props) {
-        return extractText(
-          (node.props as { children?: React.ReactNode }).children,
-        );
-      }
-      return "";
-    };
-
-    const textToCopy = artifact?.source ?? extractText(children);
-    if (!textToCopy) return;
-
-    if (navigator.clipboard?.writeText) {
-      navigator.clipboard
-        .writeText(textToCopy)
-        .then(() => {
-          setCopied(true);
-          setTimeout(() => setCopied(false), 2000);
-        })
-        .catch(() => {});
+  const extractText = (node: React.ReactNode): string => {
+    if (typeof node === "string") return node;
+    if (typeof node === "number") return String(node);
+    if (Array.isArray(node)) return node.map(extractText).join("");
+    if (React.isValidElement(node) && node.props) {
+      return extractText(
+        (node.props as { children?: React.ReactNode }).children,
+      );
     }
-  }, [artifact, children]);
+    return "";
+  };
+
+  const textToCopy = artifact?.source ?? extractText(children);
 
   return (
     <div className="message-code">
       <div className="message-code-header">
         <span className="message-code-label">{language || "code"}</span>
-        {artifact?.previewable ? (
-          <button
-            type="button"
-            className="message-code-copy-btn artifact-code-preview-btn"
-            onClick={(event) =>
-              onOpenArtifact?.(artifact, event.currentTarget, "preview")
-            }
-          >
-            打开预览
-          </button>
-        ) : (
-          <button
-            type="button"
-            className={`message-code-copy-btn ${copied ? "is-copied" : ""}`}
-            onClick={handleCopy}
-            aria-label={copied ? "已复制" : "复制代码"}
-            title={copied ? "已复制" : "复制代码"}
-          >
-            {copied ? (
-              <Check size={13} strokeWidth={2.2} />
-            ) : (
-              <Copy size={13} strokeWidth={1.8} />
-            )}
-            <span>{copied ? "已复制" : "复制代码"}</span>
-          </button>
-        )}
+        <div className="message-code-actions">
+          <CopyButton
+            text={textToCopy}
+            label="复制代码"
+            className="message-code-copy-btn"
+          />
+          {artifact?.previewable && (
+            <button
+              type="button"
+              className="message-code-copy-btn artifact-code-preview-btn"
+              onClick={(event) =>
+                onOpenArtifact?.(artifact, event.currentTarget, "preview")
+              }
+            >
+              打开预览
+            </button>
+          )}
+        </div>
       </div>
       <pre>
         <code className={className}>{children}</code>
