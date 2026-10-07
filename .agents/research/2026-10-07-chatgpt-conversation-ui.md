@@ -64,4 +64,4 @@
 
 本轮范围为对话展示与手机输入区，不同时大改侧栏或引入新的 UI 框架。正式实施时，用工具密集回合、普通长回复、代码预览、单图/多图及图片保存失败制作本地交互样例，检查深浅主题、窄屏和实时交接；手机输入区还需验证软键盘、地址栏和横竖屏切换。无需发起真实付费模型请求。
 
-后续方案：[工具展示](../notes/proposed/feature/2026-10-07-lightweight-tool-display.md)、[回复复制](../notes/implemented/feature/2026-10-07-assistant-response-copy.md)、[图片结果](../notes/proposed/feature/2026-10-07-generated-image-result-cards.md)。手机输入区的补充问题见[紧凑布局与视口适配提案](../notes/implemented/bug-fix/2026-10-07-compact-mobile-composer.md)。
+后续方案：[工具展示](../notes/implemented/feature/2026-10-07-lightweight-tool-display.md)、[回复复制](../notes/implemented/feature/2026-10-07-assistant-response-copy.md)、[图片结果](../notes/proposed/feature/2026-10-07-generated-image-result-cards.md)。手机输入区的补充问题见[紧凑布局与视口适配提案](../notes/implemented/bug-fix/2026-10-07-compact-mobile-composer.md)。

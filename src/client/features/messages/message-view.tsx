@@ -6,7 +6,10 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import {
   Bot,
+  Check,
   ChevronDown,
+  CircleAlert,
+  CircleHelp,
   LoaderCircle,
   RefreshCw,
   Sparkles,
@@ -430,6 +433,9 @@ const AssistantTurnRow = memo(function AssistantTurnRow({
   const [expandedTools, setExpandedTools] = useState<Record<number, boolean>>(
     {},
   );
+  const [expandedOutputs, setExpandedOutputs] = useState<
+    Record<number, boolean>
+  >({});
   let toolOrdinal = -1;
   const responseText = turn.blocks
     .filter((block) => block.kind === "text")
@@ -493,6 +499,13 @@ const AssistantTurnRow = memo(function AssistantTurnRow({
                 conversationId={artifactConversationId}
                 onReuseImage={onReuseImage}
                 open={expandedTools[ordinal] ?? block.tool.isError}
+                outputExpanded={expandedOutputs[ordinal] ?? block.tool.isError}
+                onExpandOutput={(expanded) =>
+                  setExpandedOutputs((current) => ({
+                    ...current,
+                    [ordinal]: expanded,
+                  }))
+                }
                 onToggle={(open) =>
                   setExpandedTools((current) => ({
                     ...current,
@@ -575,8 +588,12 @@ const ToolStepItem = memo(function ToolStepItem({
   onToggle,
   conversationId,
   onReuseImage,
+  outputExpanded,
+  onExpandOutput,
 }: {
   tool: ToolCallItem;
+  outputExpanded: boolean;
+  onExpandOutput: (expanded: boolean) => void;
   open: boolean;
   onToggle: (open: boolean) => void;
   conversationId?: string | null | undefined;
@@ -586,7 +603,7 @@ const ToolStepItem = memo(function ToolStepItem({
     tool.status === "completed" || tool.resultContent !== undefined;
   const statusLabel = tool.isError
     ? "失败"
-    : tool.ambiguous && tool.status === "running"
+    : tool.ambiguous
       ? "待核对"
       : tool.status === "running"
         ? "执行中"
@@ -597,15 +614,28 @@ const ToolStepItem = memo(function ToolStepItem({
     tool.resultContent !== undefined
       ? getToolResultContent(tool.resultContent)
       : tool.resultPreview?.trim();
+  const preview = result?.split("\n").slice(0, 24).join("\n").slice(0, 3000);
+  const hasLongOutput = preview !== result;
 
   return (
     <div className="tool-step-with-media">
       <details
-        className="tool-call-card tool-item-card"
+        className={`tool-call-card tool-item-card ${tool.isError ? "tool-failed" : ""}`}
         open={open}
         onToggle={(event) => onToggle(event.currentTarget.open)}
       >
         <summary className="tool-call-summary">
+          {tool.isError ? (
+            <CircleAlert size={14} className="tool-state-icon danger" />
+          ) : tool.ambiguous ? (
+            <CircleHelp size={14} className="tool-state-icon" />
+          ) : tool.status === "running" ? (
+            <LoaderCircle size={14} className="tool-state-icon spin" />
+          ) : isCompleted ? (
+            <Check size={14} className="tool-state-icon" />
+          ) : (
+            <Terminal size={14} className="tool-state-icon" />
+          )}
           <strong>{tool.name}</strong>
           <span className={`tool-call-status ${tool.isError ? "danger" : ""}`}>
             {statusLabel}
@@ -626,7 +656,20 @@ const ToolStepItem = memo(function ToolStepItem({
           {result && (
             <div className="tool-io-section">
               <span className="tool-io-label">输出</span>
-              <pre>{result}</pre>
+              <pre>
+                {outputExpanded ? result : preview}
+                {hasLongOutput && !outputExpanded ? "\n…" : ""}
+              </pre>
+              {hasLongOutput && (
+                <button
+                  type="button"
+                  className="tool-output-toggle"
+                  aria-expanded={outputExpanded}
+                  onClick={() => onExpandOutput(!outputExpanded)}
+                >
+                  {outputExpanded ? "收起完整输出" : "查看完整输出"}
+                </button>
+              )}
             </div>
           )}
           {!tool.callContent && !result && <pre>等待结果…</pre>}

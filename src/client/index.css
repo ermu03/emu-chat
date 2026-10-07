@@ -1603,8 +1603,63 @@ details[open] > summary .tool-call-chevron {
 }
 
 .tool-item-card {
-  margin-bottom: 10px;
-  background: var(--surface);
+  margin-bottom: 6px;
+  border: 0;
+  background: transparent;
+}
+
+.tool-item-card > .tool-call-summary {
+  min-height: 32px;
+  padding: 5px 8px;
+  gap: 8px;
+  border-radius: var(--radius-sm);
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+
+.tool-item-card .tool-call-status {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  color: var(--ink-soft);
+  background: transparent;
+  font-weight: 400;
+}
+
+.tool-item-card.tool-failed > summary {
+  color: var(--danger);
+  background: var(--danger-wash);
+}
+
+.tool-item-card .danger {
+  color: var(--danger);
+}
+
+.tool-state-icon {
+  flex-shrink: 0;
+}
+
+.tool-item-card > .tool-call-details {
+  margin: 4px 0 0 14px;
+  padding: 8px 10px;
+  border-top: 0;
+  border-left: 2px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-subtle);
+}
+
+.tool-output-toggle {
+  padding: 5px 0;
+  color: var(--accent-strong);
+  background: transparent;
+  font-size: 12px;
+}
+
+@media (pointer: coarse) {
+  .tool-item-card > .tool-call-summary,
+  .tool-output-toggle {
+    min-height: 40px;
+  }
 }
 
 .tool-io-section {
