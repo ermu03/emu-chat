@@ -39,6 +39,9 @@ export function QueueRecoveryPanel({
   const [reviewed, setReviewed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(
+    () => !(window.matchMedia?.("(max-width: 760px)").matches ?? false),
+  );
   const needsReview =
     item?.state === "review_required" ||
     queue.pause_reason === "manual_resume_required" ||
@@ -63,64 +66,79 @@ export function QueueRecoveryPanel({
   };
 
   return (
-    <section className="admission-review" aria-label="队列暂停与恢复">
-      <strong>{needsReview ? "运行结果待核对" : "队列已暂停"}</strong>
-      <p>
-        {queue.pause_reason
-          ? pauseDescriptions[queue.pause_reason]
-          : "后续队列已暂停。"}
-        {runActive && "当前任务仍在执行或核对，请等待终态确认。"}
-      </p>
-      <p>
-        恢复将继续执行 {queuedCount}{" "}
-        条待发消息，不会自动重发原中断项。复制到草稿后重新发送可能重复已有的部分效果。
-      </p>
-      <div className="admission-review-actions">
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => void runAction(onRefreshHistory)}
-        >
-          刷新历史
-        </button>
-        {canRecover && (
+    <details
+      className="admission-review"
+      aria-label="队列暂停与恢复"
+      open={expanded}
+      onToggle={(event) => setExpanded(event.currentTarget.open)}
+    >
+      <summary>
+        {needsReview ? "运行结果待核对" : "队列已暂停"} · {queuedCount}{" "}
+        条待发消息
+        {error && (
+          <span className="admission-review-error" role="alert">
+            {" "}
+            · {error}
+          </span>
+        )}
+      </summary>
+      <div className="admission-review-body">
+        <p>
+          {queue.pause_reason
+            ? pauseDescriptions[queue.pause_reason]
+            : "后续队列已暂停。"}
+          {runActive && "当前任务仍在执行或核对，请等待终态确认。"}
+        </p>
+        <p>
+          恢复将继续执行 {queuedCount}{" "}
+          条待发消息，不会自动重发原中断项。复制到草稿后重新发送可能重复已有的部分效果。
+        </p>
+        <div className="admission-review-actions">
           <button
             type="button"
-            disabled={busy || runActive || (needsReview && !reviewed)}
-            onClick={() => void runAction(onCopyToDraft)}
+            disabled={busy}
+            onClick={() => void runAction(onRefreshHistory)}
           >
-            复制中断项到草稿
+            刷新历史
           </button>
+          {canRecover && (
+            <button
+              type="button"
+              disabled={busy || runActive || (needsReview && !reviewed)}
+              onClick={() => void runAction(onCopyToDraft)}
+            >
+              复制中断项到草稿
+            </button>
+          )}
+        </div>
+        {item &&
+          (canRecover ? (
+            <details>
+              <summary>查看待核对正文</summary>
+              <pre>{item.content}</pre>
+            </details>
+          ) : (
+            <p>恢复正文已到期或已清除，请以 Hermes 历史为准。</p>
+          ))}
+        {needsReview && (
+          <label className="admission-review-confirm">
+            <input
+              type="checkbox"
+              checked={reviewed}
+              onChange={(event) => setReviewed(event.target.checked)}
+            />
+            我已检查 Hermes 历史，了解手动重发可能产生重复消息
+          </label>
         )}
+        <button
+          type="button"
+          className="admission-review-resume"
+          disabled={busy || runActive || (needsReview && !reviewed)}
+          onClick={() => void runAction(onResumeQueue)}
+        >
+          恢复后续队列
+        </button>
       </div>
-      {item &&
-        (canRecover ? (
-          <details>
-            <summary>查看待核对正文</summary>
-            <pre>{item.content}</pre>
-          </details>
-        ) : (
-          <p>恢复正文已到期或已清除，请以 Hermes 历史为准。</p>
-        ))}
-      {needsReview && (
-        <label className="admission-review-confirm">
-          <input
-            type="checkbox"
-            checked={reviewed}
-            onChange={(event) => setReviewed(event.target.checked)}
-          />
-          我已检查 Hermes 历史，了解手动重发可能产生重复消息
-        </label>
-      )}
-      <button
-        type="button"
-        className="admission-review-resume"
-        disabled={busy || runActive || (needsReview && !reviewed)}
-        onClick={() => void runAction(onResumeQueue)}
-      >
-        恢复后续队列
-      </button>
-      {error && <p className="admission-review-error">{error}</p>}
-    </section>
+    </details>
   );
 }

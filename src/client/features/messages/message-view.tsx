@@ -242,6 +242,16 @@ export const MessageView: React.FC<MessageViewProps> = ({
     onLoadEarlier?.();
   };
 
+  useEffect(() => {
+    const scroller = scrollRef.current;
+    if (!scroller || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (stickToBottomRef.current) scroller.scrollTop = scroller.scrollHeight;
+    });
+    observer.observe(scroller);
+    return () => observer.disconnect();
+  }, [loading, turns.length > 0, pendingUserMessage !== null]);
+
   if (
     loading &&
     turns.length === 0 &&

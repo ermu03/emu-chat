@@ -49,7 +49,9 @@ export const QueuePanel: React.FC<QueuePanelProps> = ({
   const [editedContent, setEditedContent] = useState("");
   const [editedAttachments, setEditedAttachments] = useState<MediaAsset[]>([]);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(
+    () => window.matchMedia?.("(max-width: 760px)").matches ?? false,
+  );
 
   if (!isOpen || (items.length === 0 && pendingItems.length === 0)) return null;
 
@@ -102,10 +104,13 @@ export const QueuePanel: React.FC<QueuePanelProps> = ({
         </div>
       </header>
 
+      {actionError && (
+        <div className="queue-error" role="alert">
+          {actionError}
+        </div>
+      )}
       {!collapsed && (
         <>
-          {actionError && <div className="queue-error">{actionError}</div>}
-
           <div className="queue-items" aria-live="polite">
             {queuedItems.map((item) => {
               const editing = editingItemId === item.id;

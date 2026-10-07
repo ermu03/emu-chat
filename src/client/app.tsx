@@ -35,6 +35,7 @@ import { getErrorMessage } from "./state/app-shell-utils.js";
 import { useConversationView } from "./state/use-conversation-view.js";
 import { useRunRuntime } from "./state/use-run-runtime.js";
 import { useMessageSend } from "./state/use-message-send.js";
+import { useMobileViewport } from "./state/use-mobile-viewport.js";
 import type { MediaAsset } from "../shared/media-schemas.js";
 
 type PreferencePatch = Partial<
@@ -57,6 +58,7 @@ function getStoredSidebarWidth(): number {
 }
 
 export function AppShell() {
+  useMobileViewport();
   const location = useLocation();
   const navigate = useNavigate();
   const routeConversationId = getConversationIdFromPath(location.pathname);

@@ -142,12 +142,29 @@ export const DraftComposer = React.forwardRef<
     const textarea = textareaRef.current;
     if (!textarea) return;
     textarea.style.height = "0px";
-    textarea.style.height = `${Math.min(Math.max(textarea.scrollHeight, 84), 230)}px`;
+    const style = getComputedStyle(textarea);
+    const minimum = parseFloat(style.minHeight) || 84;
+    const maximum = parseFloat(style.maxHeight) || 230;
+    textarea.style.height = `${Math.min(Math.max(textarea.scrollHeight, minimum), maximum)}px`;
   }, []);
 
   useEffect(() => {
     resizeTextarea();
   }, [content, resizeTextarea]);
+  useEffect(() => {
+    let frame = 0;
+    const resize = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(resizeTextarea);
+    };
+    window.addEventListener("resize", resize);
+    window.visualViewport?.addEventListener("resize", resize);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener("resize", resize);
+      window.visualViewport?.removeEventListener("resize", resize);
+    };
+  }, [resizeTextarea]);
   useEffect(() => {
     session.acceptServer({
       content: initialDraft,
@@ -452,7 +469,7 @@ export const DraftComposer = React.forwardRef<
         }}
         disabled={disabled || isSending}
         placeholder="写下你的消息..."
-        rows={3}
+        rows={1}
         aria-label="消息输入框"
       />
       <MediaAssets
@@ -534,9 +551,11 @@ export const DraftComposer = React.forwardRef<
         </div>
       )}
       <div className="composer-footer">
-        <div className="composer-meta">
+        <div
+          className={`composer-meta ${saveError || sendError || capabilityError || byteCount >= LIMITS.INPUT_MAX_BYTES * 0.9 ? "has-feedback" : ""}`}
+        >
           <span
-            className={`composer-byte-counter ${isOverLimit ? "error" : ""}`}
+            className={`composer-byte-counter ${byteCount >= LIMITS.INPUT_MAX_BYTES * 0.9 ? "near-limit" : ""} ${isOverLimit ? "error" : ""}`}
           >
             {byteCount.toLocaleString()} /{" "}
             {LIMITS.INPUT_MAX_BYTES.toLocaleString()} bytes
