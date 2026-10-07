@@ -21,7 +21,7 @@
 
 `AppShell` 将 `useConversationView` 的明确接口传给 Run 和发送 Hook。接口提供只读视图、受限的运行快照读取和按业务含义命名的更新方法，不暴露会话详情、消息、草稿、Queue 或 Run 的底层 setter 和可写 ref。Run Hook 负责请求与事件，发送 Hook 负责请求身份和占位；共享状态仍由视图 Hook 写入。
 
-`useConversationView` 用 `activeLoadRef` 标记每次会话选择或重新加载，并通过 `ViewTarget { conversationId, selection }` 交给异步调用方。提交 Queue、Run、草稿、SSE 展示或历史刷新时，由视图检查目标仍属于当前选择；A → B → A 时，第一次 A 的目标代数也会失效。Queue 刷新还要匹配请求开始时的本地队列版本，队列项写入核对 revision；Run 写入核对会话、Run ID、`updated_at` 与终态，旧响应不能回退已完成 Run。草稿写入核对 revision，`DraftComposer` 仍独占未保存的输入与保存队列。`currentViewSnapshotRef` 保留正在展示的旧会话；`useMessageSend` 的 `pendingSendRef` 保存重试所需的发送 UUID。
+`useConversationView` 用 `activeLoadRef` 标记每次会话选择或重新加载，并通过 `ViewTarget { conversationId, selection }` 交给异步调用方。提交 Queue、Run、草稿、SSE 展示或历史刷新时，由视图检查目标仍属于当前选择；A → B → A 时，第一次 A 的目标代数也会失效。Queue 刷新还要匹配请求开始时的本地队列版本，队列项写入核对 revision；Run 写入核对会话、Run ID、`updated_at` 与终态，旧响应不能回退已完成 Run。草稿写入核对 revision，`useConversationView` 持有按会话保留的 `DraftStore`，统一管理未保存正文、已就绪附件、revision、保存错误和单飞队列；`DraftComposer` 订阅对应会话状态。`currentViewSnapshotRef` 保留正在展示的旧会话；`useMessageSend` 的 `pendingSendRef` 保存重试所需的发送 UUID。
 
 元数据保存按目标会话和字段更新当前详情及对应缓存。切换到其他会话后返回的成功结果仍更新原会话缓存和列表，不回写先前捕获的整份详情；已在途的会话详情读取也保留读取期间确认的新标题或置顶值。会话列表每轮从首个本地游标页开始，逐页读取至 `has_more=false`，按会话 ID 合并去重；每页应用前检查本轮请求代数，旧轮次的迟到页不能覆盖新列表。加载中渐进加入已读取条目，暂时保留尚未刷新到的旧条目，完成整轮后替换为完整结果。相同字段多次并发修改的服务器提交顺序仍取决于请求完成顺序。
 
@@ -33,6 +33,8 @@
 - **统一 `request<T>` 管道**: 自动附加 JSON Header、解析响应，并在 HTTP 响应非成功时抛出 `ApiClientError`。
 - **合成错误信封**: 非成功 HTTP 响应体不是合法 JSON 时，会合成 `INTERNAL_ERROR` 信封；客户端不对可解析的错误 JSON 做 Schema 校验。Fetch 层网络错误仍以原始异常抛出。
 
+草稿 CAS 冲突时继续保留本地正文和附件；用户打开「核对草稿冲突」读取服务端内容后，可选择保留自己的输入或使用服务端草稿。保留本地内容时以已核对的 revision 再做 CAS，期间服务端再次变化仍返回冲突。组合输入中的 Enter、`isComposing` 及兼容信号 `keyCode=229` 不发送。页面刷新仍以服务端已保存的草稿为准；未完成上传的 File 在输入框离开时取消。
+
 ## 4. 核心组件功能
 
 ### ConversationList (会话列表)
@@ -41,11 +43,11 @@
 - **布局调整**: 桌面端拖拽侧栏右边界即可调宽，范围为 240～480 像素，最大不超过视口宽度的 45%；折叠时宽度为 64 像素。拖拽过程只改本地状态，松手后写入 `localStorage` 并尝试更新偏好 API。初始宽度从 `localStorage` 读取，缺失时使用 300 像素；目前不会用 GET `/preferences` 返回的 `sidebar_width` 初始化侧栏。
 - **安全删除**: 删除流程需要二次确认弹窗，并强制勾选复选框，防止误删。
 
-### DraftComposer (输入框与草稿管理)
+### DraftComposer 与 DraftStore (输入框与草稿管理)
 - **自适应高度**: 根据内容实时调整输入框高度，区间为 `84px` 至 `230px`。
 - **悬浮岛聚焦**: 容器获得焦点（`:focus-within`）时呈现柔和主题色光环扩散（Ring Glow）与层次浮起感。
 - **代数隔离**: 通过 `generationRef` 实现跨会话隔离，避免草稿错乱。
-- **防抖与单飞**: 支持 500ms 防抖存盘，采用单飞锁（保证同一时间只有一个请求）控制。
+- **防抖与单飞**: `DraftSession` 支持 500ms 防抖，同一会话只保存一个快照，确认后继续保存最新输入。切换或卸载时推动源会话后台保存，固定源会话 ID 和 revision；失败保留本地内容，可显式重试。脏草稿、在途请求和发送锁不参与普通视图 LRU 淘汰；最多保留 12 个无人使用的干净草稿。确认删除后撤销对应状态，迟到保存不能重建缓存。
 - **实时校验**: 使用 `TextEncoder` 进行 UTF-8 字节数实时统计和校验。
 - **发送管道**: 发送前强制触发 `flush` 保存最新草稿，随后执行 `handleSend` 管道。
 - **中断项恢复**: `restoreRecovery` 先检查当前输入、图片和上传是否为空，等待先前的单飞保存完成，再以最新 revision 调用现有复制接口，禁止覆盖服务端非空草稿。迟到响应按会话代数隔离；复制期间出现的新输入仍被保留。复制只填入草稿，由用户再次发送。

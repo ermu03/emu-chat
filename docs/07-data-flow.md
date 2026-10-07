@@ -140,6 +140,8 @@ sequenceDiagram
     Composer->>Composer: 更新本地 revision，解锁单飞状态
 ```
 
+正文、已就绪附件和保存队列由视图 Hook 的 `DraftStore` 按会话持有；输入框只订阅当前会话。离开时立即推进源会话保存，返回时恢复未保存输入和错误。旧确认只更新实际保存的快照与 revision，随后保存较新的输入；当前视图提交仍核对 `ViewTarget`，后台成功仅更新源会话的草稿缓存。脏草稿不受普通视图 LRU 淘汰影响，确认删除撤销状态并忽略迟到回调。CAS 冲突需要用户核对服务端草稿后显式选择，不能自动换 revision 覆盖远端输入。
+
 上述流程同时适用于手工输入和空状态建议卡片。建议卡片把文本交给 `DraftComposer` 后进入同一防抖、单飞保存队列；直接发送会先等待 `flushDraft` 完成，再以最新草稿 revision 入队。保存失败时保留文本并停止发送，详见[建议卡片草稿修正决定](../.agents/notes/implemented/bug-fix/2026-09-24-save-prompt-starter-draft.md)。
 
 ## 5. 会话删除两阶段流程

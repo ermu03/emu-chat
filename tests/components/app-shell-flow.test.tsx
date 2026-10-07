@@ -252,6 +252,87 @@ afterEach(() => {
 });
 
 describe("AppShell async flows", () => {
+  it("retains a dirty source draft before debounce and saves newer edits after returning", async () => {
+    const alpha = conversation("cv_draft_alpha", "Alpha");
+    const beta = conversation("cv_draft_beta", "Beta");
+    const oldSave = deferred<DraftResponse>();
+    mockCommonApi([alpha, beta]);
+    vi.spyOn(apiClient, "getQueue").mockImplementation(async (id) => queue(id));
+    vi.spyOn(apiClient, "listMessages").mockImplementation(async (id) =>
+      messageList(id, []),
+    );
+    const save = vi
+      .spyOn(apiClient, "putDraft")
+      .mockImplementation(async (id, body) => {
+        if (id === alpha.conversation_id && body.content === "Alpha input")
+          return oldSave.promise;
+        return draft(id, body.content, body.expected_revision + 1);
+      });
+    render(
+      <MemoryRouter
+        initialEntries={[`/conversations/${alpha.conversation_id}`]}
+      >
+        <AppShell />
+      </MemoryRouter>,
+    );
+    const input = await screen.findByRole("textbox", { name: "消息输入框" });
+    fireEvent.change(input, { target: { value: "Alpha input" } });
+    fireEvent.click(
+      screen.getByText("Beta", { selector: ".conversation-title" }),
+    );
+    await waitFor(() =>
+      expect(save).toHaveBeenCalledWith(
+        alpha.conversation_id,
+        expect.objectContaining({
+          content: "Alpha input",
+          expected_revision: 0,
+        }),
+      ),
+    );
+    const betaInput = await screen.findByRole("textbox", {
+      name: "消息输入框",
+    });
+    fireEvent.change(betaInput, { target: { value: "Beta input" } });
+    fireEvent.click(
+      screen.getByText("Alpha", { selector: ".conversation-title" }),
+    );
+    await waitFor(() =>
+      expect(
+        (
+          screen.getByRole("textbox", {
+            name: "消息输入框",
+          }) as HTMLTextAreaElement
+        ).value,
+      ).toBe("Alpha input"),
+    );
+    fireEvent.change(screen.getByRole("textbox", { name: "消息输入框" }), {
+      target: { value: "Alpha input + new" },
+    });
+    await act(async () =>
+      oldSave.resolve(draft(alpha.conversation_id, "Alpha input", 1)),
+    );
+    await waitFor(() =>
+      expect(save).toHaveBeenCalledWith(
+        alpha.conversation_id,
+        expect.objectContaining({
+          content: "Alpha input + new",
+          expected_revision: 1,
+        }),
+      ),
+    );
+    expect(
+      (
+        screen.getByRole("textbox", {
+          name: "消息输入框",
+        }) as HTMLTextAreaElement
+      ).value,
+    ).toBe("Alpha input + new");
+    expect(save).toHaveBeenCalledWith(
+      beta.conversation_id,
+      expect.objectContaining({ content: "Beta input", expected_revision: 0 }),
+    );
+  });
+
   it("loads older pinned conversations and ignores an old page after a metadata reload", async () => {
     const summaries = Array.from({ length: 51 }, (_, index) =>
       conversation(`cv_page_${index}`, `Conversation ${index}`),

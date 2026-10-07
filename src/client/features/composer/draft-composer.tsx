@@ -4,6 +4,7 @@ import React, {
   useImperativeHandle,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import { ImagePlus, LoaderCircle, Send, X } from "lucide-react";
 import { LIMITS } from "../../../shared/limits.js";
@@ -16,11 +17,8 @@ import { apiClient } from "../../api/client.js";
 import { generateBrowserUuid } from "../../state/app-shell-utils.js";
 import { MediaAssets } from "../media/media-assets.js";
 
-export interface DraftSnapshot {
-  content: string;
-  attachments: MediaAsset[];
-  revision: number;
-}
+import { DraftStore, type DraftSnapshot } from "../../state/draft-store.js";
+export type { DraftSnapshot } from "../../state/draft-store.js";
 
 export interface DraftSendResult {
   draft: DraftSnapshot;
@@ -36,11 +34,12 @@ export interface DraftComposerHandle {
 
 export interface DraftComposerProps {
   conversationId: string;
+  draftStore?: DraftStore;
   initialDraft?: string;
   initialRevision?: number;
   initialAttachments?: MediaAsset[];
   sendShortcut: "enter" | "mod_enter";
-  onSaveDraft: (
+  onSaveDraft?: (
     content: string,
     attachments: AttachmentRef[],
     expectedRevision: number,
@@ -60,6 +59,7 @@ export const DraftComposer = React.forwardRef<
 >(function DraftComposer(
   {
     conversationId,
+    draftStore,
     initialDraft = "",
     initialRevision = 0,
     initialAttachments = [],
@@ -71,9 +71,30 @@ export const DraftComposer = React.forwardRef<
   },
   ref,
 ) {
-  const [content, setContent] = useState(initialDraft);
-  const [attachments, setAttachments] =
-    useState<MediaAsset[]>(initialAttachments);
+  const saveCallbacks = useRef(
+    new Map<string, DraftComposerProps["onSaveDraft"]>(),
+  );
+  saveCallbacks.current.set(conversationId, onSaveDraft);
+  const [fallbackStore] = useState(
+    () =>
+      new DraftStore((id, text, refs, revision) => {
+        const save = saveCallbacks.current.get(id);
+        if (!save) throw new Error("草稿保存未配置");
+        return save(text, refs, revision);
+      }),
+  );
+  const store = draftStore ?? fallbackStore;
+  const session = store.get(conversationId, {
+    content: initialDraft,
+    attachments: initialAttachments,
+    revision: initialRevision,
+  });
+  const {
+    content,
+    attachments,
+    busy: isSending,
+    saveError,
+  } = useSyncExternalStore(session.subscribe, session.getSnapshot);
   const [uploads, setUploads] = useState<
     Array<{
       id: string;
@@ -89,30 +110,11 @@ export const DraftComposer = React.forwardRef<
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const uploadsRef = useRef(uploads);
   const controllersRef = useRef(new Map<string, AbortController>());
-  const attachmentsRef = useRef(initialAttachments);
-  const savedAttachmentsRef = useRef(initialAttachments);
-  const [, setRevision] = useState(initialRevision);
-  const [isSending, setIsSending] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const debounceRef = useRef<number | null>(null);
-  const contentRef = useRef(initialDraft);
-  const savedContentRef = useRef(initialDraft);
-  const revisionRef = useRef(initialRevision);
-  const sendingRef = useRef(false);
   const generationRef = useRef(0);
-  const savePromiseRef = useRef<Promise<void> | null>(null);
-  const conversationRef = useRef(conversationId);
   const selectedPromptRef = useRef<string | null>(null);
-  const refs = (items: MediaAsset[]): AttachmentRef[] =>
-    items.map((asset) => ({
-      asset_id: asset.asset_id,
-      sha256: asset.sha256,
-    }));
-  const sameAssets = (left: MediaAsset[], right: MediaAsset[]) =>
-    JSON.stringify(refs(left)) === JSON.stringify(refs(right));
-
+  const composingRef = useRef(false);
   useEffect(() => {
     uploadsRef.current = uploads;
   }, [uploads]);
@@ -143,157 +145,46 @@ export const DraftComposer = React.forwardRef<
     textarea.style.height = `${Math.min(Math.max(textarea.scrollHeight, 84), 230)}px`;
   }, []);
 
-  const clearDebounce = useCallback(() => {
-    if (debounceRef.current !== null) {
-      window.clearTimeout(debounceRef.current);
-      debounceRef.current = null;
-    }
-  }, []);
-
   useEffect(() => {
     resizeTextarea();
   }, [content, resizeTextarea]);
-
   useEffect(() => {
-    if (conversationRef.current === conversationId) return;
-    conversationRef.current = conversationId;
-    generationRef.current += 1;
-    clearDebounce();
-    savePromiseRef.current = null;
+    session.acceptServer({
+      content: initialDraft,
+      attachments: initialAttachments,
+      revision: initialRevision,
+    });
+  }, [session, initialDraft, initialAttachments, initialRevision]);
+  useEffect(() => {
     selectedPromptRef.current = null;
-    for (const controller of controllersRef.current.values())
-      controller.abort();
-    controllersRef.current.clear();
+    composingRef.current = false;
     uploadsRef.current = [];
     setUploads([]);
-    contentRef.current = initialDraft;
-    savedContentRef.current = initialDraft;
-    attachmentsRef.current = initialAttachments;
-    savedAttachmentsRef.current = initialAttachments;
-    setAttachments(initialAttachments);
-    revisionRef.current = initialRevision;
-    setContent(initialDraft);
-    setRevision(initialRevision);
-    setSaveError(null);
     setSendError(null);
-    sendingRef.current = false;
-    setIsSending(false);
-  }, [
-    clearDebounce,
-    conversationId,
-    initialDraft,
-    initialRevision,
-    initialAttachments,
-  ]);
-
-  useEffect(() => {
-    if (
-      contentRef.current !== savedContentRef.current ||
-      !sameAssets(attachmentsRef.current, savedAttachmentsRef.current)
-    )
-      return;
-    if (initialRevision < revisionRef.current) return;
-    if (
-      initialRevision === revisionRef.current &&
-      initialDraft === savedContentRef.current &&
-      sameAssets(initialAttachments, savedAttachmentsRef.current)
-    ) {
-      return;
-    }
-    contentRef.current = initialDraft;
-    savedContentRef.current = initialDraft;
-    attachmentsRef.current = initialAttachments;
-    savedAttachmentsRef.current = initialAttachments;
-    setAttachments(initialAttachments);
-    selectedPromptRef.current = null;
-    revisionRef.current = initialRevision;
-    setContent(initialDraft);
-    setRevision(initialRevision);
-    setSaveError(null);
-  }, [initialDraft, initialRevision, initialAttachments]);
-
-  useEffect(() => {
     return () => {
       generationRef.current += 1;
-      clearDebounce();
       for (const controller of controllersRef.current.values())
         controller.abort();
-      sendingRef.current = false;
+      controllersRef.current.clear();
+      session.leave();
     };
-  }, [clearDebounce]);
-
-  const saveSnapshot = useCallback(
-    async (nextContent: string, nextAttachments: MediaAsset[]) => {
-      const generation = generationRef.current;
-      setSaveError(null);
-      try {
-        const result = await onSaveDraft(
-          nextContent,
-          refs(nextAttachments),
-          revisionRef.current,
-        );
-        if (generation !== generationRef.current) return;
-        savedContentRef.current = nextContent;
-        savedAttachmentsRef.current = nextAttachments;
-        revisionRef.current = result.revision;
-        setRevision(result.revision);
-      } catch (error) {
-        if (generation === generationRef.current) {
-          setSaveError(error instanceof Error ? error.message : "保存失败");
-        }
-        throw error;
-      }
-    },
-    [onSaveDraft],
-  );
-
-  const flushDraft = useCallback(async () => {
-    clearDebounce();
-    const generation = generationRef.current;
-    while (
-      generation === generationRef.current &&
-      (savedContentRef.current !== contentRef.current ||
-        !sameAssets(savedAttachmentsRef.current, attachmentsRef.current))
-    ) {
-      if (savePromiseRef.current) {
-        await savePromiseRef.current;
-        continue;
-      }
-      const snapshot = contentRef.current;
-      const snapshotAttachments = attachmentsRef.current;
-      const promise = saveSnapshot(snapshot, snapshotAttachments);
-      savePromiseRef.current = promise;
-      try {
-        await promise;
-      } finally {
-        if (savePromiseRef.current === promise) savePromiseRef.current = null;
-      }
-    }
-  }, [clearDebounce, saveSnapshot]);
-
-  const scheduleSave = useCallback(() => {
-    clearDebounce();
-    debounceRef.current = window.setTimeout(() => {
-      debounceRef.current = null;
-      void flushDraft().catch(() => undefined);
-    }, 500);
-  }, [clearDebounce, flushDraft]);
+  }, [session]);
+  const flushDraft = useCallback(() => session.flush(), [session]);
+  const scheduleSave = useCallback(() => session.schedule(), [session]);
 
   const selectPrompt = useCallback(
     (prompt: string) => {
-      if (disabled || sendingRef.current) return;
+      if (disabled || session.getSnapshot().busy) return;
       if (
-        contentRef.current &&
-        contentRef.current !== selectedPromptRef.current
+        session.getSnapshot().content &&
+        session.getSnapshot().content !== selectedPromptRef.current
       ) {
         setSendError("输入框已有内容，请先清空后再选择建议");
         textareaRef.current?.focus();
         return;
       }
       selectedPromptRef.current = prompt;
-      contentRef.current = prompt;
-      setContent(prompt);
-      setSaveError(null);
+      session.edit(prompt);
       setSendError(null);
       scheduleSave();
       textareaRef.current?.focus();
@@ -303,22 +194,25 @@ export const DraftComposer = React.forwardRef<
 
   const addAsset = useCallback(
     (asset: MediaAsset) => {
-      if (asset.status !== "ready" || disabled || sendingRef.current) return;
+      if (asset.status !== "ready" || disabled || session.getSnapshot().busy)
+        return;
       if (
-        attachmentsRef.current.some(
-          (entry) => entry.asset_id === asset.asset_id,
-        )
+        session
+          .getSnapshot()
+          .attachments.some((entry) => entry.asset_id === asset.asset_id)
       ) {
         textareaRef.current?.focus();
         return;
       }
-      if (attachmentsRef.current.length + uploadsRef.current.length >= 4) {
+      if (
+        session.getSnapshot().attachments.length + uploadsRef.current.length >=
+        4
+      ) {
         setSendError("一条消息最多附加 4 张图片");
         return;
       }
-      const next = [...attachmentsRef.current, asset];
-      attachmentsRef.current = next;
-      setAttachments(next);
+      const next = [...session.getSnapshot().attachments, asset];
+      session.edit(session.getSnapshot().content, next);
       scheduleSave();
       textareaRef.current?.focus();
     },
@@ -328,49 +222,31 @@ export const DraftComposer = React.forwardRef<
   const restoreRecovery = useCallback(
     async (copy: (expectedRevision: number) => Promise<DraftSnapshot>) => {
       const hasInput = () =>
-        contentRef.current.length > 0 ||
-        attachmentsRef.current.length > 0 ||
+        session.getSnapshot().content.length > 0 ||
+        session.getSnapshot().attachments.length > 0 ||
         uploadsRef.current.length > 0;
-      if (disabled || sendingRef.current)
+      if (disabled || session.getSnapshot().busy)
         throw new Error("输入框暂不可用，请稍后重试");
       if (hasInput())
         throw new Error("输入框已有内容或图片，请先保存或移走后再恢复中断项");
       const generation = generationRef.current;
-      sendingRef.current = true;
-      setIsSending(true);
+      session.setBusy(true);
       try {
-        // Wait for earlier saves, including clearing a previous draft, before CAS.
-        if (savePromiseRef.current) await savePromiseRef.current;
-        if (generation !== generationRef.current)
-          throw new Error("会话已切换，请在原会话重试");
         await flushDraft();
         if (generation !== generationRef.current)
           throw new Error("会话已切换，请在原会话重试");
         if (hasInput()) throw new Error("输入框内容已变化，请重新检查");
-        const recovered = await copy(revisionRef.current);
-        if (generation !== generationRef.current) return;
-        if (recovered.revision < revisionRef.current)
+        const before = session.getSnapshot();
+        const recovered = await copy(before.revision);
+        if (recovered.revision < session.getSnapshot().revision)
           throw new Error("草稿版本已变化，请核对后重试");
-        savedContentRef.current = recovered.content;
-        savedAttachmentsRef.current = recovered.attachments;
-        revisionRef.current = recovered.revision;
-        setRevision(recovered.revision);
-        if (!hasInput()) {
-          contentRef.current = recovered.content;
-          attachmentsRef.current = recovered.attachments;
-          setContent(recovered.content);
-          setAttachments(recovered.attachments);
-        } else scheduleSave();
-        setSaveError(null);
-        textareaRef.current?.focus();
+        session.acknowledgeAction(recovered, before);
+        if (generation === generationRef.current) textareaRef.current?.focus();
       } finally {
-        if (generation === generationRef.current) {
-          sendingRef.current = false;
-          setIsSending(false);
-        }
+        session.setBusy(false);
       }
     },
-    [disabled, flushDraft, scheduleSave],
+    [disabled, flushDraft, session],
   );
 
   useImperativeHandle(
@@ -380,11 +256,10 @@ export const DraftComposer = React.forwardRef<
   );
 
   const removeAsset = (assetId: string) => {
-    const next = attachmentsRef.current.filter(
-      (asset) => asset.asset_id !== assetId,
-    );
-    attachmentsRef.current = next;
-    setAttachments(next);
+    const next = session
+      .getSnapshot()
+      .attachments.filter((asset) => asset.asset_id !== assetId);
+    session.edit(session.getSnapshot().content, next);
     scheduleSave();
   };
 
@@ -401,7 +276,10 @@ export const DraftComposer = React.forwardRef<
       setSendError(`${file.name}: 图片超过 8 MiB`);
       return;
     }
-    if (attachmentsRef.current.length + uploadsRef.current.length >= 4) {
+    if (
+      session.getSnapshot().attachments.length + uploadsRef.current.length >=
+      4
+    ) {
       setSendError("一条消息最多附加 4 张图片");
       return;
     }
@@ -461,15 +339,14 @@ export const DraftComposer = React.forwardRef<
   const handleChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
     const nextContent = event.target.value;
     selectedPromptRef.current = null;
-    contentRef.current = nextContent;
-    setContent(nextContent);
+    session.edit(nextContent);
     setSendError(null);
     scheduleSave();
   };
 
   const handleSend = async () => {
-    const current = contentRef.current;
-    const currentAttachments = attachmentsRef.current;
+    const current = session.getSnapshot().content;
+    const currentAttachments = session.getSnapshot().attachments;
     const isOverLimit =
       new TextEncoder().encode(current).length > LIMITS.INPUT_MAX_BYTES;
     if (
@@ -479,52 +356,41 @@ export const DraftComposer = React.forwardRef<
       currentAttachments.some((asset) => asset.status !== "ready") ||
       disabled ||
       sendDisabled ||
-      sendingRef.current ||
+      session.getSnapshot().busy ||
       isOverLimit
     )
       return;
 
     const generation = generationRef.current;
-    sendingRef.current = true;
-    setIsSending(true);
+    session.setBusy(true);
     setSendError(null);
     try {
       await flushDraft();
       if (generation !== generationRef.current) return;
+      const before = session.getSnapshot();
       const result = await onSend(
-        current,
-        currentAttachments,
-        revisionRef.current,
+        before.content,
+        before.attachments,
+        before.revision,
       );
-      if (generation !== generationRef.current) return;
-      const changedDuringSend =
-        contentRef.current !== current ||
-        !sameAssets(attachmentsRef.current, currentAttachments);
-      savedContentRef.current = result.draft.content;
-      savedAttachmentsRef.current = result.draft.attachments;
-      selectedPromptRef.current = null;
-      revisionRef.current = result.draft.revision;
-      if (!changedDuringSend) {
-        contentRef.current = result.draft.content;
-        attachmentsRef.current = result.draft.attachments;
-        setContent(result.draft.content);
-        setAttachments(result.draft.attachments);
-      } else scheduleSave();
-      setRevision(result.draft.revision);
-      setSaveError(null);
+      session.acknowledgeAction(result.draft, before);
+      if (generation === generationRef.current)
+        selectedPromptRef.current = null;
     } catch (error) {
-      if (generation === generationRef.current) {
+      if (generation === generationRef.current)
         setSendError(error instanceof Error ? error.message : "发送失败");
-      }
     } finally {
-      if (generation === generationRef.current) {
-        sendingRef.current = false;
-        setIsSending(false);
-      }
+      session.setBusy(false);
     }
   };
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (
+      composingRef.current ||
+      event.nativeEvent.isComposing ||
+      event.keyCode === 229
+    )
+      return;
     const isMod = event.ctrlKey || event.metaKey;
     const shouldSend =
       (sendShortcut === "mod_enter" && event.key === "Enter" && isMod) ||
@@ -572,6 +438,12 @@ export const DraftComposer = React.forwardRef<
         value={content}
         onChange={handleChange}
         onKeyDown={handleKeyDown}
+        onCompositionStart={() => {
+          composingRef.current = true;
+        }}
+        onCompositionEnd={() => {
+          composingRef.current = false;
+        }}
         onPaste={(event) => {
           const images = Array.from(event.clipboardData.files).filter((file) =>
             file.type.startsWith("image/"),
@@ -628,6 +500,39 @@ export const DraftComposer = React.forwardRef<
           ))}
         </div>
       )}
+      {session.getSnapshot().remote && (
+        <div
+          className="composer-conflict"
+          role="group"
+          aria-label="草稿冲突核对"
+        >
+          <p>服务端草稿已变化，请核对后选择：</p>
+          <textarea
+            readOnly
+            aria-label="服务端草稿"
+            value={session.getSnapshot().remote!.content}
+          />
+          <MediaAssets
+            assets={session.getSnapshot().remote!.attachments}
+            conversationId={conversationId}
+            compact
+          />
+          <button
+            type="button"
+            disabled={disabled || isSending}
+            onClick={() => session.resolveConflict(true)}
+          >
+            保留我的草稿
+          </button>
+          <button
+            type="button"
+            disabled={disabled || isSending}
+            onClick={() => session.resolveConflict(false)}
+          >
+            使用服务端草稿
+          </button>
+        </div>
+      )}
       <div className="composer-footer">
         <div className="composer-meta">
           <span
@@ -651,7 +556,34 @@ export const DraftComposer = React.forwardRef<
               </>
             )}
           </span>
-          {saveError && <span className="error">{saveError}</span>}
+          {saveError && (
+            <>
+              <span className="error">{saveError}</span>
+              <button
+                type="button"
+                disabled={disabled || isSending}
+                onClick={() => {
+                  if (session.getSnapshot().conflict) {
+                    const generation = generationRef.current;
+                    void apiClient
+                      .getDraft(session.id)
+                      .then((remote) => session.showConflict(remote))
+                      .catch(
+                        (error) =>
+                          generation === generationRef.current &&
+                          setSendError(
+                            error instanceof Error
+                              ? error.message
+                              : "读取草稿失败",
+                          ),
+                      );
+                  } else void flushDraft().catch(() => undefined);
+                }}
+              >
+                {session.getSnapshot().conflict ? "核对草稿冲突" : "重试保存"}
+              </button>
+            </>
+          )}
           {sendError && sendError !== saveError && (
             <span className="error">{sendError}</span>
           )}

@@ -199,7 +199,7 @@ export function AppShell() {
     agentGenerating,
     loadActiveConversation,
     handleLoadEarlier,
-    handleSaveDraft,
+    draftStore,
   } = view;
   const {
     stream,
@@ -761,7 +761,7 @@ export function AppShell() {
                         initialAttachments={draft.attachments}
                         initialRevision={draft.revision}
                         sendShortcut={preferences?.send_shortcut ?? "mod_enter"}
-                        onSaveDraft={handleSaveDraft}
+                        draftStore={draftStore}
                         onSend={async (content, attachments, revision) => {
                           const result = await handleSend(
                             content,

@@ -8,6 +8,7 @@ import {
 } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { apiClient } from "../api/client.js";
+import { DraftStore } from "./draft-store.js";
 import type {
   ConversationDetailResponse,
   ConversationSummary,
@@ -171,11 +172,7 @@ export interface ConversationView {
   } | null;
   loadActiveConversation(conversationId: string): Promise<void>;
   handleLoadEarlier(): Promise<void>;
-  handleSaveDraft(
-    content: string,
-    attachments: AttachmentRef[],
-    expectedRevision: number,
-  ): Promise<{ revision: number }>;
+  readonly draftStore: DraftStore;
   refreshLatestMessages(target: ViewTarget, runId?: string): Promise<boolean>;
   applyMetadataField(
     conversationId: string,
@@ -251,6 +248,7 @@ export function useConversationView(
   const latestLoadSeqRef = useRef(0);
   const [draft, setDraft] = useState<DraftResponse | null>(null);
   const draftRef = useRef<DraftResponse | null>(null);
+  const draftStoreRef = useRef<DraftStore | null>(null);
   const [queue, setQueue] = useState<QueueListResponse | null>(null);
   const [activeRun, setActiveRun] = useState<RunResponse | null>(null);
   const [queueOpen, setQueueOpen] = useState(false);
@@ -987,21 +985,29 @@ export function useConversationView(
   ]);
 
   const handleSaveDraft = async (
+    conversationId: string,
     content: string,
     attachments: AttachmentRef[],
     expectedRevision: number,
   ) => {
-    if (!activeConversationId) throw new Error("请先选择会话");
-    const target = captureTarget(activeConversationId);
-    if (!target) throw new Error("会话已切换，请重试保存");
-    const saved = await apiClient.putDraft(activeConversationId, {
+    const target = captureTarget(conversationId);
+    const saved = await apiClient.putDraft(conversationId, {
       content,
       attachments,
       expected_revision: expectedRevision,
     });
-    commitDraft(target, saved);
+    if (draftStoreRef.current?.has(conversationId)) {
+      const cached = conversationViewCacheRef.current.get(conversationId);
+      if (cached && cached.draft.revision <= saved.revision)
+        conversationViewCacheRef.current.set(conversationId, {
+          ...cached,
+          draft: saved,
+        });
+      if (target) commitDraft(target, saved);
+    }
     return { revision: saved.revision };
   };
+  draftStoreRef.current ??= new DraftStore(handleSaveDraft);
 
   const handleLoadEarlier = useCallback(async () => {
     const cursor = olderMessagesCursorRef.current;
@@ -1175,6 +1181,16 @@ export function useConversationView(
       item: QueueItemResponse,
       followUp: boolean,
     ): boolean => {
+      if (draftStoreRef.current?.has(target.conversationId)) {
+        const cached = conversationViewCacheRef.current.get(
+          target.conversationId,
+        );
+        if (cached && cached.draft.revision <= nextDraft.revision)
+          conversationViewCacheRef.current.set(target.conversationId, {
+            ...cached,
+            draft: nextDraft,
+          });
+      }
       if (!isCurrentTarget(target)) return false;
       commitDraft(target, nextDraft);
       if (!applyQueueItem(target, item)) return false;
@@ -1212,6 +1228,7 @@ export function useConversationView(
   );
 
   const dropCachedView = useCallback((conversationId: string) => {
+    draftStoreRef.current?.drop(conversationId);
     conversationViewCacheRef.current.delete(conversationId);
     metadataWritesRef.current.delete(conversationId);
   }, []);
@@ -1242,7 +1259,7 @@ export function useConversationView(
     loadActiveConversation,
     handleLoadEarlier,
     refreshLatestMessages,
-    handleSaveDraft,
+    draftStore: draftStoreRef.current,
     applyMetadataField,
     applyQueue,
     applyRun,

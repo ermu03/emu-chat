@@ -14,6 +14,9 @@ import {
   DraftComposer,
   type DraftComposerHandle,
 } from "../../src/client/features/composer/draft-composer";
+import { DraftStore } from "../../src/client/state/draft-store.js";
+import { apiClient, ApiClientError } from "../../src/client/api/client.js";
+import type { MediaAsset } from "../../src/shared/media-schemas.js";
 
 afterEach(() => {
   cleanup();
@@ -22,6 +25,168 @@ afterEach(() => {
 });
 
 describe("high-risk component interactions", () => {
+  it("retains a newer empty draft when an older save fails and fences a deleted draft's late acknowledgement", async () => {
+    let reject!: (error: Error) => void;
+    let resolve!: (value: { revision: number }) => void;
+    const failed = new Promise<{ revision: number }>((_resolve, rejectSave) => {
+      reject = rejectSave;
+    });
+    const late = new Promise<{ revision: number }>((resolveSave) => {
+      resolve = resolveSave;
+    });
+    const save = vi
+      .fn()
+      .mockImplementationOnce(() => failed)
+      .mockImplementationOnce(() => late);
+    const store = new DraftStore(save);
+    const view = render(
+      <DraftComposer
+        conversationId="cv_clear"
+        draftStore={store}
+        sendShortcut="enter"
+        onSend={vi.fn()}
+      />,
+    );
+    const input = screen.getByRole("textbox", { name: "消息输入框" });
+    fireEvent.change(input, { target: { value: "Old request" } });
+    // Leaving starts the old request immediately; returning and clearing records newer intent.
+    view.rerender(
+      <DraftComposer
+        conversationId="cv_other"
+        draftStore={store}
+        sendShortcut="enter"
+        onSend={vi.fn()}
+      />,
+    );
+    view.rerender(
+      <DraftComposer
+        conversationId="cv_clear"
+        draftStore={store}
+        sendShortcut="enter"
+        onSend={vi.fn()}
+      />,
+    );
+    fireEvent.change(screen.getByRole("textbox", { name: "消息输入框" }), {
+      target: { value: "" },
+    });
+    await act(async () => reject(new Error("response lost")));
+    fireEvent.click(screen.getByRole("button", { name: "重试保存" }));
+    await waitFor(() =>
+      expect(save).toHaveBeenLastCalledWith("cv_clear", "", [], 0),
+    );
+    view.unmount();
+    store.drop("cv_clear");
+    await act(async () => resolve({ revision: 1 }));
+    expect(store.has("cv_clear")).toBe(false);
+    expect(save).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps failed text and ready attachments beyond view eviction and resolves CAS only on request", async () => {
+    const asset: MediaAsset = {
+      asset_id: "asset_draft",
+      status: "ready",
+      source: { kind: "upload", upload_id: "upload_draft" },
+      mime_type: "image/png",
+      byte_size: 1,
+      width: 1,
+      height: 1,
+      sha256: "a".repeat(64),
+      file_name: "draft.png",
+      content_url: "/draft.png",
+    };
+    const conflict = new ApiClientError({
+      error: {
+        code: "DRAFT_CONFLICT",
+        message: "草稿版本冲突",
+        retryable: false,
+        action: "resolve_conflict",
+        request_id: "rq_test",
+      },
+    });
+    const save = vi
+      .fn()
+      .mockRejectedValueOnce(conflict)
+      .mockResolvedValue({ revision: 8 });
+    const store = new DraftStore(save);
+    const remote = { content: "Remote input", attachments: [], revision: 7 };
+    vi.spyOn(apiClient, "getDraft").mockResolvedValue({
+      object: "emu_chat.draft",
+      conversation_id: "cv_original",
+      ...remote,
+      updated_at: null,
+    });
+    const ref = createRef<DraftComposerHandle>();
+    const composer = (id: string) => (
+      <DraftComposer
+        ref={ref}
+        conversationId={id}
+        draftStore={store}
+        sendShortcut="enter"
+        onSend={vi.fn()}
+      />
+    );
+    const view = render(composer("cv_original"));
+    act(() => ref.current!.addAsset(asset));
+    fireEvent.change(screen.getByRole("textbox", { name: "消息输入框" }), {
+      target: { value: "Local input" },
+    });
+    view.rerender(composer("cv_other"));
+    await waitFor(() => expect(save).toHaveBeenCalledOnce());
+    for (let index = 0; index < 15; index++)
+      view.rerender(composer(`cv_other_${index}`));
+    view.rerender(composer("cv_original"));
+    expect(
+      (
+        screen.getByRole("textbox", {
+          name: "消息输入框",
+        }) as HTMLTextAreaElement
+      ).value,
+    ).toBe("Local input");
+    expect(
+      screen.getByRole("button", { name: "移除图片 draft.png" }),
+    ).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: "核对草稿冲突" }));
+    await screen.findByRole("textbox", { name: "服务端草稿" });
+    expect(save).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole("button", { name: "保留我的草稿" }));
+    await waitFor(() =>
+      expect(save).toHaveBeenLastCalledWith(
+        "cv_original",
+        "Local input",
+        [{ asset_id: asset.asset_id, sha256: asset.sha256 }],
+        7,
+      ),
+    );
+    expect(
+      (
+        screen.getByRole("textbox", {
+          name: "消息输入框",
+        }) as HTMLTextAreaElement
+      ).value,
+    ).toBe("Local input");
+  });
+
+  it("ignores IME confirmation keys while preserving the normal send shortcut", async () => {
+    const send = vi.fn().mockRejectedValue(new Error("offline"));
+    render(
+      <DraftComposer
+        conversationId="cv_ime"
+        sendShortcut="enter"
+        onSaveDraft={vi.fn().mockResolvedValue({ revision: 1 })}
+        onSend={send}
+      />,
+    );
+    const input = screen.getByRole("textbox", { name: "消息输入框" });
+    fireEvent.change(input, { target: { value: "输入法内容" } });
+    fireEvent.compositionStart(input);
+    fireEvent.keyDown(input, { key: "Enter", isComposing: true });
+    fireEvent.compositionEnd(input);
+    fireEvent.keyDown(input, { key: "Enter", keyCode: 229 });
+    expect(send).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(send).toHaveBeenCalledWith("输入法内容", [], 1));
+  });
+
   it("waits for an older save and the empty draft acknowledgement before copying recovery", async () => {
     vi.useFakeTimers();
     let acknowledgeOld!: (value: { revision: number }) => void;
