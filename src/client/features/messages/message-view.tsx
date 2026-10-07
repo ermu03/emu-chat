@@ -20,6 +20,7 @@ import {
 import type { MessageItem } from "../../../shared/api-schemas.js";
 import type { MediaAsset } from "../../../shared/media-schemas.js";
 import { MediaAssets } from "../media/media-assets.js";
+import { GeneratedImageResult } from "../media/generated-image-result.js";
 import {
   type AssistantTurn,
   type ToolCallItem,
@@ -52,6 +53,7 @@ export interface MessageViewProps {
   onReconcile?: (() => void) | undefined;
   onSelectPrompt?: ((prompt: string) => void) | undefined;
   onReuseImage?: ((asset: MediaAsset) => void) | undefined;
+  onRefreshImages?: (() => Promise<void>) | undefined;
   artifactConversationId?: string | null;
   allowArtifacts?: boolean;
   onOpenArtifact?:
@@ -107,6 +109,7 @@ export const MessageView: React.FC<MessageViewProps> = ({
   onReconcile,
   onSelectPrompt,
   onReuseImage,
+  onRefreshImages,
   artifactConversationId = null,
   allowArtifacts = false,
   onOpenArtifact,
@@ -173,6 +176,7 @@ export const MessageView: React.FC<MessageViewProps> = ({
         allowArtifacts={allowArtifacts}
         onOpenArtifact={onOpenArtifact}
         onReuseImage={onReuseImage}
+        onRefreshImages={onRefreshImages}
       />,
     ];
   });
@@ -202,6 +206,7 @@ export const MessageView: React.FC<MessageViewProps> = ({
         onStopGenerating={onStopGenerating}
         onReconcile={onReconcile}
         onReuseImage={onReuseImage}
+        onRefreshImages={onRefreshImages}
       />,
     );
   }
@@ -411,6 +416,7 @@ const AssistantTurnRow = memo(function AssistantTurnRow({
   allowArtifacts,
   onOpenArtifact,
   onReuseImage,
+  onRefreshImages,
   canCopy,
 }: {
   turn: Pick<AssistantTurn, "timestamp" | "blocks">;
@@ -422,6 +428,7 @@ const AssistantTurnRow = memo(function AssistantTurnRow({
   artifactConversationId?: string | null;
   allowArtifacts?: boolean;
   onReuseImage?: ((asset: MediaAsset) => void) | undefined;
+  onRefreshImages?: (() => Promise<void>) | undefined;
   onOpenArtifact?:
     | ((
         artifact: Artifact,
@@ -498,6 +505,8 @@ const AssistantTurnRow = memo(function AssistantTurnRow({
                 tool={block.tool}
                 conversationId={artifactConversationId}
                 onReuseImage={onReuseImage}
+                onRefreshImages={onRefreshImages}
+                generating={livePhase === "streaming"}
                 open={expandedTools[ordinal] ?? block.tool.isError}
                 outputExpanded={expandedOutputs[ordinal] ?? block.tool.isError}
                 onExpandOutput={(expanded) =>
@@ -588,6 +597,8 @@ const ToolStepItem = memo(function ToolStepItem({
   onToggle,
   conversationId,
   onReuseImage,
+  onRefreshImages,
+  generating,
   outputExpanded,
   onExpandOutput,
 }: {
@@ -598,6 +609,8 @@ const ToolStepItem = memo(function ToolStepItem({
   onToggle: (open: boolean) => void;
   conversationId?: string | null | undefined;
   onReuseImage?: ((asset: MediaAsset) => void) | undefined;
+  onRefreshImages?: (() => Promise<void>) | undefined;
+  generating: boolean;
 }) {
   const isCompleted =
     tool.status === "completed" || tool.resultContent !== undefined;
@@ -675,11 +688,22 @@ const ToolStepItem = memo(function ToolStepItem({
           {!tool.callContent && !result && <pre>等待结果…</pre>}
         </div>
       </details>
-      <MediaAssets
-        assets={tool.attachments ?? []}
-        conversationId={conversationId}
-        {...(onReuseImage ? { onReuse: onReuseImage } : {})}
-      />
+      {tool.name === "image_generate" ||
+      tool.attachments?.some((asset) => asset.source.kind === "tool") ? (
+        <GeneratedImageResult
+          tool={tool}
+          generating={generating}
+          conversationId={conversationId}
+          onReuse={onReuseImage}
+          onRefresh={onRefreshImages}
+        />
+      ) : (
+        <MediaAssets
+          assets={tool.attachments ?? []}
+          conversationId={conversationId}
+          {...(onReuseImage ? { onReuse: onReuseImage } : {})}
+        />
+      )}
     </div>
   );
 });

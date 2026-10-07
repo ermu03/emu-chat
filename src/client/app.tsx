@@ -181,6 +181,11 @@ export function AppShell() {
     runtime.refreshRuntime,
     setConversations,
   );
+  const refreshImages = useCallback(async () => {
+    if (!activeConversationId) return;
+    const target = view.captureTarget(activeConversationId);
+    if (target) await view.refreshLatestMessages(target);
+  }, [activeConversationId, view.captureTarget, view.refreshLatestMessages]);
   const {
     activeConversation,
     messages,
@@ -672,6 +677,9 @@ export function AppShell() {
                       : undefined
                   }
                   artifactConversationId={activeConversationId}
+                  onRefreshImages={
+                    hasActiveConversationView ? refreshImages : undefined
+                  }
                   allowArtifacts={
                     hasActiveConversationView &&
                     !isLiveRun(visibleRun) &&

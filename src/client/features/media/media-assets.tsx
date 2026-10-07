@@ -18,15 +18,20 @@ export function MediaAssets({
   onReuse,
   onRemove,
   compact = false,
+  presentation = "attachment",
+  pendingExpired = false,
 }: {
   assets: MediaAsset[];
   conversationId?: string | null | undefined;
   onReuse?: (asset: MediaAsset) => void;
   onRemove?: (assetId: string) => void;
   compact?: boolean;
+  presentation?: "attachment" | "result";
+  pendingExpired?: boolean;
 }) {
   const [selected, setSelected] = useState<MediaAsset | null>(null);
   const [retrying, setRetrying] = useState<string | null>(null);
+  const [retryExpired, setRetryExpired] = useState<string | null>(null);
   const [retryOverrides, setRetryOverrides] = useState<
     Record<string, MediaAsset>
   >({});
@@ -41,6 +46,7 @@ export function MediaAssets({
   useEffect(() => {
     setSelected(null);
     setRetrying(null);
+    setRetryExpired(null);
     setRetryOverrides({});
     setError(null);
     retryDetailsRef.current = null;
@@ -62,6 +68,7 @@ export function MediaAssets({
       if (inFlight) return;
       if (Date.now() >= retry.deadline) {
         retryDetailsRef.current = null;
+        setRetryExpired(retrying);
         setRetrying((current) => (current === retrying ? null : current));
         return;
       }
@@ -96,9 +103,14 @@ export function MediaAssets({
   if (!assets.length) return null;
   return (
     <>
-      <div className={`media-assets ${compact ? "compact" : ""}`}>
+      <div
+        className={`media-assets ${compact ? "compact" : ""} ${presentation === "result" ? "image-results" : ""} ${assets.length === 1 ? "single" : "multiple"}`}
+      >
         {assets.map((sourceAsset) => {
-          const asset = retryOverrides[sourceAsset.asset_id] ?? sourceAsset;
+          const asset =
+            sourceAsset.status === "ready"
+              ? sourceAsset
+              : (retryOverrides[sourceAsset.asset_id] ?? sourceAsset);
           const retryToolCallId =
             asset.source.kind === "tool" ? asset.source.tool_call_id : null;
           return (
@@ -107,6 +119,16 @@ export function MediaAssets({
                 <button
                   type="button"
                   className="media-asset-open"
+                  style={
+                    presentation === "result"
+                      ? {
+                          aspectRatio:
+                            asset.width > 0 && asset.height > 0
+                              ? `${asset.width} / ${asset.height}`
+                              : "3 / 2",
+                        }
+                      : undefined
+                  }
                   aria-label={`查看图片 ${asset.file_name}`}
                   onClick={(event) => {
                     triggerRef.current = event.currentTarget;
@@ -120,15 +142,48 @@ export function MediaAssets({
                   />
                 </button>
               ) : (
-                <div className="media-asset-placeholder">
+                <div
+                  className="media-asset-placeholder"
+                  role="status"
+                  style={
+                    presentation === "result"
+                      ? {
+                          aspectRatio:
+                            asset.width > 0 && asset.height > 0
+                              ? `${asset.width} / ${asset.height}`
+                              : "3 / 2",
+                        }
+                      : undefined
+                  }
+                >
                   <ImageIcon size={18} />
                   <span>
                     {asset.status === "pending"
-                      ? "图片保存中"
+                      ? pendingExpired || retryExpired === asset.asset_id
+                        ? "图片保存尚未完成"
+                        : "图片保存中"
                       : asset.status === "capture_failed"
                         ? "图片保存失败"
                         : "图片暂不可用"}
                   </span>
+                </div>
+              )}
+              {presentation === "result" && asset.status === "ready" && (
+                <div className="image-result-actions">
+                  <a
+                    href={asset.content_url}
+                    download={asset.file_name || "image"}
+                    aria-label={`下载图片 ${asset.file_name}`}
+                  >
+                    <Download size={14} />
+                    下载
+                  </a>
+                  {onReuse && (
+                    <button type="button" onClick={() => onReuse(asset)}>
+                      <Plus size={14} />
+                      用于下一条消息
+                    </button>
+                  )}
                 </div>
               )}
               {onRemove && (
@@ -147,19 +202,22 @@ export function MediaAssets({
                   <button
                     type="button"
                     className="media-asset-retry"
-                    disabled={retrying === asset.asset_id}
+                    disabled={retrying !== null}
                     onClick={() => {
-                      retryDetailsRef.current = {
+                      const retry = {
                         assetId: asset.asset_id,
                         conversationId,
                         toolCallId: retryToolCallId,
                         deadline: Date.now() + 90_000,
                       };
+                      retryDetailsRef.current = retry;
                       setRetrying(asset.asset_id);
+                      setRetryExpired(null);
                       setError(null);
                       void apiClient
                         .retryMediaCapture(conversationId, asset.asset_id)
                         .catch((cause) => {
+                          if (retryDetailsRef.current !== retry) return;
                           setError(
                             cause instanceof Error ? cause.message : "重试失败",
                           );

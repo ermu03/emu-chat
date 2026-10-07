@@ -2759,6 +2759,120 @@ details[open] > summary .tool-call-chevron {
 .tool-step-with-media > .media-assets {
   margin: 8px 0 0;
 }
+
+.generated-image-result {
+  margin-top: 8px;
+  max-width: 100%;
+}
+
+.generated-image-placeholder {
+  display: flex;
+  width: min(480px, 100%);
+  aspect-ratio: 3 / 2;
+  max-height: 480px;
+  min-height: 150px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  color: var(--ink-soft);
+  background: var(--surface-subtle);
+  font-size: 13px;
+  text-align: center;
+}
+
+.generated-image-placeholder.failed {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 30%, var(--line));
+  background: var(--danger-wash);
+}
+
+.media-assets.image-results {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: min(720px, 100%);
+  margin: 0;
+  gap: 12px;
+  align-items: start;
+}
+
+.media-assets.image-results.single {
+  grid-template-columns: minmax(0, 1fr);
+  width: min(480px, 100%);
+}
+
+.image-results .media-asset {
+  width: 100%;
+  min-height: 0;
+  border-radius: var(--radius-lg);
+}
+
+.image-results .media-asset-open,
+.image-results .media-asset-placeholder {
+  min-height: 0;
+  max-height: 480px;
+  background: var(--surface-subtle);
+}
+
+.image-results .media-asset-open {
+  height: auto;
+}
+
+.image-results .media-asset-open img {
+  height: 100%;
+  max-height: 480px;
+  object-fit: contain;
+}
+
+.image-results .media-asset-placeholder {
+  padding: 12px;
+  font-size: 13px;
+}
+
+.image-result-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.image-result-actions button,
+.image-result-actions a,
+.generated-image-refresh,
+.image-results .media-asset-retry {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  gap: 5px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  color: var(--ink-soft);
+  background: transparent;
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.image-result-actions button:hover,
+.image-result-actions a:hover,
+.generated-image-refresh:hover {
+  color: var(--ink);
+  background: var(--surface-subtle);
+}
+
+@media (pointer: coarse) {
+  .image-result-actions button,
+  .image-result-actions a,
+  .generated-image-refresh,
+  .image-results .media-asset-retry {
+    min-height: 44px;
+  }
+}
 .composer-uploads {
   display: grid;
   gap: 4px;

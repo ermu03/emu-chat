@@ -1961,6 +1961,11 @@ describe("AppShell async flows", () => {
         type: "tool.started",
         payload: { tool: "image_generate" },
       });
+    });
+    const placeholder = screen
+      .getByText("正在生成图片")
+      .closest(".generated-image-placeholder");
+    act(() => {
       source.emit("run.event", {
         local_run_id: "run_image",
         local_seq: 2,
@@ -1972,6 +1977,9 @@ describe("AppShell async flows", () => {
         },
       });
     });
+    expect(
+      screen.getByText("正在保存图片").closest(".generated-image-placeholder"),
+    ).toBe(placeholder);
     currentQueue = queue(summary.conversation_id, [
       { ...queueItem, state: "done" },
     ]);
@@ -1998,5 +2006,7 @@ describe("AppShell async flows", () => {
       ),
     ).toBeDefined();
     expect(historyRequests).toBeGreaterThanOrEqual(4);
+    expect(screen.queryByText("正在生成图片")).toBeNull();
+    expect(screen.queryByText("图片保存中")).toBeNull();
   }, 12_000);
 });

@@ -1,6 +1,6 @@
 # ChatGPT 对话展示调研与 emu-chat 对照
 
-调研日期：2026-10-07。范围：工具调用、助手回复操作、生成图片及相关阅读体验。本记录用于方案讨论，相关设计已整理为 proposed 提案，尚未实施。
+调研日期：2026-10-07。范围：工具调用、助手回复操作、生成图片及相关阅读体验。本记录保留调研时的证据与建议；四项提案已实施，现行决定见文末链接。
 
 ## 证据范围
 
@@ -64,4 +64,4 @@
 
 本轮范围为对话展示与手机输入区，不同时大改侧栏或引入新的 UI 框架。正式实施时，用工具密集回合、普通长回复、代码预览、单图/多图及图片保存失败制作本地交互样例，检查深浅主题、窄屏和实时交接；手机输入区还需验证软键盘、地址栏和横竖屏切换。无需发起真实付费模型请求。
 
-后续方案：[工具展示](../notes/implemented/feature/2026-10-07-lightweight-tool-display.md)、[回复复制](../notes/implemented/feature/2026-10-07-assistant-response-copy.md)、[图片结果](../notes/proposed/feature/2026-10-07-generated-image-result-cards.md)。手机输入区的补充问题见[紧凑布局与视口适配提案](../notes/implemented/bug-fix/2026-10-07-compact-mobile-composer.md)。
+现行决定：[工具展示](../notes/implemented/feature/2026-10-07-lightweight-tool-display.md)、[回复复制](../notes/implemented/feature/2026-10-07-assistant-response-copy.md)、[图片结果](../notes/implemented/feature/2026-10-07-generated-image-result-cards.md)。手机输入区的补充问题见[紧凑布局与视口适配决定](../notes/implemented/bug-fix/2026-10-07-compact-mobile-composer.md)。

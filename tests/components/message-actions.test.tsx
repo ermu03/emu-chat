@@ -10,11 +10,72 @@ import {
 } from "@testing-library/react";
 import { MessageView } from "../../src/client/features/messages/message-view.js";
 import { CopyButton } from "../../src/client/features/messages/copy-button.js";
+import { MediaAssets } from "../../src/client/features/media/media-assets.js";
+import { apiClient } from "../../src/client/api/client.js";
+import type { MediaAsset } from "../../src/shared/media-schemas.js";
 import type { MessageItem } from "../../src/shared/api-schemas.js";
 
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+it("ignores a failed capture retry after switching image scope", async () => {
+  let reject!: (error: Error) => void;
+  vi.spyOn(apiClient, "retryMediaCapture").mockImplementation(
+    () =>
+      new Promise((_done, fail) => {
+        reject = fail;
+      }),
+  );
+  vi.spyOn(apiClient, "listMediaAssets").mockResolvedValue({
+    data: [],
+    next_cursor: null,
+  });
+  const failed: MediaAsset = {
+    asset_id: "asset_failed",
+    status: "capture_failed",
+    source: {
+      kind: "tool",
+      session_id: "s",
+      turn_id: null,
+      tool_call_id: "call",
+      output_index: 0,
+    },
+    mime_type: "image/png",
+    byte_size: 0,
+    width: 100,
+    height: 100,
+    sha256: "a".repeat(64),
+    file_name: "old.png",
+    content_url: "/old.png",
+  };
+  const view = render(
+    <MediaAssets
+      assets={[failed]}
+      conversationId="cv_old"
+      presentation="result"
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "重试保存" }));
+  view.rerender(
+    <MediaAssets
+      assets={[
+        {
+          ...failed,
+          asset_id: "asset_new",
+          status: "ready",
+          file_name: "new.png",
+        },
+      ]}
+      conversationId="cv_new"
+      presentation="result"
+    />,
+  );
+  await act(async () => reject(new Error("old retry failure")));
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect((screen.getByRole("img") as HTMLImageElement).alt).toBe("new.png");
 });
 
 it("copies ordered assistant source without reasoning or tool logs, and fences a late copy across conversations", async () => {
