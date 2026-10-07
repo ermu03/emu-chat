@@ -4,6 +4,14 @@ import type { HermesAdapter } from "../hermes/adapter.js";
 import { logger } from "../logging.js";
 import { MediaClient } from "./client.js";
 import { parseMediaRunInput } from "./manifest.js";
+import { AttachmentRefSchema } from "../../shared/media-schemas.js";
+import { withImmediateTransaction } from "../db/transaction.js";
+import {
+  mediaScopeState,
+  requireMediaScope,
+  MediaScopeDeferredError,
+  MediaScopeDeletedError,
+} from "./scope-state.js";
 
 type BranchRow = {
   target_scope_id: string;
@@ -17,6 +25,11 @@ type BranchRow = {
 export class MediaBranchService {
   private timer: NodeJS.Timeout | null = null;
   private active: Promise<void> | null = null;
+  private readonly flights = new Map<
+    string,
+    Promise<"done" | "deferred" | "deleted">
+  >();
+  private stopped = false;
 
   constructor(
     private readonly db: Database.Database,
@@ -64,25 +77,46 @@ export class MediaBranchService {
 
   start(): void {
     if (this.timer || !this.client.isConfigured()) return;
+    this.stopped = false;
     this.timer = setInterval(() => this.wake(), 10_000);
     this.timer.unref();
     this.wake();
   }
 
   async stop(): Promise<void> {
+    this.stopped = true;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
     await this.active;
+    await Promise.allSettled(this.flights.values());
   }
 
   wake(): void {
-    if (!this.client.isConfigured() || this.active || !this.db.open) return;
+    if (
+      this.stopped ||
+      !this.client.isConfigured() ||
+      this.active ||
+      !this.db.open
+    )
+      return;
     this.active = this.processPending().finally(() => {
       this.active = null;
     });
   }
 
-  async syncOne(targetScopeId: string): Promise<void> {
+  syncOne(targetScopeId: string): Promise<"done" | "deferred" | "deleted"> {
+    const existing = this.flights.get(targetScopeId);
+    if (existing) return existing;
+    const flight = this.syncTarget(targetScopeId).finally(() =>
+      this.flights.delete(targetScopeId),
+    );
+    this.flights.set(targetScopeId, flight);
+    return flight;
+  }
+
+  private async syncTarget(
+    targetScopeId: string,
+  ): Promise<"done" | "deferred" | "deleted"> {
     const row = this.db
       .prepare(
         `SELECT target_scope_id,source_scope_id,source_session_id,target_session_id,
@@ -90,26 +124,35 @@ export class MediaBranchService {
       FROM media_branch_pending WHERE target_scope_id=? AND status='pending'`,
       )
       .get(targetScopeId) as BranchRow | undefined;
-    if (!row) return;
+    if (!row)
+      return mediaScopeState(this.db, targetScopeId) === "deleted"
+        ? "deleted"
+        : "done";
     try {
       await this.sync(row);
-      this.db
-        .prepare(
-          `UPDATE media_branch_pending SET status='done',last_error=NULL,updated_at=?
-        WHERE target_scope_id=? AND status='pending'`,
-        )
-        .run(new Date().toISOString(), targetScopeId);
+      return "done";
     } catch (error) {
+      if (
+        error instanceof MediaScopeDeletedError ||
+        mediaScopeState(this.db, targetScopeId) === "deleted"
+      )
+        return "deleted";
       this.db
         .prepare(
-          `UPDATE media_branch_pending SET last_error=?,updated_at=?
+          `UPDATE media_branch_pending SET last_error=?,updated_at=?,next_attempt_at=?
         WHERE target_scope_id=? AND status='pending'`,
         )
         .run(
           error instanceof Error ? error.name : "unknown",
           new Date().toISOString(),
+          new Date(Date.now() + 10_000).toISOString(),
           targetScopeId,
         );
+      if (
+        error instanceof MediaScopeDeferredError ||
+        mediaScopeState(this.db, targetScopeId) === "deferred"
+      )
+        return "deferred";
       throw error;
     }
   }
@@ -118,9 +161,9 @@ export class MediaBranchService {
     const rows = this.db
       .prepare(
         `SELECT target_scope_id FROM media_branch_pending
-      WHERE status='pending' ORDER BY created_at LIMIT 10`,
+      WHERE status='pending' AND next_attempt_at<=? ORDER BY created_at LIMIT 10`,
       )
-      .all() as { target_scope_id: string }[];
+      .all(new Date().toISOString()) as { target_scope_id: string }[];
     for (const row of rows) {
       try {
         await this.syncOne(row.target_scope_id);
@@ -137,15 +180,18 @@ export class MediaBranchService {
   private async transcript(
     sessionId: string,
     maximum: number,
+    row: BranchRow,
   ): Promise<HermesMessageItem[]> {
     const result: HermesMessageItem[] = [];
     let offset = 0;
     while (offset < maximum) {
-      const page = await this.hermes.getSessionMessages(sessionId, {
-        order: "oldest",
-        offset,
-        limit: Math.min(500, maximum - offset),
-      });
+      const page = await this.call(row, () =>
+        this.hermes.getSessionMessages(sessionId, {
+          order: "oldest",
+          offset,
+          limit: Math.min(500, maximum - offset),
+        }),
+      );
       result.push(...page.messages);
       if (!page.messages.length) break;
       offset += page.messages.length;
@@ -170,29 +216,39 @@ export class MediaBranchService {
   }
 
   private async sync(row: BranchRow): Promise<void> {
+    requireMediaScope(this.db, row.target_scope_id);
     const source = this.db
       .prepare("SELECT 1 FROM conversations WHERE id=?")
       .get(row.source_scope_id);
-    const target = this.db
-      .prepare("SELECT delete_state FROM conversations WHERE id=?")
-      .get(row.target_scope_id) as { delete_state: string } | undefined;
-    if (!target || target.delete_state !== "none") return;
     if (!source)
       throw new Error("Source conversation disappeared before branch mapping");
+    if (
+      this.db
+        .prepare(
+          "SELECT 1 FROM media_branch_pending WHERE target_scope_id=? AND status='pending'",
+        )
+        .get(row.source_scope_id)
+    )
+      throw new MediaScopeDeferredError(
+        "Direct source branch mapping has not completed",
+      );
     if (row.copied_message_count < 0 || row.copied_message_count > 100_000)
       throw new Error("Copied transcript is outside the supported bound");
 
-    const [sourceRows, targetRows] = await Promise.all([
-      this.transcript(row.source_session_id, row.copied_message_count),
-      this.transcript(row.target_session_id, row.copied_message_count),
+    const [sourceResult, targetResult] = await Promise.allSettled([
+      this.transcript(row.source_session_id, row.copied_message_count, row),
+      this.transcript(row.target_session_id, row.copied_message_count, row),
     ]);
+    if (sourceResult.status === "rejected") throw sourceResult.reason;
+    if (targetResult.status === "rejected") throw targetResult.reason;
+    const sourceRows = sourceResult.value;
+    const targetRows = targetResult.value;
     for (let index = 0; index < sourceRows.length; index++) {
       if (!MediaBranchService.sameCopy(sourceRows[index]!, targetRows[index]!))
         throw new Error("Branch transcript differs from the source copy");
     }
-    await this.client.registerSession(
-      row.target_scope_id,
-      row.target_session_id,
+    await this.call(row, () =>
+      this.client.registerSession(row.target_scope_id, row.target_session_id),
     );
     const mapping: Array<{
       targetId: number;
@@ -204,18 +260,56 @@ export class MediaBranchService {
       const copied = targetRows[index]!;
       let ids: string[] = [];
       let operationId: string | null = null;
-      if (original.role === "user") {
+      const inherited = this.db
+        .prepare(
+          `SELECT asset_ids_json,source_operation_id FROM media_branch_messages
+        WHERE target_scope_id=? AND target_message_id=?`,
+        )
+        .get(row.source_scope_id, original.id) as
+        | { asset_ids_json: string; source_operation_id: string | null }
+        | undefined;
+      if (inherited) {
+        ids = AttachmentRefSchema.shape.asset_id
+          .array()
+          .min(1)
+          .max(100)
+          .parse(JSON.parse(inherited.asset_ids_json));
+        operationId = inherited.source_operation_id;
+        if (original.role === "user") {
+          const manifest = parseMediaRunInput(original.content);
+          if (
+            !manifest ||
+            manifest.operationId !== operationId ||
+            JSON.stringify(manifest.assetIds) !== JSON.stringify(ids)
+          )
+            throw new Error(
+              "Inherited submission differs from verified message mapping",
+            );
+        } else if (
+          original.role !== "tool" ||
+          original.tool_name !== "image_generate" ||
+          !original.tool_call_id ||
+          operationId !== null
+        )
+          throw new Error(
+            "Inherited image mapping is not a copied image message",
+          );
+      } else if (original.role === "user") {
         const manifest = parseMediaRunInput(original.content);
         if (
           manifest &&
           manifest.scopeId === row.source_scope_id &&
           manifest.sessionId === original.session_id
         ) {
-          const bound = await this.client.getSubmission(
-            row.source_scope_id,
-            manifest.operationId,
+          const bound = await this.call(row, () =>
+            this.client.getSubmission(
+              row.source_scope_id,
+              manifest.operationId,
+            ),
           );
           if (
+            bound.scope_id !== row.source_scope_id ||
+            bound.operation_id !== manifest.operationId ||
             bound.session_id !== manifest.sessionId ||
             bound.run_input_sha256 !== manifest.runInputSha256 ||
             bound.user_text_sha256 !== manifest.userTextSha256 ||
@@ -231,18 +325,23 @@ export class MediaBranchService {
         original.tool_name === "image_generate" &&
         original.tool_call_id
       ) {
-        let listed = await this.client.listAssets(row.source_scope_id, {
-          tool_call_id: original.tool_call_id,
-          limit: 100,
-        });
-        if (!listed.data.length && this.successfulImageTool(original.content)) {
-          await this.client.reconcile(row.source_scope_id, [
-            original.session_id,
-          ]);
-          listed = await this.client.listAssets(row.source_scope_id, {
-            tool_call_id: original.tool_call_id,
+        const toolCallId = original.tool_call_id;
+        let listed = await this.call(row, () =>
+          this.client.listAssets(row.source_scope_id, {
+            tool_call_id: toolCallId,
             limit: 100,
-          });
+          }),
+        );
+        if (!listed.data.length && this.successfulImageTool(original.content)) {
+          await this.call(row, () =>
+            this.client.reconcile(row.source_scope_id, [original.session_id]),
+          );
+          listed = await this.call(row, () =>
+            this.client.listAssets(row.source_scope_id, {
+              tool_call_id: toolCallId,
+              limit: 100,
+            }),
+          );
           if (!listed.data.length)
             throw new Error("Image capture has not been indexed yet");
         }
@@ -254,30 +353,36 @@ export class MediaBranchService {
               asset.source.tool_call_id === original.tool_call_id,
           )
           .map((asset) => asset.asset_id);
+        if (!ids.length && this.successfulImageTool(original.content))
+          throw new Error("Image capture has no verified source assets yet");
       }
       if (!ids.length) continue;
-      for (const id of ids)
-        await this.client.grantAsset(
-          row.target_scope_id,
-          id,
-          row.source_scope_id,
+      for (const id of ids) {
+        const granted = await this.call(row, () =>
+          this.client.grantAsset(row.target_scope_id, id, row.source_scope_id),
         );
+        if (granted.scope_id !== row.target_scope_id || granted.asset_id !== id)
+          throw new Error("Granted image identity differs from copied message");
+      }
       for (let part = 0; part < ids.length; part += 4) {
-        await this.client.putReference(
-          row.target_scope_id,
-          `ref_branch_${copied.id}_${Math.floor(part / 4)}`,
-          {
-            version: 1,
-            kind: "branch",
-            revision: 0,
-            session_id: row.target_session_id,
-            asset_ids: ids.slice(part, part + 4),
-          },
+        await this.call(row, () =>
+          this.client.putReference(
+            row.target_scope_id,
+            `ref_branch_${copied.id}_${Math.floor(part / 4)}`,
+            {
+              version: 1,
+              kind: "branch",
+              revision: 0,
+              session_id: row.target_session_id,
+              asset_ids: ids.slice(part, part + 4),
+            },
+          ),
         );
       }
       mapping.push({ targetId: copied.id, ids, operationId });
     }
-    this.db.transaction(() => {
+    withImmediateTransaction(this.db, () => {
+      requireMediaScope(this.db, row.target_scope_id);
       for (const item of mapping) {
         this.db
           .prepare(
@@ -293,7 +398,20 @@ export class MediaBranchService {
             item.operationId,
           );
       }
-    })();
+      this.db
+        .prepare(
+          `UPDATE media_branch_pending SET status='done',last_error=NULL,updated_at=?
+        WHERE target_scope_id=? AND status='pending'`,
+        )
+        .run(new Date().toISOString(), row.target_scope_id);
+    });
+  }
+
+  private async call<T>(row: BranchRow, action: () => Promise<T>): Promise<T> {
+    requireMediaScope(this.db, row.target_scope_id);
+    const result = await action();
+    requireMediaScope(this.db, row.target_scope_id);
+    return result;
   }
 
   private successfulImageTool(content: string): boolean {

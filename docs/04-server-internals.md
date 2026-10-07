@@ -72,6 +72,12 @@ sequenceDiagram
 ### DataRetentionService
 负责本地数据的到期清理。服务启动时执行一次，之后每分钟执行一次；每次在即时事务中最多清理 100 条正文副本和 100 条过期控制记录。正文批次包括到期恢复项和升级遗留的终态、已丢弃、已过期冻结输入；先验证并补建无正文提交凭据，再同时清空 `payload_text` 与 `payload_run_input`。到期恢复项写入 `payload_expired_at`，仅补清旧冻结列时保留原更新时间，不延长控制保留窗口；`done`、`cancelled` 控制记录保留 7 天，已过期或主动丢弃正文的 `paused`、`rejected` 记录从最后更新时间起保留 30 天。删除队列项时，关联的终态 Run 由外键级联删除；仍有活跃或待人工处理 Run 的记录不会删除，未处理的冻结正文也阻止控制记录抢先清除。图片历史凭据不随控制记录到期删除。
 
+### MediaBranchService 与 MediaSyncWorker
+
+`MediaBranchService` 对冻结的 source/target session 逐条验证复制前缀。来源已有分支映射时，从直接来源的有效 scope 权限继承输入图和工具输出图，保留原 operation 与资源来源；只授予复制消息涉及的资源。来源分支仍待关联则延期，目标授权和引用全部成功后，在即时事务内一起写入新消息 ID 映射与完成状态。待处理分支继续阻止删除来源；同目标请求共用进行中的调用，服务关闭等待其网络调用收尾。
+
+两个 worker 都把 `delete_state=pending/failed` 视为暂态：保留任务并安排下次尝试，允许其他 scope 前进；普通 outbox 延期 2 秒且不计失败，分支延期 10 秒。网络调用前后和最终提交前复核目标。删除撤销后原任务恢复，只有本地确认移除后才结束无用途的普通任务；持久 `scope_delete` 仍按原流程重试，插件墓碑阻止迟到授权或引用复活。普通 outbox 的完成和延期更新保留原 payload CAS。见[图片分支与删除决定](../.agents/notes/implemented/bug-fix/2026-10-05-preserve-media-references-through-branch-and-delete.md)。
+
 ### StatusService
 - **TTL缓存**: 数据默认在本地缓存 5 秒。
 - **Promise单飞复用 (Single-Flight)**: 并发状态请求复用同一个上游探测 Promise；局域网 HTTP 警告在各自响应中补充。

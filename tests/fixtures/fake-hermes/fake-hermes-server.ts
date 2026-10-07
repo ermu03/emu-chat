@@ -328,6 +328,13 @@ export class FakeHermesServer {
         title: body.title ?? `${parent.title} fork`,
         parentSessionId: parent.id,
       });
+      child.messages.push(
+        ...parent.messages.map((message) => ({
+          ...message,
+          id: this.nextMessage++,
+          session_id: child.id,
+        })),
+      );
       return reply.code(201).send({
         object: "hermes.session",
         session: this.toSessionResponse(child),

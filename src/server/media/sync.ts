@@ -1,6 +1,13 @@
 import type Database from "better-sqlite3";
 import { createHash } from "node:crypto";
 import { logger } from "../logging.js";
+import { withImmediateTransaction } from "../db/transaction.js";
+import {
+  mediaScopeState,
+  requireMediaScope,
+  MediaScopeDeferredError,
+  MediaScopeDeletedError,
+} from "./scope-state.js";
 import {
   MediaClient,
   MediaConflictError,
@@ -167,21 +174,33 @@ export class MediaSyncWorker {
           )
           .get(new Date().toISOString()) as OutboxRow | undefined;
         if (!task) break;
-        const conversation = this.db
-          .prepare("SELECT delete_state FROM conversations WHERE id=?")
-          .get(task.scope_id) as { delete_state: string } | undefined;
-        if (
-          task.kind !== "scope_delete" &&
-          (!conversation || conversation.delete_state !== "none")
-        ) {
+        const state = mediaScopeState(this.db, task.scope_id);
+        if (task.kind !== "scope_delete" && state === "deleted") {
           this.markDone(task);
+          continue;
+        }
+        if (task.kind !== "scope_delete" && state === "deferred") {
+          this.deferForDeletion(task);
           continue;
         }
         try {
           await this.apply(task);
           this.markDone(task);
         } catch (error) {
-          this.markFailed(task, error);
+          const currentState = mediaScopeState(this.db, task.scope_id);
+          if (
+            task.kind !== "scope_delete" &&
+            (error instanceof MediaScopeDeletedError ||
+              currentState === "deleted")
+          )
+            this.markDone(task);
+          else if (
+            task.kind !== "scope_delete" &&
+            (error instanceof MediaScopeDeferredError ||
+              currentState === "deferred")
+          )
+            this.deferForDeletion(task);
+          else this.markFailed(task, error);
         }
       }
     } catch (error) {
@@ -197,96 +216,148 @@ export class MediaSyncWorker {
     const payload = JSON.parse(task.payload_json) as Record<string, unknown>;
     switch (task.kind) {
       case "register":
-        await this.client.registerSession(
-          task.scope_id,
-          String(payload["session_id"]),
+        await this.call(task, () =>
+          this.client.registerSession(
+            task.scope_id,
+            String(payload["session_id"]),
+          ),
         );
         break;
       case "reference_put":
-        await this.client.registerSession(
-          task.scope_id,
-          String(payload["session_id"]),
+        await this.call(task, () =>
+          this.client.registerSession(
+            task.scope_id,
+            String(payload["session_id"]),
+          ),
         );
-        await this.client.putReference(
-          task.scope_id,
-          String(payload["reference_id"]),
-          {
-            version: 1,
-            kind: payload["kind"] as
-              "draft" | "queue" | "history" | "branch" | "upload",
-            revision: Number(payload["revision"]),
-            session_id: String(payload["session_id"]),
-            asset_ids: payload["asset_ids"] as string[],
-          },
+        await this.call(task, () =>
+          this.client.putReference(
+            task.scope_id,
+            String(payload["reference_id"]),
+            {
+              version: 1,
+              kind: payload["kind"] as
+                "draft" | "queue" | "history" | "branch" | "upload",
+              revision: Number(payload["revision"]),
+              session_id: String(payload["session_id"]),
+              asset_ids: payload["asset_ids"] as string[],
+            },
+          ),
         );
         break;
       case "reference_delete":
-        await this.client.deleteReference(
-          task.scope_id,
-          String(payload["reference_id"]),
+        await this.call(task, () =>
+          this.client.deleteReference(
+            task.scope_id,
+            String(payload["reference_id"]),
+          ),
         );
         break;
       case "scope_delete":
-        await this.client.deleteScope(task.scope_id);
+        await this.call(task, () => this.client.deleteScope(task.scope_id));
         break;
       case "submission_bind":
-        await this.client.bindSubmission(
-          task.scope_id,
-          String(payload["operation_id"]),
-          {
-            version: 1,
-            session_id: String(payload["session_id"]),
-            asset_ids: payload["asset_ids"] as string[],
-            user_text_sha256: String(payload["user_text_sha256"]),
-            run_input_sha256: String(payload["run_input_sha256"]),
-          },
+        await this.call(task, () =>
+          this.client.bindSubmission(
+            task.scope_id,
+            String(payload["operation_id"]),
+            {
+              version: 1,
+              session_id: String(payload["session_id"]),
+              asset_ids: payload["asset_ids"] as string[],
+              user_text_sha256: String(payload["user_text_sha256"]),
+              run_input_sha256: String(payload["run_input_sha256"]),
+            },
+          ),
         );
         break;
       case "grant":
-        await this.client.grantAsset(
-          task.scope_id,
-          String(payload["asset_id"]),
-          String(payload["source_scope_id"]),
+        await this.call(task, () =>
+          this.client.grantAsset(
+            task.scope_id,
+            String(payload["asset_id"]),
+            String(payload["source_scope_id"]),
+          ),
         );
         break;
       case "history_handoff":
-        await this.client.registerSession(
-          task.scope_id,
-          String(payload["session_id"]),
+        await this.call(task, () =>
+          this.client.registerSession(
+            task.scope_id,
+            String(payload["session_id"]),
+          ),
         );
-        await this.client.putReference(
-          task.scope_id,
-          `ref_history_${String(payload["operation_id"])}`,
-          {
-            version: 1,
-            kind: "history",
-            revision: 0,
-            session_id: String(payload["session_id"]),
-            asset_ids: payload["asset_ids"] as string[],
-          },
+        await this.call(task, () =>
+          this.client.putReference(
+            task.scope_id,
+            `ref_history_${String(payload["operation_id"])}`,
+            {
+              version: 1,
+              kind: "history",
+              revision: 0,
+              session_id: String(payload["session_id"]),
+              asset_ids: payload["asset_ids"] as string[],
+            },
+          ),
         );
         if (typeof payload["queue_reference_id"] === "string")
-          await this.client.deleteReference(
-            task.scope_id,
-            payload["queue_reference_id"],
+          await this.call(task, () =>
+            this.client.deleteReference(
+              task.scope_id,
+              String(payload["queue_reference_id"]),
+            ),
           );
         break;
       case "orphan_release": {
         const assetId = String(payload["asset_id"]);
         if (hasLocalMediaReference(this.db, task.scope_id, assetId)) break;
-        await this.client.releaseOrphan(task.scope_id, assetId);
+        await this.call(task, () =>
+          this.client.releaseOrphan(task.scope_id, assetId),
+        );
         break;
       }
     }
   }
 
   private markDone(task: OutboxRow): void {
+    withImmediateTransaction(this.db, () => {
+      if (
+        task.kind !== "scope_delete" &&
+        mediaScopeState(this.db, task.scope_id) === "deferred"
+      ) {
+        this.deferForDeletion(task);
+        return;
+      }
+      this.db
+        .prepare(
+          `UPDATE media_outbox SET status='done',updated_at=?
+      WHERE id=? AND status='pending' AND payload_json=?`,
+        )
+        .run(new Date().toISOString(), task.id, task.payload_json);
+    });
+  }
+
+  private async call(
+    task: OutboxRow,
+    action: () => Promise<unknown>,
+  ): Promise<void> {
+    if (task.kind !== "scope_delete") requireMediaScope(this.db, task.scope_id);
+    await action();
+    if (task.kind !== "scope_delete") requireMediaScope(this.db, task.scope_id);
+  }
+
+  private deferForDeletion(task: OutboxRow): void {
     this.db
       .prepare(
-        `UPDATE media_outbox SET status='done',updated_at=?
+        `UPDATE media_outbox SET next_attempt_at=?,last_error_code='MEDIA_SCOPE_DEFERRED',updated_at=?
       WHERE id=? AND status='pending' AND payload_json=?`,
       )
-      .run(new Date().toISOString(), task.id, task.payload_json);
+      .run(
+        new Date(Date.now() + 2_000).toISOString(),
+        new Date().toISOString(),
+        task.id,
+        task.payload_json,
+      );
   }
 
   private markFailed(task: OutboxRow, error: unknown): void {

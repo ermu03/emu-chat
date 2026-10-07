@@ -12,7 +12,7 @@ import { FakeHermesServer } from "../fixtures/fake-hermes/fake-hermes-server.js"
 const digest = "a".repeat(64);
 const image = Buffer.from("fake-image-bytes");
 
-it("keeps an uploaded attachment through draft CAS, lost-admission restart, text cleanup and offline history handoff", async () => {
+it("keeps an uploaded attachment through draft CAS, lost-admission restart, text cleanup, offline history and descendant branches", async () => {
   const hermes = new FakeHermesServer();
   const baseUrl = await hermes.start();
   const db = new Database(":memory:");
@@ -20,6 +20,8 @@ it("keeps an uploaded attachment through draft CAS, lost-admission restart, text
   const rawFetch = globalThis.fetch;
   const bound = new Map<string, Record<string, unknown>>();
   const pluginCalls: string[] = [];
+  const permissions = new Set<string>();
+  const tombstones = new Set<string>();
   let pluginOffline = false;
   let wrongOperation = false;
   const bindings: unknown[] = [];
@@ -71,7 +73,27 @@ it("keeps an uploaded attachment through draft CAS, lost-admission restart, text
           max_reference_images: 0,
         },
       });
-    if (path.endsWith("/uploads")) return Response.json(asset, { status: 201 });
+    if (tombstones.has(scope))
+      return Response.json({ error: "deleted" }, { status: 410 });
+    if (path.endsWith(`/scopes/${scope}`) && init?.method === "DELETE") {
+      permissions.delete(scope);
+      tombstones.add(scope);
+      return Response.json({ protocol_version: 1 });
+    }
+    if (path.endsWith("/grants/asset_upload")) {
+      const body = JSON.parse(String(init?.body)) as {
+        source_scope_id: string;
+      };
+      expect(permissions.has(body.source_scope_id)).toBe(true);
+      permissions.add(scope);
+      return Response.json(asset);
+    }
+    if (path.endsWith("/uploads")) {
+      permissions.add(scope);
+      return Response.json(asset, { status: 201 });
+    }
+    if (path.includes("/assets/") && !permissions.has(scope))
+      return Response.json({ error: "forbidden" }, { status: 404 });
     if (path.endsWith("/assets/asset_upload/content"))
       return new Response(image, {
         headers: { "content-type": "image/png" },
@@ -325,6 +347,77 @@ it("keeps an uploaded attachment through draft CAS, lost-admission restart, text
         },
         { role: "assistant" },
       ],
+    });
+    pluginOffline = false;
+    const fork = async (source: string) => {
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/v1/conversations/${source}/fork`,
+        payload: {},
+      });
+      expect(response.statusCode).toBe(201);
+      return (response.json() as { conversation_id: string }).conversation_id;
+    };
+    const deleteConversation = async (id: string) => {
+      const row = db
+        .prepare("SELECT hermes_session_id FROM conversations WHERE id=?")
+        .get(id) as { hermes_session_id: string };
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/v1/conversations/${id}/delete`,
+        payload: {
+          confirmed: true,
+          expected_hermes_session_id: row.hermes_session_id,
+        },
+      });
+      expect(response.statusCode).toBe(200);
+      await waitFor(() => tombstones.has(id));
+    };
+    const child = await fork(scope);
+    expect(permissions.has(child)).toBe(true);
+    await deleteConversation(scope);
+    const submissionReads = pluginCalls.filter(
+      (call) => call.startsWith("GET ") && call.includes("/submissions/"),
+    ).length;
+    const grandchild = await fork(child);
+    expect(permissions.has(grandchild)).toBe(true);
+    expect(
+      pluginCalls.filter(
+        (call) => call.startsWith("GET ") && call.includes("/submissions/"),
+      ).length,
+    ).toBe(submissionReads);
+    await deleteConversation(child);
+    const inheritedHistory = await app.inject({
+      method: "GET",
+      url: `/api/v1/conversations/${grandchild}/messages`,
+    });
+    expect(inheritedHistory.statusCode).toBe(200);
+    expect(inheritedHistory.json()).toMatchObject({
+      items: [
+        {
+          role: "user",
+          content: "",
+          attachments: [{ asset_id: "asset_upload", status: "ready" }],
+        },
+        { role: "assistant" },
+      ],
+    });
+    const grandchildSession = db
+      .prepare("SELECT hermes_session_id FROM conversations WHERE id=?")
+      .get(grandchild) as { hermes_session_id: string };
+    const inheritedUser = hermes.getMessages(
+      grandchildSession.hermes_session_id,
+    )![0]!;
+    expect(inheritedUser.id).not.toBe(submitted[0]!.id);
+    expect(
+      db
+        .prepare(
+          "SELECT target_message_id,source_operation_id FROM media_branch_messages WHERE target_scope_id=?",
+        )
+        .get(grandchild),
+    ).toEqual({
+      target_message_id: inheritedUser.id,
+      source_operation_id: parsed.operationId,
     });
   } finally {
     await app.close();

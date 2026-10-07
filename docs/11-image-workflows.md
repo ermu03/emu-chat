@@ -7,7 +7,7 @@
 1. 暂停相关写入后备份 emu-chat 数据库、Hermes 会话与配置、`$HERMES_HOME/emu-media/`。SQLite 主库使用 backup API，不忽略 WAL；记录 Hermes、插件和 emu-chat 的提交号。
 2. 将固定提交的插件安装到 `$HERMES_HOME/plugin-releases/emu-media/<版本>/`，让 `$HERMES_HOME/plugins/emu-media/` 指向该目录。数据继续放在 `$HERMES_HOME/emu-media/`，沿用 Hermes 当前 Python 环境，不修改 Hermes 核心。
 3. 在 Hermes 服务环境配置 `EMU_MEDIA_API_KEY`、`EMU_MEDIA_HERMES_BASE_URL` 和 `EMU_MEDIA_HERMES_READ_KEY`。后者必须是 Hermes 实际接受的 API key；当前基线使用与 emu-chat `HERMES_API_KEY` 相同的值，没有独立只读 key 注册机制。启用插件并重启 Hermes；验证无密钥能力接口返回 401、认证接口返回协议 v1，以及历史 key 能读取 `/api/sessions/<id>/messages`。只检查 capabilities 不能发现历史凭据错误。这些检查不发起模型调用。
-4. 在 emu-chat 服务环境配置相同的 `EMU_MEDIA_API_KEY`，发布构建版本并启动。启动时自动应用 `0002_media.sql`；不要改写已应用的 `0001_initial.sql`。普通 Hermes `HERMES_API_KEY` 与插件密钥分别管理。
+4. 在 emu-chat 服务环境配置相同的 `EMU_MEDIA_API_KEY`，发布构建版本并启动。启动时自动应用尚未执行的增量迁移，包括 `0002_media.sql` 至 `0005_media_branch_retry.sql`；不要改写已应用的迁移。普通 Hermes `HERMES_API_KEY` 与插件密钥分别管理。
 5. 在隔离会话验证 PNG/JPEG/WebP 上传、草稿刷新、仅附图发送、生成图片采集、下载、复用、分支和删除。桌面与窄屏浏览器分别检查文件选择、粘贴、拖放、查看器和取消上传。实际模型图像质量与模型是否主动调用工具不属于基础设施保证。
 
 ## 本机插件发版
@@ -33,7 +33,11 @@
 
 图片初始上传成功但草稿保存冲突时，应重新保存草稿或删除未使用的附件；已进入本地缓存且超过 24 小时没有本地引用的上传会排队释放。插件再检查持久提交和引用，最后一份引用消失后至少保留 24 小时才物理删除。历史图片不跟随队列控制记录 7 天期限回收。图片请求的正文与冻结 Run 输入按同一正文期限清空；后台保留不含正文的提交摘要凭据，控制记录到期或插件暂时离线时仍能验证历史输入图片。旧凭据缺失时需插件绑定核验，不能仅凭消息里的机器清单关联资源。
 
-压缩导致 Hermes 有效 session ID 变化时会登记别名；分支复制消息的图片经权威历史映射后才授予新 scope。映射待处理期间不能删除来源会话。会话删除会持久化插件 scope 删除任务，失败可在服务重启后继续；已删除会话的图片访问立即撤销。
+压缩导致 Hermes 有效 session ID 变化时会登记别名。连续分支使用直接来源会话已验证的消息映射和有效权限，保留资源原始来源及 operation；实际复制的输入图和工具输出图才会授予新 scope。直接来源尚未完成关联时，后续分支等待；授权及引用完成前不能删除来源会话。A→B 完成后删除 A，不影响 B 使用图片或继续分支给 C。
+
+删除暂处于 `pending`/`failed` 时，普通 outbox 和分支任务延期保留；删除撤销后继续原任务。每次网络返回及本地完成提交前复核目标，确认本地会话移除后才结束无用途的关联。会话删除持久化插件 scope 删除任务，插件离线时仍可在恢复或服务重启后重试；已删除会话的图片访问立即撤销，其他 scope 的有效权限独立保留。
+
+升级迁移 `0005_media_branch_retry.sql` 会重新核对旧版本跳过继承图片的已完成分支及其后续分支，已有映射保留。修复要求仍有直接来源且能追溯已验证映射；完成前可能暂时阻止删除来源。直接来源已经删除的旧缺图不会凭原清单扩大授权，应核对原历史及插件备份。具体边界见[分支与删除决定](../.agents/notes/implemented/bug-fix/2026-10-05-preserve-media-references-through-branch-and-delete.md)。
 
 ## 升级与回退
 
